@@ -281,6 +281,14 @@ A ticket is a member of a sprint if its iteration path was that sprint's path at
 - **Added mid-sprint:** became a member later.
 - **Active outside a sprint:** a vendor ticket in `doing` that was not a member of any sprint during the period. Reported as its own line.
 
+Planned does not mean the vendor chose it. A vendor engineer working in a customer's team has no say over which tickets enter a sprint, so every report states that sprint scope is set by the customer and shows who decided it, from the `ChangedBy` of the board's own record:
+
+- **Placed by:** for each vendor ticket that was a member, the party behind the revision that put it on the sprint's path (the start of the first run on that path in force during the sprint).
+- **Taken out by:** for each ticket that left the sprint (12.6), the party behind the last revision before the sprint's end that moved it off the path.
+- **Party:** another party (any identity not on the roster), vendor engineers (a roster person), automation (a configured service identity) or not recorded. Never a person.
+- **Scope figures:** tickets with vendor engineers at the start (members by the planned cut, worked on or only assigned), added after the start, and taken out before the end, each split by party.
+- **Load at the start:** tickets with vendor engineers at the start against the median delivered in the team's previous sprints (up to the six-sprint window; at least 3 needed). Above usual when at least 1.5 times that median and at least 2 more.
+
 ### 12.6 Outcome at sprint end
 
 Each vendor ticket has exactly one outcome per team sprint, from its phase at the sprint's end:
@@ -342,6 +350,7 @@ A change in a person's allocation or team starts a new comparison period; trends
 
 - Delivered by the vendor team, and the squad's total delivered.
 - Planned work line (12.6).
+- Sprint scope by party and load at the start (12.5).
 - Finished and awaiting acceptance, with the longest wait.
 - Carried over, split by the DM's answer: agreed in advance, not agreed, not yet answered.
 - Returns (12.9).
@@ -419,6 +428,7 @@ Fallback with no agent, and for `none`: tickets listed by title grouped by paren
 - Long wait: finished and awaiting acceptance for more than 5 working days, or across 2 sprint ends.
 - Work arriving without criteria: at least 3 tickets and at least a third of those received in the sprint.
 - Many mid-sprint additions.
+- Sprint started with more work than usual: load at the start above usual (12.5). The ask is to agree the next sprint's size with the product owner.
 - One recorded vendor contributor on a parent feature across the window, on at least 2 tickets.
 - Fewer delivered than usual (same rule as 13.4).
 - Days with nothing in progress: a person with ≥ 3 in a sprint.
@@ -560,6 +570,7 @@ For the DM to confirm or overturn. Items 1–6 were put to the DM during the rev
 19. The KPI framework agreed elsewhere is not reproduced, at the DM's instruction.
 20. Source-control corroboration deferred to its own design.
 21. Working name "Delivery Ledger", CLI `ledger`.
+22. Sprint scope is the customer's: who placed, added or took out each ticket is reported by party, and asks about scope are addressed to the product owner, never phrased as the vendor's commitment.
 
 ## 23. Left to the builder
 

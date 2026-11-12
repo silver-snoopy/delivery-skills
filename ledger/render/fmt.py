@@ -318,3 +318,55 @@ def list_lines(team: Dict, key: str, entry: Dict
         out.append((tid, clip(t.get("title") or "", LIST_TITLE_WIDTH),
                     " ".join(bits)))
     return out
+
+
+PARTY_LABELS = {"other_party": "another party", "vendor": "vendor engineers",
+                "automation": "automation", "not_recorded": "not recorded"}
+_PARTY_ORDER = ("other_party", "vendor", "automation", "not_recorded")
+
+
+def _parties(group: Dict) -> str:
+    split = group.get("parties") or {}
+    shown = ["%d %s" % (split[p], ("by " + PARTY_LABELS[p])
+                        if p != "not_recorded" else PARTY_LABELS[p])
+             for p in _PARTY_ORDER if split.get(p)]
+    return ", ".join(shown)
+
+
+def scope_text(figures: Dict) -> str:
+    """Who placed the team's vendor tickets in the sprint, added them after
+    the start or took them out; "" for sprints analysed before this was
+    kept."""
+    scope = figures.get("scope")
+    if not isinstance(scope, dict):
+        return ""
+    start = scope.get("at_start") or {}
+    out = "%d with vendor engineers at the start" % (start.get("total") or 0)
+    if start.get("total"):
+        out += " (placed in the sprint: %s)" % _parties(start)
+    for key, label in (("added", "added after the start"),
+                       ("removed", "taken out before the end")):
+        g = scope.get(key) or {}
+        if g.get("total"):
+            out += "; %d %s (%s)" % (g["total"], label, _parties(g))
+    return "Sprint scope: " + out
+
+
+def load_text(figures: Dict) -> str:
+    """The sprint's starting load against the team's usual delivery; ""
+    when not computed."""
+    load = figures.get("load")
+    if not isinstance(load, dict):
+        return ""
+    n = load.get("at_start") or 0
+    med = load.get("median_delivered")
+    if med is None:
+        return ("Load at the start: %d tickets; too few earlier sprints to "
+                "compare with what the team usually delivers" % n)
+    out = ("Load at the start: %d tickets, against a median of %s delivered "
+           "in the team's previous %d sprints" % (
+               n, ("%.1f" % med).rstrip("0").rstrip("."),
+               load.get("sprints") or 0))
+    if load.get("above_usual"):
+        out += "; above what the team usually delivers"
+    return out

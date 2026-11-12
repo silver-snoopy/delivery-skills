@@ -14,7 +14,10 @@ FOOTNOTE = ("Figures count tickets and working days taken from the board's "
             "only with the same team's earlier sprints. Durations reflect "
             "when the board was updated, not hours worked. Splitting or "
             "cloning a ticket cannot be detected. Sprint dates are as the "
-            "board shows them today.")
+            "board shows them today. Sprint scope is set by the customer: "
+            "\"planned\" means in the sprint by the end of its first working "
+            "day, whoever placed it there, and the scope line shows which "
+            "party placed, added or took out each ticket.")
 LABELS = ("On track", "Needs attention", "At risk")
 OVERRIDES = "overrides.json"
 _CARRIED = ("carried_in_progress", "carried_not_started")

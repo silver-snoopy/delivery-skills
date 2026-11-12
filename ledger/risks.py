@@ -25,8 +25,9 @@ from .textaccess import TextAccess, for_command
 REGISTER = "risks.json"
 STALE_NOTE = "The board no longer shows the evidence for this item."
 DETECTORS = ("chronic_carryover", "repeated_returns", "long_wait",
-             "unready_work", "midsprint_additions", "one_vendor_contributor",
-             "fewer_delivered", "nothing_in_progress", "low_capacity")
+             "unready_work", "midsprint_additions", "load_above_usual",
+             "one_vendor_contributor", "fewer_delivered",
+             "nothing_in_progress", "low_capacity")
 _ISSUES = ("chronic_carryover", "repeated_returns")
 _FEWER = "Fewer delivered than usual"
 
@@ -159,6 +160,25 @@ def _team_candidates(team: str, m: Dict, th: Dict) -> List[Dict]:
             "Agree with the product owner how work is added to %s once a "
             "sprint has started." % team, []))
 
+    load = figs.get("load") or {}
+    if load.get("above_usual") and _num(load.get("at_start")) is not None \
+            and _num(load.get("median_delivered")) is not None:
+        tids = [tid for tid, t in _mine(m) if t.get("in_sprint_at_start")]
+        out.append(_candidate(
+            "load_above_usual", team, tids, "-",
+            {"at_start": load["at_start"],
+             "median_delivered": load["median_delivered"],
+             "sprints": load["sprints"]},
+            "Sprint started with more work than the team usually delivers",
+            "%s: %s with vendor engineers at the start of %s; the team "
+            "delivered a median of %s in its previous %s."
+            % (team, plural(int(load["at_start"]), "ticket") +
+               (" was" if int(load["at_start"]) == 1 else " were"), sprint,
+               _days(float(load["median_delivered"])),
+               plural(int(load["sprints"]), "sprint")),
+            "Agree the size of %s's next sprint with the product owner "
+            "against what the team has delivered." % team, []))
+
     features: Dict[str, List] = {}
     for tid, t in _mine(m):
         if (t.get("parent_title") or "").strip() and t.get("workers"):
@@ -186,8 +206,8 @@ def _team_candidates(team: str, m: Dict, th: Dict) -> List[Dict]:
             "Fewer delivered than usual",
             "%s: fewer tickets were delivered in %s than in the team's "
             "recent sprints." % (team, sprint),
-            "Review the plan for %s's next sprint against what was "
-            "delivered in %s." % (team, sprint), []))
+            "Review the scope of %s's next sprint with the product owner "
+            "against what was delivered in %s." % (team, sprint), []))
 
     idle = sorted(pid for pid, p in (m.get("people") or {}).items()
                   if isinstance(p, dict)
@@ -214,8 +234,8 @@ def _team_candidates(team: str, m: Dict, th: Dict) -> List[Dict]:
             "Lower capacity than nominal",
             "%s: %s of %s nominal engineer days were available in %s."
             % (team, _days(av), _days(nom), sprint),
-            "Confirm whether %s's sprint commitment should be reduced to "
-            "match the available days." % team, []))
+            "Ask the product owner whether the scope of %s's next sprint "
+            "should be reduced to match the available days." % team, []))
     return out
 
 

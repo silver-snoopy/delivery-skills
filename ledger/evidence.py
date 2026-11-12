@@ -230,6 +230,7 @@ def _team_row(ts: Dict) -> Dict[str, Any]:
         "sprint": s["name"], "start": s["start"][:10],
         "finish": s["finish"][:10], "delivered": f["delivered"],
         "squad_delivered": f["squad_delivered"], "planned": f["planned"],
+        "scope": f.get("scope"), "load": f.get("load"),
         "awaiting": f["awaiting_acceptance"]["count"],
         "awaiting_longest_days": f["awaiting_acceptance"].get(
             "longest_wait_days"),

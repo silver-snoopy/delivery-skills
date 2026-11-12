@@ -5,7 +5,7 @@ from typing import Dict, List
 from . import html_dm, html_team
 from .fmt import (DASH, agreed_text, clip, date_range, days, fmt_date,
                   person_days, planned_text, received_text, returns_text,
-                  with_elsewhere)
+                  with_elsewhere, scope_text, load_text)
 from .html import MARK
 from .html_base import e, link, spark, status_cell
 from .style import css
@@ -219,7 +219,8 @@ def render_person_brief(brief: Dict) -> str:
 
 # ---- team ------------------------------------------------------------------
 
-_TEAM_COLS = ("Sprint", "Dates", "Delivered", "Squad total", "Planned",
+_TEAM_COLS = ("Sprint", "Dates", "Delivered", "Squad total",
+              "Sprint scope and load", "Planned",
               "Finished, awaiting acceptance", "Carried over",
               "With another party", "Returns",
               "Days with a vendor engineer (median)",
@@ -240,6 +241,8 @@ def _team_row(r: Dict) -> str:
         _sprint_cell(r),
         '<td class="c num">%d</td>' % r["delivered"],
         '<td class="c num">%d</td>' % r["squad_delivered"],
+        '<td class="small">%s</td>' % e(". ".join(x for x in (
+            scope_text(r), load_text(r)) if x) or DASH),
         '<td class="small">%s</td>' % e(planned_text(r["planned"])),
         '<td class="num">%s</td>' % e(awaiting),
         '<td class="num">%s</td>' % e(carried),

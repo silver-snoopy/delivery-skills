@@ -408,6 +408,7 @@ class DemoRiskTests(unittest.TestCase):
         self.assertIn(["40671"], [x["tickets"] for x in
                                   self.find(c, "long_wait", PRICING)])
         self.find(c, "fewer_delivered", PRICING)
+        self.find(c, "load_above_usual", CLAIMS)
         self.find(c, "nothing_in_progress", PRICING)
         # "Data quality checks" has 2 tickets: below one_contributor_min_tickets
         self.assertFalse([x for x in c

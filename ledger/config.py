@@ -17,6 +17,7 @@ DEFAULT_THRESHOLDS: Dict[str, float] = {
     "midsprint_min": 3, "nothing_in_progress_days": 3, "capacity_share": 0.7,
     "one_contributor_min_tickets": 3, "worked_min_days": 0.02,
     "bulk_edit_count": 10, "bulk_edit_seconds": 60,
+    "load_history_min": 3, "load_ratio": 1.5, "load_min_excess": 2,
 }
 
 PHASES = ("todo", "doing", "handoff", "done", "removed")

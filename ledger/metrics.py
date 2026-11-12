@@ -7,12 +7,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .buckets import first_vendor_hold, time_split
 from .classify import (CarryAge, carry_age, held_by_vendor_at_end,
-                       involvement, is_planned, left_sprint, outcome, workers)
+                       involvement, is_member, is_planned, left_sprint,
+                       outcome, workers)
 from .config import Config, Roster
 from .model import Phase, Revision, Snapshot, Sprint, Ticket, _dt_in
 from .people import person_observations
 from .phases import PhaseMapper
 from .received import received_state
+from .scope import party, placed_by, removed_by, split
 from .timeline import Event, Timeline, build_timeline, find_bulk_edits
 from .workcal import WorkCalendar, display_days
 
@@ -212,14 +214,22 @@ def _ticket_record(ctx: _Ctx, r: _Rec, received: Dict[str, Any]
     end = r.tl.at(ctx.last)
     before, upto = _since_vendor(ctx, r.tl)
     handoffs = _handoffs(ctx, r)
+    member = is_member(r.tl, ctx.sprint)
+    at_start = member and is_planned(
+        r.tl, ctx.sprint, ctx.cal,
+        int(ctx.cfg.thresholds["planned_grace_days"]))
+    placed = placed_by(r.tl, ctx.sprint) if member else None
+    left = left_sprint(r.tl, ctx.sprint, ctx.team_sprints)
+    removed = removed_by(r.tl, ctx.sprint) if left else None
     return {
         "type": last_rev.type, "title": r.ticket.title,
         "parent": last_rev.parent, "parent_title": r.ticket.parent_title,
         "state": end.state, "outcome": r.out, "involvement": r.inv,
-        "planned": r.inv == "worked" and is_planned(
-            r.tl, ctx.sprint, ctx.cal,
-            int(ctx.cfg.thresholds["planned_grace_days"])),
-        "left_sprint": left_sprint(r.tl, ctx.sprint, ctx.team_sprints),
+        "planned": r.inv == "worked" and at_start,
+        "left_sprint": left,
+        "in_sprint_at_start": at_start,
+        "placed_by": party(placed.by) if placed is not None else None,
+        "removed_by": party(removed.by) if removed is not None else None,
         "workers": {p: display_days(d) for p, d in sorted(r.workers.items())},
         "sprints_carried": r.carry.sprints_carried,
         "carried_since": r.carry.carried_since, "trail": r.carry.trail,
@@ -297,6 +307,31 @@ def _outcome_figures(L: _Ledger, recs: List[_Rec], tickets) -> Dict:
                           [r.id for r in planned if plan(r) == k])
                for k in ("delivered", "awaiting", "carried",
                          "with_other_party", "left", "not_delivered")}),
+    }
+
+
+def _scope_figures(L: _Ledger, recs: List[_Rec], tickets) -> Dict:
+    """Who decided the sprint's scope, over the team's vendor tickets:
+    in the sprint at its start (worked on or only assigned), added after
+    the start, and taken out of the sprint before its end."""
+    def group(name: str, pick, field: str) -> Dict[str, Any]:
+        ids = [r.id for r in recs if pick(tickets[str(r.id)])]
+        out: Dict[str, Any] = {"total": L.count("figures.scope.%s.total"
+                                                % name, ids)}
+        parties = split([tickets[str(i)][field] for i in ids])
+        for p in parties:
+            L.count("figures.scope.%s.parties.%s" % (name, p),
+                    [i for i in ids if tickets[str(i)][field] == p])
+        out["parties"] = parties
+        return out
+
+    return {
+        "at_start": group("at_start", lambda t: t["in_sprint_at_start"],
+                          "placed_by"),
+        "added": group("added", lambda t: t["placed_by"] is not None
+                       and not t["in_sprint_at_start"], "placed_by"),
+        "removed": group("removed", lambda t: t["removed_by"] is not None,
+                         "removed_by"),
     }
 
 
@@ -496,6 +531,7 @@ def analyze_team_sprint(snap: Snapshot, cfg: Config, roster: Roster,
     L = _Ledger()
     figures = _outcome_figures(L, mine, tickets)
     figures.update(_flow_figures(ctx, L, mine, tickets))
+    figures["scope"] = _scope_figures(L, mine, tickets)
     figures["received"] = _received_figures(ctx, L, mine, tickets)
     squad = squad_delivered(snap, cfg, team, sprint)
     figures["squad_delivered"] = L.count("figures.squad_delivered", squad)

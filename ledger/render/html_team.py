@@ -9,6 +9,7 @@ from .fmt import (agreed_text, bucket_kind, bucket_label, carried_rows,
                   carry_answer, clip, date_range, days, list_lines,
                   other_party_rows,
                   outside_rows, received_text, returns_reason_text,
+                  scope_text, load_text,
                   split_order, team_markers)
 
 _LISTS = (("delivered", "Delivered"),
@@ -122,6 +123,10 @@ def team_block(report: Dict, team: Dict, variant: str,
                           status_cell(team["status"])),
         '<div class="cols">%s</div>' % lists,
         _time_split(m["figures"].get("time_split") or {}),
+        ('<p class="muted small">%s.</p>' % e(scope_text(m["figures"])))
+        if scope_text(m["figures"]) else "",
+        ('<p class="muted small">%s.</p>' % e(load_text(m["figures"])))
+        if load_text(m["figures"]) else "",
         '<p class="muted small">Work as received: %s.</p>' % e(
             received_text(m["figures"].get("received") or {})),
         ('<p class="muted small">%s.</p>' % e(returns_reason_text(team)))

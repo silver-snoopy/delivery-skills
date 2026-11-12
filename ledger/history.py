@@ -1,5 +1,6 @@
 """What needs earlier sprints: trends, per-person flags and context, team
 status and the return cohort. Every rule stays silent on missing data."""
+import statistics
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -177,6 +178,30 @@ def _context(pid: str, p: Dict[str, Any], m: Dict[str, Any],
     return out
 
 
+def sprint_load(figures: Dict, earlier: List[Dict],
+                th: Dict[str, float]) -> Optional[Dict[str, Any]]:
+    """Tickets with vendor engineers at the sprint's start against the
+    median the team delivered in its previous sprints (up to
+    window_sprints of them). None when the sprint has no scope figures
+    (analysed before they were kept); median None with fewer than
+    load_history_min earlier sprints."""
+    at_start = ((figures.get("scope") or {}).get("at_start") or {}) \
+        .get("total")
+    if at_start is None:
+        return None
+    window = max(int(th["window_sprints"]), 1)
+    past = [h["figures"]["delivered"] for h in earlier[-window:]
+            if isinstance(h.get("figures", {}).get("delivered"), int)]
+    if len(past) < max(int(th["load_history_min"]), 1):
+        return {"at_start": at_start, "median_delivered": None,
+                "sprints": len(past), "above_usual": False}
+    med = float(statistics.median(past))
+    return {"at_start": at_start, "median_delivered": med,
+            "sprints": len(past),
+            "above_usual": at_start >= med * th["load_ratio"]
+            and at_start - med >= th["load_min_excess"]}
+
+
 def apply(metrics: Dict, ledger: Dict, earlier: List[Dict],
           cfg: Config) -> None:
     """Add trends, flags, context, status and return cohorts to `metrics`,
@@ -190,6 +215,15 @@ def apply(metrics: Dict, ledger: Dict, earlier: List[Dict],
     tickets = metrics.get("tickets", {})
 
     figures["trend_delivered"] = [h["figures"]["delivered"] for h in hist]
+    figures["load"] = sprint_load(figures, earlier, th)
+    if figures["load"] is not None:
+        ledger["figures.load.at_start"] = list(
+            ledger.get("figures.scope.at_start.total", []))
+        names = [h["sprint"]["name"] for h in earlier[-max(
+            int(th["window_sprints"]), 1):]][-figures["load"]["sprints"]:] \
+            if figures["load"]["sprints"] else []
+        ledger["figures.load.sprints"] = names
+        ledger["figures.load.median_delivered"] = names
     w, r = int(th["trend_window"]), int(th["trend_runs"])
 
     prev = earlier[-1] if earlier else None

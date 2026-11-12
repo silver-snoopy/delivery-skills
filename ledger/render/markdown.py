@@ -7,6 +7,7 @@ from .fmt import (DASH, agreed_text, bucket_label, carried_rows,
                   effective_label, list_lines, other_party_rows,
                   outside_rows, person_days, fmt_date, planned_text, ratio,
                   received_text, require_exec, returns_reason_text,
+                  scope_text, load_text,
                   returns_text, split_order, status_detail, team_markers,
                   ticket_url, waiting_days)
 
@@ -94,6 +95,9 @@ def _team(report: Dict, team: Dict) -> List[str]:
                       [[md(bucket_label(k)), days(v)] for k, v in parts])
     else:
         out.append("No ticket time recorded.")
+    for line in (scope_text(f), load_text(f)):
+        if line:
+            out += ["", "%s." % md(line)]
     out += ["", "Work as received: %s." % md(
         received_text(f.get("received") or {}))]
     if returns_reason_text(team):

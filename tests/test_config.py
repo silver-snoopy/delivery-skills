@@ -62,7 +62,7 @@ class ConfigTests(ConfigTestBase):
         self.assertEqual(DEFAULT_THRESHOLDS["window_sprints"], 6)
         self.assertEqual(DEFAULT_THRESHOLDS["unready_share"], 0.3334)
         self.assertEqual(DEFAULT_THRESHOLDS["worked_min_days"], 0.02)
-        self.assertEqual(len(DEFAULT_THRESHOLDS), 24)
+        self.assertEqual(len(DEFAULT_THRESHOLDS), 27)
 
     def test_threshold_override_and_unknown_key(self):
         cfg, _ = self.load({"thresholds": {"quiet_days": 9}})

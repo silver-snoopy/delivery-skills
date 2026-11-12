@@ -196,8 +196,8 @@ class SkillsTest(unittest.TestCase):
         self.assertIn('"${HOME_DIR:?}/config.json"', setup)
         self.assertNotIn('"$HOME_DIR/', setup)
 
-    def test_readme_states_what_the_text_setting_covers(self):
-        text = (ROOT / "README.md").read_text(encoding="utf-8")
+    def test_reference_states_what_the_text_setting_covers(self):
+        text = (ROOT / "docs" / "reference.md").read_text(encoding="utf-8")
         for phrase in ("--show-text", "`trace` prints the display names",
                        "report and brief files on disk always contain "
                        "ticket titles",
@@ -221,7 +221,7 @@ class SkillsTest(unittest.TestCase):
 
     def test_issue_note_wording_matches_help(self):
         for path in (SKILLS / "delivery-sprint-close" / "SKILL.md",
-                     ROOT / "README.md"):
+                     ROOT / "docs" / "reference.md"):
             self.assertIn("required after edition 001",
                           path.read_text(encoding="utf-8"), path)
 
@@ -328,8 +328,18 @@ class InstallScriptTest(unittest.TestCase):
 
 class ReadmeTest(unittest.TestCase):
 
-    def test_readme_covers_required_topics(self):
+    def test_readme_has_the_three_sections(self):
         text = (ROOT / "README.md").read_text(encoding="utf-8")
+        heads = re.findall(r"^## (.+)$", text, re.M)
+        self.assertEqual(heads, ["Installation", "Available skills", "Flow"])
+        for phrase in ("scripts/install-skills.sh", "delivery-setup",
+                       "delivery-sprint-close", "delivery-evidence",
+                       "docs/reference.md", "works-council",
+                       "licence has not been chosen"):
+            self.assertIn(phrase, text, phrase)
+
+    def test_reference_covers_required_topics(self):
+        text = (ROOT / "docs" / "reference.md").read_text(encoding="utf-8")
         for phrase in ("bin/ledger demo --home", "~/delivery-ledger-data",
                        "names-check", "agent_text_access", "works-council",
                        "chmod -R u+w", "licence has not been chosen",

@@ -40,7 +40,7 @@ If your agent supports skills, the same procedures are in `skills/` (install the
 8. Tell the DM the three file paths and to read the executive report before sending it themselves.
 9. Only when the DM approves: `bin/ledger --json issue` (a note is required after edition 001 for that date: `issue --note "WHAT CHANGED"`).
 
-## Evidence (when challenged)
+## Delivery evidence (individual or team contribution)
 
 1. Ask whether it is about one engineer (roster id) or a team (team name).
 2. Run `bin/ledger --json evidence --person ID` or `bin/ledger --json evidence --team "NAME"`; add `--executive` only for a team brief meant for others, and `--sprints N` or `--as-of DATE` if the DM asks.

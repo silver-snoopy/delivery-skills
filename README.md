@@ -21,7 +21,7 @@ bin/ledger demo --home /tmp/ledger-demo      # optional: invented data and examp
 |---|---|---|
 | `delivery-setup` | You start on a new machine or board, add a team or engineer, or change how board states are read. | A checked config and roster, and a trace check on tickets you know. |
 | `delivery-sprint-close` | A sprint has closed. | The executive report (no names) and the delivery manager report, as drafts and then as a numbered edition. |
-| `delivery-evidence` | The customer challenges an engineer or a team. | An evidence brief of what the board recorded over the last sprints. |
+| `delivery-evidence` | You want the delivery record of one engineer's contribution, or of a team's, over recent sprints: for a review, a renewal, a staffing decision or a question from the customer. | An evidence brief of what the board recorded over the last sprints. |
 
 Ask your agent in plain words, for example "set up the Delivery Ledger" or "close the sprint". Every command the skills run is also available by hand: `bin/ledger --help`.
 
@@ -30,7 +30,7 @@ Ask your agent in plain words, for example "set up the Delivery Ledger" or "clos
 1. **Once: set up.** The agent runs the tests and `probe`, builds the config and roster with you, and has you compare five to ten tickets you know with the board.
 2. **After each sprint: close it.** The agent collects the board history and computes the figures. You answer, for each carried-over or returned ticket, whether it was agreed and why, and you accept or drop the risks it proposes.
 3. **Read, then issue.** The agent writes the drafts and checks the executive report for engineers' names. You read it, approve, and the edition is frozen. You send it yourself.
-4. **When challenged: evidence.** Ask for a brief on one engineer (for you only) or one team.
+4. **Any time: delivery evidence.** Ask for a brief on one engineer's contribution (for you only) or on a team's.
 
 All real data stays in a private data home outside this repository (`~/delivery-ledger-data/` by default).
 

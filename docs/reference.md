@@ -2,7 +2,7 @@
 
 The detail behind the [README](../README.md): first run, corrections, where data lives, what an agent may read, and known limits.
 
-The Delivery Ledger turns Azure DevOps work item history into sprint delivery reports. It is for a delivery manager (DM) who supplies engineers to a customer's teams and needs to show, each sprint, what was delivered, what was carried over or returned, and where ticket time went, and who needs to answer with the board's record when the customer challenges a person or a team.
+The Delivery Ledger turns Azure DevOps work item history into sprint delivery reports. It is for a delivery manager (DM) who supplies engineers to a customer's teams and needs to show, each sprint, what was delivered, what was carried over or returned, and where ticket time went, and who needs the board's record of each engineer's and each team's contribution over time.
 
 It is a command-line tool written in standard-library Python. Three agent skills (for Claude Code and GitHub Copilot) drive it in conversation with the DM; every figure, rule and check lives in the tool, not in the skills.
 
@@ -94,7 +94,7 @@ An issued sprint is frozen: `collect` skips it, `analyze` keeps its figures, and
 
 ## Evidence briefs
 
-When the customer challenges an engineer or a team, ask your agent for an evidence brief (the `delivery-evidence` skill), or run `bin/ledger evidence --person ID` or `bin/ledger evidence --team "TEAM"`. A person brief is restricted to the DM; it lists what the board recorded, not an assessment. `--executive` writes a team brief without person data.
+For the delivery record of one engineer's contribution or of a team's over recent sprints, ask your agent for an evidence brief (the `delivery-evidence` skill), or run `bin/ledger evidence --person ID` or `bin/ledger evidence --team "TEAM"`. A person brief is restricted to the DM; it lists what the board recorded, not an assessment. `--executive` writes a team brief without person data.
 
 ## The data home
 

@@ -1,6 +1,6 @@
 ---
 name: delivery-evidence
-description: Use when the customer has challenged an engineer or a team and the delivery manager needs the board's record for the last few sprints: what was delivered, handed off, carried over or returned, and what was waiting on others.
+description: Use when the delivery manager wants delivery evidence of one engineer's contribution or a team's over recent sprints, for a review, a renewal, staffing or a customer question: what the board recorded as delivered, handed off, carried over, returned or waiting on others.
 ---
 
 # Delivery Ledger: evidence brief
@@ -26,7 +26,7 @@ Writes an evidence brief for one engineer or one team from what the board record
 
    If the quoted value is not an absolute path (the repository copy holds a placeholder there), the launcher is `bin/ledger` relative to the repository root that contains this skill; set `LEDGER` to that absolute path. Wherever `<LEDGER>` appears below, run it in the shell as "$LEDGER" (with the quotes, so a path with spaces works).
 
-2. Ask whether the challenge is about one engineer or a whole team. For an engineer, ask for their roster id (the `id` the DM gave them in the roster at setup). If the CLI rejects the id, show its `error:` and `next:` lines and ask the DM how to proceed. For a team, ask for the team name as the reports show it (`<LEDGER> --json status` lists the teams).
+2. Ask whether the brief is about one engineer's contribution or a whole team's. For an engineer, ask for their roster id (the `id` the DM gave them in the roster at setup). If the CLI rejects the id, show its `error:` and `next:` lines and ask the DM how to proceed. For a team, ask for the team name as the reports show it (`<LEDGER> --json status` lists the teams).
 
 3. Ask how many recent sprints to cover; if the DM has no preference, leave it to the CLI's default. Ask for a cut-off date only if the DM wants one.
 

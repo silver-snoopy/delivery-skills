@@ -47,7 +47,7 @@ One user: the DM. Three moments:
 
 1. **Once, at setup.** Describe the roster and teams, check access, confirm how board states map to phases, check the tool's reading of a few tickets the DM knows well.
 2. **After sprints close.** Run one skill. Answer a few questions about carried-over and returned tickets. Review the drafts. Send the executive report themselves.
-3. **When challenged.** Ask for an evidence brief on a person or a team over the last N sprints.
+3. **Delivery evidence, any time.** Ask for an evidence brief on one engineer's contribution or a team's over the last N sprints, for a review, a renewal, a staffing decision or a customer question.
 
 ## 4. Expected scale and shape
 

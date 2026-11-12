@@ -1,0 +1,339 @@
+<title>Sprint Delivery Handout Mockup</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one printed-report column; summary first, then one block per stream; the manager view adds per-person rows inside each stream. */
+:root{
+  --bg:#f5f7f8; --surface:#ffffff; --ink:#16242c; --muted:#5a6b75; --line:#d6dee2;
+  --accent:#1f6f8b; --accent-soft:#e1eef3;
+  --good:#2c7a4b; --good-soft:#e2f1e7; --warn:#96650a; --warn-soft:#f8ecd2; --crit:#a8322d; --crit-soft:#f7e1df;
+  --ours:#1f6f8b; --wait:#c58a1c; --review:#8a6fb0; --idle:#9aa7ae;
+  --text:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#10181c; --surface:#18232a; --ink:#e6edf0; --muted:#9bacb5; --line:#2e3d46;
+  --accent:#6bb8d1; --accent-soft:#1d3640;
+  --good:#6cc48d; --good-soft:#1b3326; --warn:#e0b04f; --warn-soft:#3a2f14; --crit:#ee8a84; --crit-soft:#3d1f1d;
+  --ours:#6bb8d1; --wait:#d9a53f; --review:#ab94cc; --idle:#62727b; color-scheme:dark } }
+:root[data-theme="dark"]{
+  --bg:#10181c; --surface:#18232a; --ink:#e6edf0; --muted:#9bacb5; --line:#2e3d46;
+  --accent:#6bb8d1; --accent-soft:#1d3640;
+  --good:#6cc48d; --good-soft:#1b3326; --warn:#e0b04f; --warn-soft:#3a2f14; --crit:#ee8a84; --crit-soft:#3d1f1d;
+  --ours:#6bb8d1; --wait:#d9a53f; --review:#ab94cc; --idle:#62727b; color-scheme:dark }
+
+body{background:var(--bg);color:var(--ink);font-family:var(--text);font-size:15px;line-height:1.5}
+.page{max-width:1080px;margin:0 auto;padding-block:28px 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:32px}
+h1,h2,h3,h4{margin:0;text-wrap:balance;line-height:1.2}
+h1{font-size:28px;font-weight:700}
+h2{font-size:20px;font-weight:600}
+h3{font-size:17px;font-weight:600}
+h4{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+p{margin:0;max-width:68ch}
+.muted{color:var(--muted)}
+.id{font-family:var(--mono);font-size:13px;white-space:nowrap}
+.num{font-variant-numeric:tabular-nums}
+section{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+.notice{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn);border-radius:6px;padding:8px 12px;font-size:13px;font-weight:500}
+.head{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:flex-end}
+.head > div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.switch{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.switch button{font:inherit;font-size:13px;font-weight:500;padding:8px 14px;border:0;background:transparent;color:var(--muted);cursor:pointer}
+.switch button[aria-pressed="true"]{background:var(--accent);color:var(--surface)}
+.switch button:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
+.viewnote{font-size:13px;color:var(--muted)}
+
+body:not(.view-dm) .dm-only{display:none}
+body.view-dm .shared-only{display:none}
+
+.figures{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.figures > div{background:var(--surface);padding:14px 16px;display:flex;flex-direction:column;gap:2px}
+.figures b{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1}
+.figures span{font-size:13px;color:var(--muted)}
+
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:9px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+tr:last-child td{border-bottom:0}
+th{font-size:12px;font-weight:600;color:var(--muted);white-space:nowrap;background:var(--bg)}
+td.c,th.c{text-align:center}
+td.wide{min-width:220px}
+
+.pill{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px;white-space:nowrap}
+.good{background:var(--good-soft);color:var(--good)}
+.warn{background:var(--warn-soft);color:var(--warn)}
+.crit{background:var(--crit-soft);color:var(--crit)}
+.info{background:var(--accent-soft);color:var(--accent)}
+
+.spark{display:inline-flex;align-items:flex-end;gap:2px;height:26px;vertical-align:middle}
+.spark i{display:block;width:6px;min-height:1px;background:var(--idle);border-radius:1px}
+.spark i:last-child{background:var(--accent)}
+
+.stream{border-top:2px solid var(--ink);padding-top:16px;gap:18px}
+.stream-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px}
+.cols > div{display:flex;flex-direction:column;gap:8px;min-width:0}
+ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+li{max-width:68ch}
+
+.bar{display:flex;height:18px;border-radius:4px;overflow:hidden;background:var(--line)}
+.bar span{display:block;height:100%}
+.ours{background:var(--ours)} .wait{background:var(--wait)} .review{background:var(--review)} .idle{background:var(--idle)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px}
+
+.person{border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:16px;display:flex;flex-direction:column;gap:14px}
+.timeline{display:flex;height:30px;border-radius:4px;overflow:hidden}
+.timeline span{display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:var(--surface);min-width:0;overflow:hidden;white-space:nowrap}
+.private{font-size:12px;font-weight:600;color:var(--crit);border:1px solid var(--crit);border-radius:4px;padding:1px 7px;white-space:nowrap}
+.risk{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.risk:last-child{border-bottom:0}
+.risk p{grid-column:2}
+</style>
+
+<div class="page">
+  <div class="notice">Mockup. Every name, ticket and number on this page is invented to show the layout.</div>
+
+  <header class="head">
+    <div>
+      <h4>Sprint 37 · 27 Oct – 7 Nov 2026 · trend window S32–S37</h4>
+      <h1>Delivery report: vendor team contribution</h1>
+      <p class="muted">8 vendor engineers across 3 streams, working on the customer's shared board alongside 14 other squad members.</p>
+    </div>
+    <div>
+      <div class="switch" role="group" aria-label="Report view">
+        <button id="v-shared" type="button" aria-pressed="true">Shared view</button>
+        <button id="v-dm" type="button" aria-pressed="false">Delivery manager view</button>
+      </div>
+      <span class="viewnote shared-only">No individual names. Safe to send to the customer.</span>
+      <span class="viewnote dm-only"><span class="private">Private</span> Adds per-person evidence.</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>Portfolio summary</h2>
+    <p>Two of three streams delivered as planned. Pricing Models is slowing: one story has been open for four sprints and has come back from QA three times with changed acceptance criteria. Most elapsed time on vendor tickets this sprint was spent waiting on QA, sign-off or review, not in development.</p>
+    <div class="figures">
+      <div><b>21 <small class="muted" style="font-size:14px">of 58</small></b><span>Items closed by the vendor team, of the whole squad's total</span></div>
+      <div><b>6</b><span>Finished by us, waiting on customer QA or sign-off</span></div>
+      <div><b>7</b><span>Carried over: 5 agreed with the PO in advance, 2 not</span></div>
+      <div><b>38%</b><span>Of ticket time was hands-on; 62% was waiting on others</span></div>
+      <div><b>74 <small class="muted" style="font-size:14px">of 80</small></b><span>Person-days supplied (6 days planned leave)</span></div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>Stream</th><th class="c">Engineers</th><th>Closed, S32–S37</th><th class="c">Closed S37</th><th class="c">Squad total</th><th class="c">Carried over</th><th class="c">Returned from QA</th><th class="c">Hands-on days (median)</th><th>Status</th>
+        </tr></thead>
+        <tbody>
+          <tr><td><b>Claims Intake</b></td><td class="c num">3</td><td><span class="spark" data-v="5,6,5,8,9,9"></span></td><td class="c num">9</td><td class="c num">24</td><td class="c num">2</td><td class="c num">1 of 10</td><td class="c num">4.5</td><td><span class="pill good">On track</span></td></tr>
+          <tr><td><b>Pricing Models</b></td><td class="c num">3</td><td><span class="spark" data-v="5,4,5,3,3,4"></span></td><td class="c num">4</td><td class="c num">19</td><td class="c num">4</td><td class="c num">2 of 7</td><td class="c num">7.0</td><td><span class="pill warn">Needs attention</span></td></tr>
+          <tr><td><b>Data Platform</b></td><td class="c num">2</td><td><span class="spark" data-v="7,8,6,7,8,8"></span></td><td class="c num">8</td><td class="c num">15</td><td class="c num">1</td><td class="c num">0 of 8</td><td class="c num">3.0</td><td><span class="pill good">On track</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted" style="font-size:13px">Tickets are not estimated, so all figures count items and days. Counts are compared with the same stream's own history, never between streams or people.</p>
+  </section>
+
+  <section>
+    <h2>Risks and asks</h2>
+    <div>
+      <div class="risk"><span class="pill crit">Issue</span><b>Rate table versioning has been in progress for 4 sprints</b><p>Returned from QA 3 times; the acceptance criteria were edited after each return. 9 days hands-on, 34 days waiting. <span class="id">#40655</span></p><p><b>Ask:</b> PO to freeze the acceptance criteria before work resumes in Sprint 38.</p></div>
+      <div class="risk"><span class="pill warn">Risk</span><b>Code review by the platform owner is taking over 10 days</b><p>Two finished tickets are waiting for review; the older one since 28 Oct. <span class="id">#41203</span> <span class="id">#41455</span></p><p><b>Ask:</b> a named reviewer and a 3-working-day turnaround.</p></div>
+      <div class="risk"><span class="pill warn">Risk</span><b>Pricing Models work is starting without acceptance criteria</b><p>4 of 9 tickets were started with no acceptance criteria and 3 were added mid-sprint.</p><p><b>Ask:</b> a readiness check at sprint planning.</p></div>
+      <div class="risk"><span class="pill warn">Risk</span><b>Three Data Platform features have only ever been worked on by one engineer</b><p>Leave or a move would stall lineage, access tagging and the ingestion scheduler.</p><p><b>Ask:</b> agree pairing on lineage work in Sprint 38.</p></div>
+    </div>
+  </section>
+
+  <!-- STREAM 1 -->
+  <section class="stream">
+    <div class="stream-head"><h2>Claims Intake</h2><span class="pill good">On track</span></div>
+    <div class="cols">
+      <div>
+        <h4>Delivered</h4>
+        <ul>
+          <li><b>Broker file upload.</b> Brokers can upload bordereau files and see validation errors row by row. <span class="id">#41801</span> <span class="id">#41805</span> <span class="id">#41822</span></li>
+          <li><b>Duplicate claim detection.</b> First rule set is live for motor claims. <span class="id">#41850</span> <span class="id">#41851</span></li>
+          <li><b>Intake defects.</b> Four production defects fixed, including the date-format rejection. <span class="id">#41866</span> +3</li>
+        </ul>
+      </div>
+      <div>
+        <h4>Finished by us, waiting on the customer</h4>
+        <ul>
+          <li>Duplicate detection for property claims, in QA since 4 Nov. <span class="id">#41872</span></li>
+          <li>Upload audit trail, awaiting PO sign-off since 5 Nov. <span class="id">#41880</span></li>
+          <li>Error message wording, in QA since 6 Nov. <span class="id">#41893</span></li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <h4 style="margin-bottom:8px">Where ticket time went</h4>
+      <div class="bar" role="img" aria-label="46% hands-on, 38% waiting on QA or sign-off, 8% waiting on review, 8% unassigned or blocked"><span class="ours" style="width:46%"></span><span class="wait" style="width:38%"></span><span class="review" style="width:8%"></span><span class="idle" style="width:8%"></span></div>
+      <div class="legend" style="margin-top:8px"><span><i class="ours"></i>Hands-on, vendor engineer 46%</span><span><i class="wait"></i>Waiting on QA or sign-off 38%</span><span><i class="review"></i>Waiting on review 8%</span><span><i class="idle"></i>Unassigned or blocked 8%</span></div>
+    </div>
+    <p class="muted" style="font-size:13px">Work as received: 2 of 12 tickets started without acceptance criteria · 1 added mid-sprint · 1 rewritten after work began.</p>
+    <div>
+      <h4 style="margin-bottom:8px">Carried over</h4>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Ticket</th><th class="dm-only">Owner</th><th>State</th><th>Since</th><th class="c">Sprints</th><th>Agreed with PO?</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td class="wide"><span class="id">#41872</span> Duplicate claim detection rule set</td><td class="dm-only">Bence T.</td><td>In QA</td><td class="num">S36</td><td class="c num">2</td><td><span class="pill good">Yes</span></td><td class="wide">Split agreed at planning; second half moved by plan.</td></tr>
+          <tr><td class="wide"><span class="id">#41910</span> Intake form validation for broker uploads</td><td class="dm-only">Csilla M.</td><td>Active</td><td class="num">S36</td><td class="c num">2</td><td><span class="pill good">Yes</span></td><td class="wide">Planned leave; PO informed at planning.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    <div class="dm-only">
+      <h4 style="margin-bottom:8px">People <span class="private">Private</span></h4>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Engineer</th><th class="c">Days available</th><th>Closed, S32–S37</th><th class="c">In progress (oldest)</th><th class="c">Carried over (longest)</th><th class="c">Moved backward</th><th class="c">Returned from QA</th><th class="c">Hands-on days (median)</th><th class="c">Days with no assigned work</th><th>Last board activity</th><th>Flags</th></tr></thead>
+        <tbody>
+          <tr><td><b>Anna K.</b></td><td class="c num">10</td><td><span class="spark" data-v="2,2,2,3,3,4"></span> <span class="num">4</span></td><td class="c num">1 (3 d)</td><td class="c num">0</td><td class="c num">0</td><td class="c num">0 of 4</td><td class="c num">3.5</td><td class="c num">0</td><td>7 Nov</td><td><span class="pill good">Delivering</span></td></tr>
+          <tr><td><b>Bence T.</b></td><td class="c num">10</td><td><span class="spark" data-v="2,3,2,3,4,3"></span> <span class="num">3</span></td><td class="c num">2 (6 d)</td><td class="c num">1 (2 sprints)</td><td class="c num">1</td><td class="c num">1 of 3</td><td class="c num">5.0</td><td class="c num">0</td><td>7 Nov</td><td><span class="pill good">Delivering</span></td></tr>
+          <tr><td><b>Csilla M.</b></td><td class="c num">6</td><td><span class="spark" data-v="1,1,1,2,2,2"></span> <span class="num">2</span></td><td class="c num">1 (5 d)</td><td class="c num">1 (2 sprints)</td><td class="c num">0</td><td class="c num">0 of 3</td><td class="c num">4.5</td><td class="c num">0</td><td>6 Nov</td><td><span class="pill good">Delivering</span> <span class="pill info">4 days leave</span></td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- STREAM 2 -->
+  <section class="stream">
+    <div class="stream-head"><h2>Pricing Models</h2><span class="pill warn">Needs attention</span></div>
+    <div class="cols">
+      <div>
+        <h4>Delivered</h4>
+        <ul>
+          <li><b>Renewal quote inputs.</b> Prior-year premium and loss ratio now feed the renewal quote. <span class="id">#41610</span> <span class="id">#41611</span></li>
+          <li><b>Quote comparison.</b> Side-by-side view of two quote versions. <span class="id">#41702</span></li>
+          <li><b>Defect.</b> Rounding error on multi-currency totals fixed. <span class="id">#41733</span></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Finished by us, waiting on the customer</h4>
+        <ul>
+          <li>Null currency fix in the historical premium transform, awaiting platform-owner review since 28 Oct. <span class="id">#41203</span></li>
+          <li>Quote audit log, awaiting review since 30 Oct. <span class="id">#41455</span></li>
+        </ul>
+        <h4 style="margin-top:8px">Not delivered</h4>
+        <ul>
+          <li>Rate table versioning for renewal quotes. Fourth sprint; see Risks. <span class="id">#40655</span></li>
+          <li>Exposure curve lookup. Started late in the sprint. <span class="id">#41688</span></li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <h4 style="margin-bottom:8px">Where ticket time went</h4>
+      <div class="bar" role="img" aria-label="27% hands-on, 44% waiting on QA or sign-off, 14% waiting on review, 15% unassigned or blocked"><span class="ours" style="width:27%"></span><span class="wait" style="width:44%"></span><span class="review" style="width:14%"></span><span class="idle" style="width:15%"></span></div>
+      <div class="legend" style="margin-top:8px"><span><i class="ours"></i>Hands-on, vendor engineer 27%</span><span><i class="wait"></i>Waiting on QA or sign-off 44%</span><span><i class="review"></i>Waiting on review 14%</span><span><i class="idle"></i>Unassigned or blocked 15%</span></div>
+    </div>
+    <p class="muted" style="font-size:13px">Work as received: 4 of 9 tickets started without acceptance criteria · 3 added mid-sprint · 3 rewritten after work began.</p>
+    <div>
+      <h4 style="margin-bottom:8px">Carried over</h4>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Ticket</th><th class="dm-only">Owner</th><th>State</th><th>Since</th><th class="c">Sprints</th><th>Agreed with PO?</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td class="wide"><span class="id">#40655</span> Rate table versioning for renewal quotes</td><td class="dm-only">Dávid R.</td><td>Active</td><td class="num">S34</td><td class="c num"><span class="pill crit">4</span></td><td><span class="pill crit">No</span></td><td class="wide">Returned from QA 3 times; acceptance criteria changed each time.</td></tr>
+          <tr><td class="wide"><span class="id">#41203</span> Null currency in historical premium transform</td><td class="dm-only">Dávid R.</td><td>In review</td><td class="num">S35</td><td class="c num"><span class="pill warn">3</span></td><td><span class="pill good">Yes</span></td><td class="wide">Development finished 28 Oct; waiting on platform-owner review.</td></tr>
+          <tr><td class="wide"><span class="id">#41688</span> Exposure curve lookup</td><td class="dm-only">Dávid R.</td><td>Active</td><td class="num">S36</td><td class="c num">2</td><td><span class="pill crit">No</span></td><td class="wide">Started on day 8 behind the rate table work.</td></tr>
+          <tr><td class="wide"><span class="id">#41720</span> Quote comparison export</td><td class="dm-only">Emese V.</td><td>Active</td><td class="num">S36</td><td class="c num">2</td><td><span class="pill good">Yes</span></td><td class="wide">Added by the PO on day 7 of Sprint 36; agreed it would span two sprints.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    <div class="dm-only">
+      <h4 style="margin-bottom:8px">People <span class="private">Private</span></h4>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Engineer</th><th class="c">Days available</th><th>Closed, S32–S37</th><th class="c">In progress (oldest)</th><th class="c">Carried over (longest)</th><th class="c">Moved backward</th><th class="c">Returned from QA</th><th class="c">Hands-on days (median)</th><th class="c">Days with no assigned work</th><th>Last board activity</th><th>Flags</th></tr></thead>
+        <tbody>
+          <tr><td><b>Dávid R.</b></td><td class="c num">10</td><td><span class="spark" data-v="3,2,3,2,1,1"></span> <span class="num">1</span></td><td class="c num">3 (31 d)</td><td class="c num">3 (4 sprints)</td><td class="c num">4</td><td class="c num">2 of 3</td><td class="c num">9.0</td><td class="c num">0</td><td>5 Nov</td><td><span class="pill crit">Carried over more than 2 sprints</span> <span class="pill warn">Ticket returned 3 times</span> <span class="pill warn">Output falling 3 sprints</span></td></tr>
+          <tr><td><b>Emese V.</b></td><td class="c num">10</td><td><span class="spark" data-v="2,2,2,1,1,2"></span> <span class="num">2</span></td><td class="c num">1 (9 d)</td><td class="c num">1 (2 sprints)</td><td class="c num">0</td><td class="c num">0 of 2</td><td class="c num">4.0</td><td class="c num">3</td><td>7 Nov</td><td><span class="pill good">Delivering</span> <span class="pill info">3 days with no assigned work</span></td></tr>
+          <tr><td><b>Ferenc P.</b></td><td class="c num">10</td><td><span class="spark" data-v="0,0,0,0,1,1"></span> <span class="num">1</span></td><td class="c num">1 (4 d)</td><td class="c num">0</td><td class="c num">0</td><td class="c num">0 of 2</td><td class="c num">6.0</td><td class="c num">1</td><td>7 Nov</td><td><span class="pill info">Joined in S36</span> <span class="pill info">First ticket closed after 6 days</span></td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="person dm-only">
+      <div class="stream-head"><h3>Evidence: Dávid R., ticket <span class="id">#40655</span></h3><span class="private">Private</span></div>
+      <p>Rate table versioning for renewal quotes. Open 43 working days across S34–S37. Dávid held it for 9 of those days. It was waiting on QA or PO sign-off for the other 34.</p>
+      <div class="timeline" role="img" aria-label="Timeline of who held the ticket">
+        <span class="ours" style="width:9.3%">4d</span><span class="wait" style="width:20.9%">QA 9d</span><span class="ours" style="width:4.7%">2d</span><span class="wait" style="width:27.9%">QA 12d</span><span class="ours" style="width:7%">3d</span><span class="wait" style="width:30.2%">PO sign-off 13d</span>
+      </div>
+      <div class="legend"><span><i class="ours"></i>Held by Dávid, in progress</span><span><i class="wait"></i>Held by customer QA or PO</span></div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Date</th><th>What changed</th><th>Changed by</th></tr></thead>
+        <tbody>
+          <tr><td class="num">15 Sep</td><td>Added to Sprint 34, assigned to Dávid R. No acceptance criteria.</td><td>Product owner</td></tr>
+          <tr><td class="num">19 Sep</td><td>Active → In QA, reassigned to customer QA</td><td>Dávid R.</td></tr>
+          <tr><td class="num">2 Oct</td><td>In QA → Active (first return). Acceptance criteria added.</td><td>Customer QA</td></tr>
+          <tr><td class="num">6 Oct</td><td>Active → In QA</td><td>Dávid R.</td></tr>
+          <tr><td class="num">22 Oct</td><td>In QA → Active (second return). Acceptance criteria edited.</td><td>Product owner</td></tr>
+          <tr><td class="num">27 Oct</td><td>Active → In QA, then awaiting PO sign-off</td><td>Dávid R.</td></tr>
+          <tr><td class="num">7 Nov</td><td>Returned to Active (third return). Acceptance criteria edited. Moved to Sprint 38.</td><td>Product owner</td></tr>
+        </tbody>
+      </table></div>
+      <p class="muted" style="font-size:13px">Your note on carryover: not agreed with the PO in advance. Reason recorded: requirement changed after each QA pass.</p>
+    </div>
+  </section>
+
+  <!-- STREAM 3 -->
+  <section class="stream">
+    <div class="stream-head"><h2>Data Platform</h2><span class="pill good">On track</span></div>
+    <div class="cols">
+      <div>
+        <h4>Delivered</h4>
+        <ul>
+          <li><b>Ingestion scheduler.</b> Nightly loads now retry failed sources and report which ones were skipped. <span class="id">#41502</span> <span class="id">#41503</span> <span class="id">#41509</span></li>
+          <li><b>Access tagging.</b> Restricted datasets carry access tags that downstream tables inherit. <span class="id">#41520</span> <span class="id">#41521</span></li>
+          <li><b>Pipeline defects.</b> Three build failures fixed. <span class="id">#41531</span> +2</li>
+        </ul>
+      </div>
+      <div>
+        <h4>Finished by us, waiting on the customer</h4>
+        <ul><li>Retention rule for staging tables, awaiting sign-off since 6 Nov. <span class="id">#41538</span></li></ul>
+      </div>
+    </div>
+    <div>
+      <h4 style="margin-bottom:8px">Where ticket time went</h4>
+      <div class="bar" role="img" aria-label="52% hands-on, 30% waiting on QA or sign-off, 6% waiting on review, 12% unassigned or blocked"><span class="ours" style="width:52%"></span><span class="wait" style="width:30%"></span><span class="review" style="width:6%"></span><span class="idle" style="width:12%"></span></div>
+      <div class="legend" style="margin-top:8px"><span><i class="ours"></i>Hands-on, vendor engineer 52%</span><span><i class="wait"></i>Waiting on QA or sign-off 30%</span><span><i class="review"></i>Waiting on review 6%</span><span><i class="idle"></i>Unassigned or blocked 12%</span></div>
+    </div>
+    <p class="muted" style="font-size:13px">Work as received: 1 of 9 tickets started without acceptance criteria · none added mid-sprint · none rewritten after work began.</p>
+    <div>
+      <h4 style="margin-bottom:8px">Carried over</h4>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Ticket</th><th class="dm-only">Owner</th><th>State</th><th>Since</th><th class="c">Sprints</th><th>Agreed with PO?</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td class="wide"><span class="id">#41544</span> Lineage tags on curated datasets</td><td class="dm-only">Gábor S.</td><td>Active</td><td class="num">S36</td><td class="c num">2</td><td><span class="pill good">Yes</span></td><td class="wide">Depends on the platform upgrade scheduled for Sprint 38.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    <div class="dm-only">
+      <h4 style="margin-bottom:8px">People <span class="private">Private</span></h4>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Engineer</th><th class="c">Days available</th><th>Closed, S32–S37</th><th class="c">In progress (oldest)</th><th class="c">Carried over (longest)</th><th class="c">Moved backward</th><th class="c">Returned from QA</th><th class="c">Hands-on days (median)</th><th class="c">Days with no assigned work</th><th>Last board activity</th><th>Flags</th></tr></thead>
+        <tbody>
+          <tr><td><b>Gábor S.</b></td><td class="c num">10</td><td><span class="spark" data-v="4,5,4,4,5,5"></span> <span class="num">5</span></td><td class="c num">1 (12 d)</td><td class="c num">1 (2 sprints)</td><td class="c num">0</td><td class="c num">0 of 5</td><td class="c num">3.0</td><td class="c num">0</td><td>7 Nov</td><td><span class="pill good">Delivering</span> <span class="pill warn">Sole engineer on 3 features</span></td></tr>
+          <tr><td><b>Hanna L.</b></td><td class="c num">8</td><td><span class="spark" data-v="3,3,2,3,3,3"></span> <span class="num">3</span></td><td class="c num">1 (2 d)</td><td class="c num">0</td><td class="c num">0</td><td class="c num">0 of 3</td><td class="c num">3.0</td><td class="c num">0</td><td>7 Nov</td><td><span class="pill good">Delivering</span> <span class="pill info">2 days leave</span></td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <p class="muted" style="font-size:13px">Source: the board's own change history for each ticket (state, sprint and assignee changes with timestamps). Delivered summaries are written from ticket text and each one cites its tickets. Carryover answers are recorded by the delivery manager at sprint close.</p>
+</div>
+
+<script>
+document.querySelectorAll('.spark').forEach(function(el){
+  var v = el.dataset.v.split(',').map(Number), max = Math.max.apply(null, v) || 1;
+  el.setAttribute('role','img');
+  el.setAttribute('aria-label','Closed per sprint: ' + v.join(', '));
+  v.forEach(function(n){ var i = document.createElement('i'); i.style.height = Math.round(n / max * 100) + '%'; el.appendChild(i); });
+});
+var bShared = document.getElementById('v-shared'), bDm = document.getElementById('v-dm');
+function setView(dm){
+  document.body.classList.toggle('view-dm', dm);
+  bShared.setAttribute('aria-pressed', String(!dm));
+  bDm.setAttribute('aria-pressed', String(dm));
+}
+bShared.addEventListener('click', function(){ setView(false); });
+bDm.addEventListener('click', function(){ setView(true); });
+</script>

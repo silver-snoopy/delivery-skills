@@ -1,0 +1,10 @@
+#!/bin/sh
+# Resolve this script's real directory through symlinks, then run the package.
+src="$0"
+while [ -h "$src" ]; do
+  dir="$(cd "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+done
+repo="$(cd "$(dirname "$src")/.." && pwd)"
+PYTHONPATH="$repo${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m ledger "$@"

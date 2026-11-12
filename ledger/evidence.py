@@ -19,7 +19,7 @@ from .render.evidence_cards import (MAX_CARDS, flag_reasons, on_card,
 from .render.evidence_html import (DISCLAIMER, render_person_brief,
                                    render_team_brief)
 from .render.fmt import returns_reason_text
-from .report import FOOTNOTE, strip_person_keys
+from .report import footnote, strip_person_keys
 
 __all__ = ["DISCLAIMER", "build_person_brief", "build_team_brief",
            "render_person_brief", "render_team_brief", "add_parser"]
@@ -63,7 +63,7 @@ def _today(cfg: Config) -> date:
 def _base(cfg: Config, picked: List[Dict]) -> Dict[str, Any]:
     first, last = picked[0]["metrics"]["sprint"], picked[-1]["metrics"]["sprint"]
     return {"org_url": cfg.org_url, "project": cfg.project,
-            "vendor_label": cfg.vendor_label, "footnote": FOOTNOTE,
+            "vendor_label": cfg.vendor_label, "footnote": footnote(cfg),
             "generated": _today(cfg).isoformat(),
             "period": {"start": first["start"][:10],
                        "finish": last["finish"][:10]}}

@@ -153,6 +153,8 @@ class PortfolioBuilder:
         self._teams: Dict[str, Dict[str, Any]] = {}
         self._people: Dict[str, Dict[str, Any]] = {}
         self._tickets: List[TicketBuilder] = []
+        self._roles: List[Dict[str, Any]] = []
+        self.scope_owner: Optional[str] = None
 
     # identities
     @staticmethod
@@ -162,6 +164,19 @@ class PortfolioBuilder:
     @staticmethod
     def service(name: str) -> str:
         return "s:" + _hex("service", name)
+
+    @staticmethod
+    def alias_of(name: str) -> str:
+        """The invented sign-in name behind other(name)."""
+        return name.replace(" ", ".") + "@customer.example"
+
+    def backlog_role(self, id: str, label: str, others: List[str],
+                     teams: Optional[List[str]] = None) -> None:
+        """A backlog role held by the identities other(name) for each name
+        in others; write() records their alias hashes as a collection
+        would."""
+        self._roles.append(dict(id=id, label=label, others=list(others),
+                                teams=list(teams or [])))
 
     # time and paths
     def parse_time(self, text: str) -> datetime:
@@ -249,7 +264,26 @@ class PortfolioBuilder:
         }
         if o["unit_types"]:
             raw["unit_types"] = o["unit_types"]
+        if self._roles:
+            raw["backlog_roles"] = [
+                {"id": r["id"], "label": r["label"],
+                 "aliases": [self.alias_of(n) for n in r["others"]],
+                 "teams": r["teams"]} for r in self._roles]
+        if self.scope_owner:
+            raw["labels"] = {"scope_owner": self.scope_owner}
         return raw
+
+    def write_identity_index(self, home: Home) -> None:
+        """The identity index a collection would have written for the
+        backlog roles' identities."""
+        from ..ado.pseudonym import INDEX_FILE, alias_hash, \
+            load_or_create_key
+        if not self._roles:
+            return
+        key = load_or_create_key(home)
+        home.write_json({self.other(n): [alias_hash(key, self.alias_of(n))]
+                         for r in self._roles for n in r["others"]},
+                        INDEX_FILE)
 
     def _roster_json(self) -> Dict[str, Any]:
         return {"people": [dict(id=pid, **p)
@@ -303,6 +337,7 @@ class PortfolioBuilder:
         validate(cfg, roster)
         home.write_json(self._config_json(), "config.json")
         home.write_json(self._roster_json(), "roster.json")
+        self.write_identity_index(home)
         for name in self._teams:
             sps = self.sprints(name)
             sid = sps[-1].id if sps else "current"

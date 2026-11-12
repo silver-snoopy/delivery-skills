@@ -285,7 +285,8 @@ Planned does not mean the vendor chose it. A vendor engineer working in a custom
 
 - **Placed by:** for each vendor ticket that was a member, the party behind the revision that put it on the sprint's path (the start of the first run on that path in force during the sprint).
 - **Taken out by:** for each ticket that left the sprint (12.6), the party behind the last revision before the sprint's end that moved it off the path.
-- **Party:** another party (any identity not on the roster), vendor engineers (a roster person), automation (a configured service identity) or not recorded. Never a person.
+- **Party:** a configured backlog role (such as the product owner or a business analyst, by its label), another party (any other identity not on the roster), vendor engineers (a roster person), automation (a configured service identity) or not recorded. Never a person's name.
+- **Backlog roles:** set up with the DM (`backlog_roles`: id, label, sign-in names, optional teams). The names stay in `config.json`; collection keeps only a keyed hash of each name seen per pseudonym (`identities.json`), and analysis matches roles against those hashes, so roles can change without collecting again. The footnote names who sets scope from `labels.scope_owner` (default "the customer").
 - **Scope figures:** tickets with vendor engineers at the start (members by the planned cut, worked on or only assigned), added after the start, and taken out before the end, each split by party.
 - **Load at the start:** tickets with vendor engineers at the start against the median delivered in the team's previous sprints (up to the six-sprint window; at least 3 needed). Above usual when at least 1.5 times that median and at least 2 more.
 

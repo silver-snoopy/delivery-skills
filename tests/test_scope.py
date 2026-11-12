@@ -7,7 +7,7 @@ from ledger.config import DEFAULT_THRESHOLDS
 from ledger.history import sprint_load
 from ledger.metrics import analyze_team_sprint
 from ledger.render.fmt import load_text, scope_text
-from ledger.report import FOOTNOTE, exec_projection
+from ledger.report import FOOTNOTE, exec_projection, footnote
 from ledger.scope import PARTIES, party
 from ledger.testing.builder import PortfolioBuilder
 from tests.test_risks import TH, fired, metrics
@@ -214,8 +214,11 @@ class WordingTests(unittest.TestCase):
         self.assertEqual(load_text({"load": None}), "")
 
     def test_footnote_says_who_sets_scope(self):
-        self.assertIn("Sprint scope is set by the customer", FOOTNOTE)
-        self.assertIn("whoever placed it there", FOOTNOTE)
+        b, _ = make()
+        cfg = b.config()
+        self.assertIn("Sprint scope is set by the customer", footnote(cfg))
+        self.assertIn("whoever placed it there", footnote(cfg))
+        self.assertTrue(footnote(cfg).startswith(FOOTNOTE))
 
 
 if __name__ == "__main__":

@@ -52,6 +52,7 @@ def build_demo(b: Optional[PortfolioBuilder] = None) -> PortfolioBuilder:
     claims_intake(b)
     pricing_models(b)
     data_platform(b)
+    b.backlog_role("po", "Product owner", ["product owner"])
     return b
 
 

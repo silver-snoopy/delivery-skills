@@ -22,7 +22,8 @@ from .client import (AdoClient, Malformed, NotFound, Unreadable,
                      clause_area_under,
                      clause_changed_since, clause_ever_assigned,
                      clause_states_not_in, clause_types, where_all, where_any)
-from .pseudonym import (Pseudonymizer, load_or_create_key, ticket_text,
+from .pseudonym import (INDEX_FILE, Pseudonymizer, load_index,
+                        load_or_create_key, ticket_text,
                         to_revision, to_squad_revision)
 
 RUN_FILE = "collect-run.json"
@@ -517,7 +518,9 @@ def collect_team(home: Home, cfg: Config, roster: Roster, client: AdoClient,
         squad |= run_query(client, run, key, where)
 
     pseud = Pseudonymizer(load_or_create_key(home), roster,
-                          cfg.service_identities)
+                          cfg.service_identities, index=load_index(home),
+                          on_index=lambda ix: home.write_json(ix,
+                                                              INDEX_FILE))
     attempted = fetch_all(_Fetcher(client, tm, pseud, cutoff, target.end),
                           run, sorted(vendor), sorted(squad), warnings)
     cov = data["coverage"]

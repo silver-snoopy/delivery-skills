@@ -86,6 +86,10 @@ class FakeAdo:
             name, unique = people[pid]["display_name"], pid + "@vendor.example"
         else:
             name, unique = "Other " + hex6, hex6 + "@customer.example"
+            for r in self.builder._roles:
+                for n in r["others"]:
+                    if actor == self.builder.other(n):
+                        unique = self.builder.alias_of(n)
         return {"displayName": name, "uniqueName": unique, "id": ident,
                 "descriptor": "aad." + ident.replace("-", "")}
 

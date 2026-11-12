@@ -6,7 +6,7 @@ engineer rarely chooses what enters a customer's sprint; these figures
 show it from the record instead of leaving "planned" to read as the
 vendor's own commitment. A party is one of PARTIES, never a person."""
 from datetime import datetime
-from typing import List, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence
 
 from .model import Revision, Sprint
 from .timeline import Timeline
@@ -14,12 +14,20 @@ from .timeline import Timeline
 PARTIES = ("other_party", "vendor", "automation", "not_recorded")
 
 
-def party(actor: Optional[str]) -> str:
-    """The party behind a stored actor string: a roster person ("p:") is
-    the vendor, a configured service identity ("s:") is automation, any
-    other identity ("o:") is another party; no actor is not recorded."""
+ROLE_PREFIX = "role_"
+
+
+def party(actor: Optional[str],
+          roles: Optional[Mapping[str, str]] = None) -> str:
+    """The party behind a stored actor string: an identity matched to a
+    configured backlog role is that role ("role_<id>"), a roster person
+    ("p:") is the vendor, a configured service identity ("s:") is
+    automation, any other identity ("o:") is another party; no actor is
+    not recorded."""
     if not actor:
         return "not_recorded"
+    if roles and actor in roles:
+        return ROLE_PREFIX + roles[actor]
     if actor.startswith("p:"):
         return "vendor"
     if actor.startswith("s:"):
@@ -67,6 +75,13 @@ def removed_by(tl: Timeline, sprint: Sprint) -> Optional[Revision]:
     return out
 
 
-def split(parties: Sequence[str]) -> dict:
+def all_parties(role_ids: Sequence[str] = ()) -> List[str]:
+    """Configured roles first, in config order, then the fixed parties."""
+    return [ROLE_PREFIX + r for r in role_ids] + list(PARTIES)
+
+
+def split(parties: Sequence[str], role_ids: Sequence[str] = ()
+          ) -> Dict[str, int]:
     """Counts per party, every party present (zero when none)."""
-    return {p: sum(1 for x in parties if x == p) for p in PARTIES}
+    return {p: sum(1 for x in parties if x == p)
+            for p in all_parties(role_ids)}

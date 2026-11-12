@@ -243,10 +243,18 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual({p: p.stat().st_mtime_ns for p in before}, mtimes)
 
         # No identity outside the roster reached the disk.
+        # A backlog role's sign-in names are the DM's own input: they may
+        # stand in config.json and nowhere else.
         names = self.non_roster_identities()
         self.assertGreaterEqual(len(names), 6)
+        cfg = json.loads((self.root / "config.json").read_text("utf-8"))
+        role_aliases = {a for r in cfg.get("backlog_roles", [])
+                        for a in r["aliases"]}
+        self.assertTrue(role_aliases & set(names))
         for path, content in self.all_files_text().items():
             for n in names:
+                if n in role_aliases and Path(path).name == "config.json":
+                    continue
                 self.assertNotIn(n, content, path)
 
     def _team_names(self, latest):

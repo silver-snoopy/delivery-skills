@@ -142,6 +142,25 @@ What the setting does not cover:
 - `names-check` prints the name it found (the term) and the file, so that the hit can be acted on.
 - It is not a technical barrier: an agent with file access could open the data home. When a model provider must not see ticket text or people's names at all, run those steps by hand: `bin/ledger --show-text annotate ... --interactive`, the report's own ticket lists instead of a written narrative, `bin/ledger --show-text names-check`, and opening the reports yourself.
 
+## Who decides sprint scope
+
+Every team section shows who placed the vendor's tickets in the sprint, who added tickets after the start and who took them out, from the board's record of who saved each change, and the load at the start against the median the team delivered in its previous sprints. The footnote says who sets sprint scope.
+
+To name the customer's roles instead of "another party", add them to `config.json`:
+
+```json
+"backlog_roles": [
+  {"id": "po", "label": "Product owner", "aliases": ["po@customer.example"], "teams": ["Claims"]},
+  {"id": "ba", "label": "Business analyst", "aliases": ["ba@customer.example"]}
+],
+"labels": {"scope_owner": "the customer's product owners"}
+```
+
+- `aliases` are the sign-in or display names of each person in the role. Leave `teams` out for a role that covers every team.
+- The names stay in `config.json`. While collecting, the tool keeps only a keyed hash of each name it sees (`identities.json` in the data home), and `analyze` matches the configured names against those hashes. Reports show only the label.
+- Roles can be added or changed at any time; run `analyze` again. Data collected before this version has no hashes: `analyze` warns that a role matched nobody, and `collect --team TEAM --refresh` fixes it for sprints that are not issued.
+- A change saved by anyone not in a role is "another party"; by a roster engineer, "vendor engineers"; by a service identity in `service_identities`, "automation".
+
 ## Legal notice
 
 Per-person reporting on employees may be subject to local law, data protection rules and works-council agreements. The operator is responsible for checking what is allowed before collecting or reporting on any person, and for how long data is kept.

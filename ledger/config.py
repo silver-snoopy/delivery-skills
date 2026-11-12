@@ -1,4 +1,5 @@
 """Config and roster: the typed, validated view of config.json and roster.json."""
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Tuple
@@ -48,6 +49,21 @@ class Team:
 
 
 @dataclass(frozen=True)
+class BacklogRole:
+    """A customer-side role that decides sprint scope, such as the product
+    owner. `aliases` are sign-in or display names; they are compared with
+    board identities only as keyed hashes and never stored with the data.
+    An empty `teams` means every team."""
+    id: str
+    label: str
+    aliases: Tuple[str, ...]
+    teams: Tuple[str, ...] = ()
+
+    def applies_to(self, team: str) -> bool:
+        return not self.teams or team in self.teams
+
+
+@dataclass(frozen=True)
 class Config:
     org_url: str
     project: str
@@ -62,6 +78,8 @@ class Config:
     thresholds: Dict[str, float]
     vendor_label: str
     agent_text_access: str
+    backlog_roles: Tuple[BacklogRole, ...] = ()
+    scope_owner: str = "the customer"
 
     def team(self, name: str) -> Team:
         for t in self.teams:
@@ -209,6 +227,51 @@ def _team(raw: Dict[str, Any]) -> Team:
                 tuple(exclude))
 
 
+_ROLE_ID = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
+
+
+def _backlog_roles(raw: Any) -> Tuple[BacklogRole, ...]:
+    if raw is None:
+        return ()
+    hint = ('For example "backlog_roles": [{"id": "po", "label": "Product '
+            'owner", "aliases": ["po@customer.example"], "teams": '
+            '["Claims"]}].')
+    if not isinstance(raw, list):
+        raise LedgerError("backlog_roles must be a list", hint)
+    out = []
+    for r in raw:
+        if not isinstance(r, dict):
+            raise LedgerError("each backlog role must be an object", hint)
+        rid = r.get("id")
+        if not isinstance(rid, str) or not _ROLE_ID.match(rid):
+            raise LedgerError(
+                "backlog role id %s is not valid" % _json_text(rid),
+                "Use lower-case letters, digits and _ (up to 24), starting "
+                "with a letter, such as \"po\" or \"ba\".")
+        label = r.get("label")
+        aliases = r.get("aliases")
+        teams = r.get("teams", [])
+        if not isinstance(label, str) or not label.strip():
+            raise LedgerError("backlog role %r has no label" % rid, hint)
+        if not isinstance(aliases, list) or not aliases or not all(
+                isinstance(a, str) and a.strip() for a in aliases):
+            raise LedgerError("backlog role %r needs a list of sign-in names "
+                              "in \"aliases\"" % rid, hint)
+        if not isinstance(teams, list) or not all(
+                isinstance(t, str) for t in teams):
+            raise LedgerError("backlog role %r: teams must be a list of team "
+                              "names" % rid, hint)
+        out.append(BacklogRole(rid, label.strip(),
+                               tuple(a.strip() for a in aliases),
+                               tuple(teams)))
+    ids = [r.id for r in out]
+    twice = sorted({i for i in ids if ids.count(i) > 1})
+    if twice:
+        raise LedgerError("backlog role id(s) used more than once: %s"
+                          % ", ".join(twice), "Give every role its own id.")
+    return tuple(out)
+
+
 def load_config(home: Home) -> Config:
     raw = _load(home, "config.json")
     ado = _require(raw, "ado", "config.json")
@@ -249,6 +312,9 @@ def load_config(home: Home) -> Config:
         thresholds=thresholds,
         vendor_label=(raw.get("labels") or {}).get("vendor", "Vendor team"),
         agent_text_access=raw.get("agent_text_access", "none"),
+        backlog_roles=_backlog_roles(raw.get("backlog_roles")),
+        scope_owner=str((raw.get("labels") or {}).get(
+            "scope_owner") or "the customer").strip(),
     )
 
 
@@ -291,6 +357,22 @@ def validate(cfg: Config, roster: Roster) -> None:
                     "team %s: phase %r for state %r is not valid"
                     % (t.name, rule.phase, rule.state),
                     "Use one of: %s." % ", ".join(PHASES))
+    names = {t.name for t in cfg.teams}
+    for r in cfg.backlog_roles:
+        unknown = sorted(set(r.teams) - names)
+        if unknown:
+            raise LedgerError(
+                "backlog role %r names unknown team(s): %s"
+                % (r.id, ", ".join(unknown)),
+                "Teams in config.json: %s." % ", ".join(sorted(names)))
+        vendor = sorted({a for a in r.aliases
+                         if roster.match_identity(None, [a])})
+        if vendor:
+            raise LedgerError(
+                "backlog role %r lists a roster engineer: %s"
+                % (r.id, ", ".join(vendor)),
+                "A backlog role is a customer-side person; vendor engineers "
+                "are counted as vendor engineers already.")
     seen: Dict[str, str] = {}
     for t in cfg.teams:
         if t.name in seen.values():

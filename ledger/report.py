@@ -14,10 +14,17 @@ FOOTNOTE = ("Figures count tickets and working days taken from the board's "
             "only with the same team's earlier sprints. Durations reflect "
             "when the board was updated, not hours worked. Splitting or "
             "cloning a ticket cannot be detected. Sprint dates are as the "
-            "board shows them today. Sprint scope is set by the customer: "
-            "\"planned\" means in the sprint by the end of its first working "
-            "day, whoever placed it there, and the scope line shows which "
-            "party placed, added or took out each ticket.")
+            "board shows them today.")
+SCOPE_NOTE = ("Sprint scope is set by %s: \"planned\" means in the sprint "
+              "by the end of its first working day, whoever placed it there, "
+              "and the scope line shows who placed, added or took out each "
+              "ticket.")
+
+
+def footnote(cfg: Config) -> str:
+    """The footnote every report and brief carries, naming who sets sprint
+    scope as configured (labels.scope_owner)."""
+    return FOOTNOTE + " " + SCOPE_NOTE % (cfg.scope_owner or "the customer")
 LABELS = ("On track", "Needs attention", "At risk")
 OVERRIDES = "overrides.json"
 _CARRIED = ("carried_in_progress", "carried_not_started")
@@ -187,7 +194,7 @@ def build_report(home: Home, cfg: Config, roster: Roster,
         "generated": datetime.now(timezone.utc).replace(
             microsecond=0).isoformat(),
         "vendor_label": cfg.vendor_label, "org_url": cfg.org_url,
-        "project": cfg.project, "footnote": FOOTNOTE, "summary": "",
+        "project": cfg.project, "footnote": footnote(cfg), "summary": "",
         "risks": [],
         "groups": [{"start": s, "finish": f, "teams": teams,
                     "totals": _totals(teams)}

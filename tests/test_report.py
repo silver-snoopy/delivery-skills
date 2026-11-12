@@ -134,7 +134,8 @@ class ReportTests(unittest.TestCase):
 
     def test_groups_by_identical_dates(self):
         r = self.report()
-        self.assertEqual(r["footnote"], FOOTNOTE)
+        self.assertTrue(r["footnote"].startswith(FOOTNOTE))
+        self.assertIn("Sprint scope is set by the customer", r["footnote"])
         self.assertEqual(r["variant"], "dm")
         self.assertEqual(r["as_of"], "2026-11-07")
         self.assertEqual([(g["start"], g["finish"]) for g in r["groups"]],

@@ -325,11 +325,24 @@ PARTY_LABELS = {"other_party": "another party", "vendor": "vendor engineers",
 _PARTY_ORDER = ("other_party", "vendor", "automation", "not_recorded")
 
 
-def _parties(group: Dict) -> str:
+def _parties(group: Dict, labels: Dict[str, str], roles: List[str]) -> str:
+    """Configured roles first, in config order, then the fixed parties."""
     split = group.get("parties") or {}
-    shown = ["%d %s" % (split[p], ("by " + PARTY_LABELS[p])
-                        if p != "not_recorded" else PARTY_LABELS[p])
-             for p in _PARTY_ORDER if split.get(p)]
+    order = [p for p in roles if p in labels] + \
+        sorted(p for p in labels if p not in roles) + list(_PARTY_ORDER)
+    shown = []
+    for p in order:
+        if not split.get(p):
+            continue
+        if p in labels:
+            shown.append("%d by the %s" % (split[p], labels[p].lower()
+                                            if labels[p][:1].isupper()
+                                            and labels[p][1:2].islower()
+                                            else labels[p]))
+        elif p == "not_recorded":
+            shown.append("%d %s" % (split[p], PARTY_LABELS[p]))
+        elif p in PARTY_LABELS:
+            shown.append("%d by %s" % (split[p], PARTY_LABELS[p]))
     return ", ".join(shown)
 
 
@@ -340,15 +353,17 @@ def scope_text(figures: Dict) -> str:
     scope = figures.get("scope")
     if not isinstance(scope, dict):
         return ""
+    labels = scope.get("labels") or {}
+    roles = [r for r in (scope.get("role_order") or "").split(",") if r]
     start = scope.get("at_start") or {}
     out = "%d with vendor engineers at the start" % (start.get("total") or 0)
     if start.get("total"):
-        out += " (placed in the sprint: %s)" % _parties(start)
+        out += " (placed in the sprint: %s)" % _parties(start, labels, roles)
     for key, label in (("added", "added after the start"),
                        ("removed", "taken out before the end")):
         g = scope.get(key) or {}
         if g.get("total"):
-            out += "; %d %s (%s)" % (g["total"], label, _parties(g))
+            out += "; %d %s (%s)" % (g["total"], label, _parties(g, labels, roles))
     return "Sprint scope: " + out
 
 

@@ -10,7 +10,8 @@ import re
 import secrets
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-from typing import Any, Dict, Iterable, Optional, Tuple, Union
+from typing import (Any, Callable, Dict, Iterable, List, Optional, Tuple,
+                    Union)
 
 from ..config import Roster, Team
 from ..errors import LedgerError
@@ -18,6 +19,7 @@ from ..home import Home
 from ..model import Revision
 
 KEY_FILE = "secret.key"
+INDEX_FILE = "identities.json"
 KEY_BYTES = 32
 _STRING_IDENTITY = re.compile(r"^\s*(.*?)\s*<([^<>]*)>\s*$")
 _CODE_TAG = re.compile(r"(</?)(?:style|script)\b", re.IGNORECASE)
@@ -56,13 +58,64 @@ def _parse_identity(identity: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
     return {"id": None, "displayName": identity.strip(), "uniqueName": ""}
 
 
+def alias_hash(key: bytes, name: str) -> str:
+    """Keyed hash of one sign-in or display name, case-insensitive. The
+    identity index holds only these, so a backlog role in config.json can
+    be matched to a pseudonym without any name being stored with data."""
+    return hmac.new(key, ("alias:" + name.strip().lower()).encode("utf-8"),
+                    hashlib.sha256).hexdigest()[:32]
+
+
+def load_index(home: Home) -> Dict[str, List[str]]:
+    """Pseudonym -> alias hashes seen for it, from every collection."""
+    raw = home.read_json(INDEX_FILE, default={}) or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {k: [h for h in v if isinstance(h, str)]
+            for k, v in raw.items() if isinstance(v, list)}
+
+
+def role_map(home: Home, roles: Iterable[Any], team: str
+             ) -> Dict[str, str]:
+    """Pseudonym -> backlog role id for the roles that apply to team.
+    Empty when no role is configured or nothing has been collected since
+    the index was introduced."""
+    roles = [r for r in roles if r.applies_to(team)]
+    if not roles or not home.path(KEY_FILE).exists():
+        return {}
+    key = load_or_create_key(home)
+    wanted = {alias_hash(key, a): r.id for r in roles for a in r.aliases}
+    out: Dict[str, str] = {}
+    for pseudonym, hashes in load_index(home).items():
+        for h in hashes:
+            if h in wanted:
+                out[pseudonym] = wanted[h]
+                break
+    return out
+
+
 class Pseudonymizer:
     def __init__(self, key: bytes, roster: Roster,
-                 service_identities: Iterable[str]):
+                 service_identities: Iterable[str],
+                 index: Optional[Dict[str, List[str]]] = None,
+                 on_index: Optional[Callable[[Dict[str, List[str]]],
+                                             None]] = None):
         self._key = key
         self._roster = roster
         self._services = {s.lower() for s in service_identities}
         self._seen: Dict[str, str] = {}
+        self.index: Dict[str, List[str]] = dict(index or {})
+        self._on_index = on_index
+
+    def _remember(self, pseudonym: str, names: Iterable[str]) -> None:
+        have = self.index.setdefault(pseudonym, [])
+        new = [h for h in (alias_hash(self._key, n) for n in names if n)
+               if h not in have]
+        if new:
+            have.extend(new)
+            have.sort()
+            if self._on_index is not None:
+                self._on_index(self.index)
 
     def actor(self, identity: Union[None, str, Dict[str, Any]]
               ) -> Optional[str]:
@@ -89,6 +142,7 @@ class Pseudonymizer:
             raise LedgerError(
                 "pseudonym collision between two different identities",
                 "This should not happen; report it rather than continuing.")
+        self._remember(pseudonym, (unique, display))
         return pseudonym
 
 

@@ -14,7 +14,7 @@ from .model import Phase, Revision, Snapshot, Sprint, Ticket, _dt_in
 from .people import person_observations
 from .phases import PhaseMapper
 from .received import received_state
-from .scope import party, placed_by, removed_by, split
+from .scope import ROLE_PREFIX, party, placed_by, removed_by, split
 from .timeline import Event, Timeline, build_timeline, find_bulk_edits
 from .workcal import WorkCalendar, display_days
 
@@ -46,8 +46,12 @@ def _rev_at(ticket: Ticket, at: datetime) -> Optional[Revision]:
 
 class _Ctx:
     def __init__(self, snap: Snapshot, cfg: Config, roster: Roster,
-                 team: str, sprint: Sprint):
+                 team: str, sprint: Sprint,
+                 roles: Optional[Dict[str, str]] = None):
         self.snap, self.cfg, self.roster = snap, cfg, roster
+        self.roles = dict(roles or {})
+        self.role_ids = [r.id for r in cfg.backlog_roles
+                         if r.applies_to(team)]
         self.team, self.sprint = team, sprint
         self.cal = WorkCalendar(cfg.timezone, cfg.holidays)
         self.cutoff = _dt_in(snap.meta["cutoff"])
@@ -228,8 +232,10 @@ def _ticket_record(ctx: _Ctx, r: _Rec, received: Dict[str, Any]
         "planned": r.inv == "worked" and at_start,
         "left_sprint": left,
         "in_sprint_at_start": at_start,
-        "placed_by": party(placed.by) if placed is not None else None,
-        "removed_by": party(removed.by) if removed is not None else None,
+        "placed_by": party(placed.by, ctx.roles)
+        if placed is not None else None,
+        "removed_by": party(removed.by, ctx.roles)
+        if removed is not None else None,
         "workers": {p: display_days(d) for p, d in sorted(r.workers.items())},
         "sprints_carried": r.carry.sprints_carried,
         "carried_since": r.carry.carried_since, "trail": r.carry.trail,
@@ -310,7 +316,8 @@ def _outcome_figures(L: _Ledger, recs: List[_Rec], tickets) -> Dict:
     }
 
 
-def _scope_figures(L: _Ledger, recs: List[_Rec], tickets) -> Dict:
+def _scope_figures(ctx: _Ctx, L: _Ledger, recs: List[_Rec],
+                   tickets) -> Dict:
     """Who decided the sprint's scope, over the team's vendor tickets:
     in the sprint at its start (worked on or only assigned), added after
     the start, and taken out of the sprint before its end."""
@@ -318,7 +325,8 @@ def _scope_figures(L: _Ledger, recs: List[_Rec], tickets) -> Dict:
         ids = [r.id for r in recs if pick(tickets[str(r.id)])]
         out: Dict[str, Any] = {"total": L.count("figures.scope.%s.total"
                                                 % name, ids)}
-        parties = split([tickets[str(i)][field] for i in ids])
+        parties = split([tickets[str(i)][field] for i in ids],
+                        ctx.role_ids)
         for p in parties:
             L.count("figures.scope.%s.parties.%s" % (name, p),
                     [i for i in ids if tickets[str(i)][field] == p])
@@ -326,6 +334,9 @@ def _scope_figures(L: _Ledger, recs: List[_Rec], tickets) -> Dict:
         return out
 
     return {
+        "labels": {ROLE_PREFIX + r.id: r.label for r in ctx.cfg.backlog_roles
+                   if r.id in ctx.role_ids},
+        "role_order": ",".join(ROLE_PREFIX + r for r in ctx.role_ids),
         "at_start": group("at_start", lambda t: t["in_sprint_at_start"],
                           "placed_by"),
         "added": group("added", lambda t: t["placed_by"] is not None
@@ -522,8 +533,11 @@ def squad_delivered(snap: Snapshot, cfg: Config, team: str,
 
 
 def analyze_team_sprint(snap: Snapshot, cfg: Config, roster: Roster,
-                        team: str, sprint: Sprint) -> Tuple[Dict, Dict]:
-    ctx = _Ctx(snap, cfg, roster, team, sprint)
+                        team: str, sprint: Sprint,
+                        roles: Optional[Dict[str, str]] = None
+                        ) -> Tuple[Dict, Dict]:
+    """roles: pseudonym -> backlog role id (ado.pseudonym.role_map)."""
+    ctx = _Ctx(snap, cfg, roster, team, sprint, roles)
     recs, every = _collect(ctx)
     tickets = {str(r.id): _ticket_record(ctx, r, received_state(
         r.ticket, r.tl, sprint, ctx.cal, team, roster, cfg)) for r in recs}
@@ -531,7 +545,7 @@ def analyze_team_sprint(snap: Snapshot, cfg: Config, roster: Roster,
     L = _Ledger()
     figures = _outcome_figures(L, mine, tickets)
     figures.update(_flow_figures(ctx, L, mine, tickets))
-    figures["scope"] = _scope_figures(L, mine, tickets)
+    figures["scope"] = _scope_figures(ctx, L, mine, tickets)
     figures["received"] = _received_figures(ctx, L, mine, tickets)
     squad = squad_delivered(snap, cfg, team, sprint)
     figures["squad_delivered"] = L.count("figures.squad_delivered", squad)

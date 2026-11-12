@@ -8,6 +8,7 @@ from .buckets import time_split
 from .config import Config, Roster, load_config, load_roster, validate
 from .errors import LedgerError
 from .home import Home, slug
+from .ado.pseudonym import role_map
 from .metrics import RULES_VERSION, analyze_team_sprint
 from .model import Snapshot, Sprint, _dt_in
 from .phases import AreaPhaseMapper, PhaseMapper
@@ -150,6 +151,16 @@ def run_analyze(home: Home, cfg: Config, roster: Roster, team: str,
     moved: List[Dict[str, Any]] = []
     warnings: List[str] = []
     checked = False
+    roles = role_map(home, cfg.backlog_roles, team)
+    wanted = sorted({r.id for r in cfg.backlog_roles if r.applies_to(team)}
+                    - set(roles.values()))
+    if wanted:
+        warnings.append(
+            "%s: no board identity matched backlog role(s) %s; their changes "
+            "count as another party. Check the role's sign-in names, or run "
+            "`ledger collect --team \"%s\" --refresh` if this data was "
+            "collected before roles could be matched."
+            % (team, ", ".join(wanted), team))
     for s in _window(snap, cfg, team, own):
         d = home.team_sprint_dir(team, s.id)
         parts = d.relative_to(home.root).parts
@@ -164,7 +175,7 @@ def run_analyze(home: Home, cfg: Config, roster: Roster, team: str,
         if not checked:
             require_mapped(snap, cfg, team)
             checked = True
-        m, ledger = analyze_team_sprint(snap, cfg, roster, team, s)
+        m, ledger = analyze_team_sprint(snap, cfg, roster, team, s, roles)
         m["backfilled"] = s.id != own.id
         history.apply(m, ledger, list(earlier), cfg)
         m["earlier_rules_sprints"] = [

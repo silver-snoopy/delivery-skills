@@ -294,10 +294,12 @@ class _Team:
                 "no_assignment": not self.assigned_any(emails, s0, t1)}
 
     def since(self, h: History, t1, waiting: bool) -> Optional[date]:
-        """Local date the item last entered a waiting state (or Blocked), or last changed."""
+        """Local date the item last entered a waiting state (or Blocked), or last changed
+        (counting changes to its children at the stories level)."""
         rows = [(r, ts) for r, ts in zip(h.rows, h.times) if ts <= t1]
-        if not rows or not waiting:
-            return self.local(rows[-1][1]) if rows else None
+        if not waiting:
+            return self.local(max(ts for x in [h] + self.kids(h, t1) for ts in x.times
+                                  if ts <= t1))
         start = None
         for r, ts in reversed(rows):
             if not _is_waiting(r, self.cfg.waiting_states):
@@ -323,17 +325,22 @@ class _Team:
         if not ids:
             return None
         cycles = [c for c in (self.cycle_days(self.hist[i]) for i in ids) if c is not None]
-        return {"assignees": len({a.lower() for i in ids for a in self.hist[i].assignees_active(t1)}),
+        def workers(h):  # engineers on the children (stories level), else the item's assignees
+            kids = {a.lower() for k in self.kids(h, t1) for a in k.assignees_active(t1)}
+            return kids or {a.lower() for a in h.assignees_active(t1)}
+
+        return {"assignees": len({a for i in ids for a in workers(self.hist[i])}),
                 "delivered": len(ids), "median": percentile(cycles, 0.5),
                 "p85": percentile(cycles, P85), "waiting_share": self.waiting_share(ids)}
 
-    def unknown(self, people: List[Person], sprint: dict) -> List[tuple]:
-        """(id, email) for assignees on the sprint path in a roster domain but not on the roster."""
+    def unknown(self, people: List[Person], counted: List[History], sprint: dict) -> List[tuple]:
+        """(id, email) for assignees on the sprint path in a roster domain but not on the roster,
+        on the team's counted items and their children."""
         s0, _, t1 = self.instants(sprint)
         roster = {e.lower() for p in people for e in p.emails}
         domains = {e.split("@")[-1] for e in roster}
         found = set()
-        for h in self.hist.values():
+        for h in {x.id: x for c in counted for x in [c] + self.kids(c, t1)}.values():
             rows = [h.at(s0)] + [r for r, ts in zip(h.rows, h.times) if s0 < ts <= t1]
             for r in rows:
                 email = ((r or {}).get("assigned") or "").lower()
@@ -351,7 +358,8 @@ ASK = {"old": "Ask what is blocking it.",
        "nothing": "Ask what is blocking them.",
        "wip": "Ask which item to finish first.",
        "reopened": "Ask why it was reopened.",
-       "hygiene": "Fix the board or add the email to team.csv."}
+       "hygiene": "Fix the board or add the email to team.csv.",
+       "never_active": "Ask them to move items through Active on the board."}
 _LEVELS = ("red", "amber", "grey")
 
 
@@ -419,7 +427,7 @@ def _attention(t: _Team, f: dict, carry: List[dict], people: List[dict], waits: 
     for i in f["delivered"]:
         fa, done = t.hist[i].first_active, t.hist[i].done_at
         if fa is None or fa > done:
-            add("grey", "hygiene", "#%d was closed without ever being in progress." % i, i)
+            add("grey", "never_active", "#%d was closed without ever being in progress." % i, i)
     for i in f["reopened"]:
         add("grey", "reopened", "#%d was reopened." % i, i)
     for i, email in unknown:
@@ -438,9 +446,11 @@ def _status(f: dict, carry: List[dict], p85: Optional[int], waits: Dict[int, tup
     if denom:
         share = len(f["delivered_planned"]) / denom
         parts = ["%d%% of planned work items delivered%s"
-                 % (math.floor(share * 100 + 0.5), removed)]
+                 % (math.floor(share * 100), removed)]
     else:
-        share, parts = 1.0, ["There were no planned work items%s" % removed]
+        share = 1.0
+        parts = ["All planned work items were removed from the sprint" if f["removed"]
+                 else "There were no planned work items"]
     old = [c["id"] for c in carry if p85 is not None and c["age"] is not None and c["age"] > p85]
     bad = [c["id"] for c in carry if c["id"] in old and c["agreed"] != "agreed"]
     many = len(old) > 1
@@ -529,7 +539,7 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
                      "nominal": sum(m["nominal"] for m in members)},
         "people": persons,
         "rest": t.rest(members, counted, sprint),
-        "attention": _attention(t, f, carry, persons, waits, stale, t.unknown(people, sprint),
+        "attention": _attention(t, f, carry, persons, waits, stale, t.unknown(people, counted, sprint),
                                 cycle_window["p85"], open_ages),
         "status": _status(f, carry, cycle_window["p85"], waits,
                           _by_team(notes.status, team, None)),

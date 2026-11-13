@@ -3,7 +3,8 @@ from datetime import date
 
 from ledger.config import Notes, Person
 from tests.fixture import Board
-from tests.test_metrics import IVAN, MAYA, PEOPLE, S28, S29, board, run
+from ledger.metrics import _status
+from tests.test_metrics import IVAN, LENA, MAYA, PEOPLE, PO, S28, S29, board, run
 
 NADIA, TOM, JANE = "nadia@vendor.example", "tom.h2@vendor.example", "jane@customer.example"
 S27 = "Proj\\S27"
@@ -116,6 +117,27 @@ class ItemFlagTests(unittest.TestCase):
             {"level": "amber", "text": "#1 is Active with no board change for 5 working days.",
              "ask": ask}])
 
+    def test_stale_counts_child_changes_at_stories_level(self):
+        b = board()
+        ask = "Ask whether it is moving and the board is behind, or it is stuck."
+        b.item(1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active")
+        b.item(2, "Task", parent=1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA,
+                                       state="Active").at("2026-11-04 09:00", state="Closed")
+        self.assertEqual(flags(run(b, "ALFA", "S29"), ask=ask), [])
+        b.item(3).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active")
+        self.assertEqual([a["text"] for a in flags(run(b, "ALFA", "S29"), ask=ask)],
+                         ["#3 is Active with no board change for 8 working days."])
+
+    def test_unknown_assignee_only_in_the_team_that_counts_the_item(self):
+        b = board()  # ALFA and BETA share the iteration path Proj\S29
+        b.item(1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active")
+        b.item(2, "Task").at("2026-10-27 09:00", iteration=S29, assigned=LENA, state="Active")
+        b.item(3, "Task").at("2026-10-27 09:00", iteration=S29, assigned=TOM, state="Active")
+        texts = lambda team: [a["text"] for a in flags(run(b, team, "S29"), "grey")]
+        self.assertEqual(texts("ALFA"), [])
+        self.assertEqual(texts("BETA"), ["#3 is assigned to tom.h2@vendor.example, which is not "
+                                         "in team.csv."])
+
     def test_unknown_roster_domain_assignee_is_grey(self):
         b = board()
         closed(b, 1)
@@ -135,9 +157,10 @@ class ItemFlagTests(unittest.TestCase):
             .at("2026-10-20 09:00", state="Closed").at("2026-10-28 09:00", state="Active") \
             .at("2026-11-02 09:00", state="Closed")
         t = run(b, "ALFA", "S29")
-        self.assertEqual([(a["level"], a["text"]) for a in flags(t, "grey")], [
-            ("grey", "#1 was closed without ever being in progress."),
-            ("grey", "#2 was reopened.")])
+        self.assertEqual([(a["level"], a["text"], a["ask"]) for a in flags(t, "grey")], [
+            ("grey", "#1 was closed without ever being in progress.",
+             "Ask them to move items through Active on the board."),
+            ("grey", "#2 was reopened.", "Ask why it was reopened.")])
 
     def test_old_and_carried_items(self):
         b = board()
@@ -175,6 +198,16 @@ class RestOfSquadTests(unittest.TestCase):
         self.assertEqual(t["rest"], {"assignees": 1, "delivered": 2, "median": 2, "p85": 5,
                                      "waiting_share": 0.6})
         self.assertIsNone(run(b, "BETA", "S29")["rest"])
+
+    def test_rest_counts_engineers_on_children_not_the_story_owner(self):
+        b = board()
+        closed(b, 1)
+        closed(b, 2, who=PO)
+        b.item(3, "Task", parent=2).at("2026-10-27 09:00", iteration=S29, assigned=JANE,
+                                       state="Active").at("2026-11-02 09:00", state="Closed")
+        closed(b, 4, who=JANE)
+        rest = run(b, "ALFA", "S29")["rest"]
+        self.assertEqual((rest["delivered"], rest["assignees"]), (2, 1))
 
 
 class StatusTests(unittest.TestCase):
@@ -227,6 +260,19 @@ class StatusTests(unittest.TestCase):
         notes.status["alfa"] = ("AMBER", "PO moved the release; agreed scope cut.")
         self.assertEqual(run(b, "ALFA", "S29", people=GONE, notes=notes)["status"], {
             "colour": "AMBER", "reason": "PO moved the release; agreed scope cut.", "manual": True})
+
+    def test_status_share_is_floored(self):
+        f = {"planned": list(range(49)), "delivered_planned": list(range(39)), "removed": []}
+        self.assertEqual(_status(f, [], None, {}, None), {
+            "colour": "AMBER", "manual": False,
+            "reason": "79% of planned work items delivered; no carry-over is older than the "
+                      "squad's P85."})
+
+    def test_status_when_every_planned_item_was_removed(self):
+        f = {"planned": [1, 2], "delivered_planned": [], "removed": [1, 2]}
+        self.assertEqual(_status(f, [], None, {}, None)["reason"],
+                         "All planned work items were removed from the sprint; no carry-over is "
+                         "older than the squad's P85.")
 
     def test_status_without_planned_or_old_carry(self):
         b = board()

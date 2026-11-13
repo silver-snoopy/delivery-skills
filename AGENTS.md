@@ -17,10 +17,10 @@ If your agent supports skills, the same procedure is in `skills/delivery-report/
 ## Flow
 
 1. On first use, or when `staff.txt` changed: ask for the query, `staff.txt` and `vacations.xlsx`, then run `bin/ledger init --query Q --staff staff.txt --vacations vacations.xlsx --yes`. Show `.delivery-skills/team.csv`, ask the DM to correct teams and join dates, and edit `team.csv` from their answers.
-2. For each team ask: "Anything to add for team T this sprint?" Write `T note: TEXT` (DM file only) or `T exec note: TEXT` (both files, only if the DM says so, no names) to `.delivery-skills/<sprint>/notes.txt`.
-3. Run `bin/ledger report`.
-4. For each carry-over without a note ask: "Was carrying #ID over agreed with the PO? (agreed / not agreed / unknown) and why?" Write `#ID agreed|not agreed|unknown: reason` to `notes.txt`.
-5. Write `T summary: TEXT` per team (two or three sentences, no names) from the titles of delivered items, taken from the `report` output or from the DM. Have the DM confirm the sentences.
+2. Run `bin/ledger report`. It creates `notes.txt` and prints `sprint: NAME`, `notes: PATH`, then per team `TEAM carry-over without note: #ID TITLE` and `TEAM delivered: #ID TITLE` lines. Use the printed notes path below.
+3. For each team ask: "Anything to add for team T this sprint?" Write `T note: TEXT` (DM file only) or `T exec note: TEXT` (both files, only if the DM says so, no names) to the notes file.
+4. For each printed carry-over without a note ask: "Was carrying #ID over agreed with the PO? (agreed / not agreed / unknown) and why?" Write `#ID agreed|not agreed|unknown: reason` to the notes file.
+5. Write `T summary: TEXT` per team (two or three sentences, no names) from the printed delivered titles. Have the DM confirm the sentences.
 6. Run `bin/ledger report` again.
 7. Give the DM the paths of the two files and tell them to read the manager_ file before sending it.
 

@@ -188,6 +188,21 @@ class RunReportTest(unittest.TestCase):
         self.assertIn("16 of 18 engineer-days available", text(contents[0][0]))  # Maya: 2 days off
         self.assertIn("8 of 9 engineer-days available", text(contents[0][0]))  # alias for Lena
 
+    def test_report_prints_sprint_notes_carryovers_and_delivered(self):
+        code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertEqual(code, 0, out)
+        lines = out.splitlines()
+        self.assertIn("sprint: Sprint 29", lines)
+        self.assertIn("notes: " + os.path.join(self.d, "Sprint 29", "notes.txt"), lines)
+        self.assertTrue([l for l in lines if re.match(r"ALFA delivered: #\d+ \S", l)], out)
+        carry = [l for l in lines if l.startswith("ALFA carry-over without note: #")]
+        self.assertTrue(carry, out)
+        cid = re.match(r"ALFA carry-over without note: #(\d+)", carry[0]).group(1)
+        with open(os.path.join(self.d, "Sprint 29", "notes.txt"), "w") as f:
+            f.write("#%s agreed: ok\n" % cid)
+        _, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertNotIn("carry-over without note: #%s " % cid, out)
+
     def test_report_prints_notes_warnings_and_reads_notes(self):
         os.makedirs(os.path.join(self.d, "Sprint 28"))
         with open(os.path.join(self.d, "Sprint 28", "notes.txt"), "w") as f:

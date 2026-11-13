@@ -26,7 +26,8 @@ class DocsTest(unittest.TestCase):
     def test_skill_content(self):
         text = SKILL.read_text(encoding="utf-8")
         for s in ("init --query Q --staff staff.txt --vacations vacations.xlsx --yes",
-                  "Anything to add for team", "notes.txt", "T exec note:"):
+                  "Anything to add for team", "notes.txt", "T exec note:",
+                  "carry-over without note", "delivered: #ID"):
             self.assertIn(s, text)
         self.assertIn("Never open the HTML files", text)
         self.assertNotRegex(text, r"(?i)(?<!never )(?<!not )\bopen the html")

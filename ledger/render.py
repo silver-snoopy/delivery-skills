@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 
 from ledger.ado import AdoError, Client, fetch, load_cache, save_cache
 from ledger.config import Notes, Person, email_index, load_config, parse_notes, read_team
-from ledger.metrics import (CARRIED_FLAG, GREEN_SHARE, STALE_DAYS, TREND, WAIT_FLAG_DAYS,
+from ledger.metrics import (histories, CARRIED_FLAG, GREEN_SHARE, STALE_DAYS, TREND, WAIT_FLAG_DAYS,
                             WAIT_RED_DAYS, WIP_FLAG, team_sprint, team_sprints)
 from ledger.xlsx import match_name, read_vacations
 
@@ -384,6 +384,14 @@ def run_report(args, client: Optional[Client], out) -> int:
         if t.get("missing"):
             print("No sprint named %s for team %s." % (name, t["team"]), file=out)
     print("Written:\n  %s\n  %s\n  %s (notes)" % (paths[0], paths[1], notes_path), file=out)
+    print("sprint: %s\nnotes: %s" % (name, notes_path), file=out)
+    hist = histories(data, cfg.not_delivered_reasons)
+    for t in sorted((t for t in teams if not t.get("missing")), key=lambda t: t["team"]):
+        lines = ["carry-over without note: #%d %s" % (c["id"], c["title"] or "")
+                 for c in t["carry"] if c["id"] not in notes.items]
+        lines += ["delivered: #%d %s" % (i, hist[i].title or "") for i in sorted(t["delivered"])]
+        for line in lines:
+            print("%s %s" % (t["team"], " ".join(line.split())), file=out)
     return 0
 
 

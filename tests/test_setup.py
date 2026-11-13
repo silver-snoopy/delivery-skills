@@ -170,17 +170,10 @@ class InitTest(unittest.TestCase):
         self.assertIn("Which person in staff.txt is 'Nobody X'? (blank if none)", asked)
         self.assertEqual(load_config(self.d).name_aliases, {"Nobody X": "John Doe"})
 
-    def test_init_stops_on_missing_fields(self):
-        data = board().cache()
-        del data["revisions"][0]["category"]
-        with self.assertRaises(AdoError) as cm:
-            self.run_init(data)
-        self.assertIn("category", str(cm.exception))
-        self.assertFalse(os.path.exists(self.d))
-        data = board().cache()
-        data["revisions"][0]["category"] = "Weird"
-        with self.assertRaises(AdoError):
-            self.run_init(data)
+    def test_init_stops_when_fetch_fails(self):  # fetch checks the rows (test_ado)
+        with mock.patch("ledger.setup.fetch", side_effect=AdoError("unknown state category 'Weird'")):
+            with self.assertRaises(AdoError):
+                setup.run_init(self.args(), object(), lambda p, d: d, io.StringIO())
         self.assertFalse(os.path.exists(self.d))
 
     def test_missing_org_and_project(self):

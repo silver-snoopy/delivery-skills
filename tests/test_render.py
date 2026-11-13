@@ -251,6 +251,7 @@ class RunReportTest(unittest.TestCase):
             code, out = self.run_cli("report", "--today", "2026-11-13")
         self.assertEqual(code, 0, out)
         self.assertEqual(f.call_args[0][4], 200)  # history_days default
+        self.assertIn(104, f.call_args[1]["known"])  # cached ids are fetched again
         with open(os.path.join(self.d, CACHE_FILE)) as fh:
             self.assertIn(104, {r["id"] for r in json.load(fh)["revisions"]})
 
@@ -316,6 +317,15 @@ class RunReportTest(unittest.TestCase):
         self.assertIn("warning: manager file mentions Maya Brook", out)
         self.assertIn("warning: manager file mentions %s" % IVAN, out)
         self.assertNotIn("mentions Lena Ford", out)  # a note is in the DM file only
+
+    def test_names_match_whole_words(self):
+        self.edit("team.csv", lambda t: t + "Ann,ann@vendor.example,ALFA,,,1\n")
+        _, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertNotIn("mentions Ann", out)  # "planned" contains "ann"
+        with open(os.path.join(self.d, "Sprint 29", "notes.txt"), "w") as f:
+            f.write("#103 agreed: ANN is on leave\n")
+        _, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertIn("warning: manager file mentions Ann", out)
 
     def test_running_sprint_and_board_time(self):
         code, out = self.run_cli("report", "--offline", "--today", "2026-11-05", "--sprint", "Sprint 29")

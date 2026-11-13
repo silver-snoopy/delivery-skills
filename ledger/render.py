@@ -5,7 +5,7 @@ from datetime import date, datetime
 from html import escape, unescape
 from typing import Dict, List, Optional
 
-from ledger.ado import Client, fetch, load_cache, save_cache
+from ledger.ado import Client, cached_ids, fetch, load_cache, save_cache
 from ledger.config import Notes, Person, email_index, load_config, parse_notes, read_team
 from ledger.metrics import (histories, CARRIED_FLAG, GREEN_SHARE, STALE_DAYS, TREND, WAIT_FLAG_DAYS,
                             WAIT_RED_DAYS, WIP_FLAG, team_sprint, team_sprints)
@@ -347,9 +347,10 @@ def _load(args, client, out):
     if args.offline:
         data = load_cache(d)
     else:
+        warn = lambda line: _warn(out, line)  # noqa: E731
         data = save_cache(d, fetch(client or Client(cfg.organization, cfg.project), cfg.query,
                                    sorted({e for p in people for e in p.emails}), today,
-                                   cfg.history_days, lambda line: _warn(out, line)))
+                                   cfg.history_days, warn, known=cached_ids(d)), warn)
     vac = read_vacations(cfg.vacations, cfg.half_day_codes)
     names = [p.name for p in people]
     days_off = {}  # type: Dict[str, Dict[date, float]]
@@ -430,7 +431,8 @@ def run_report(args, client: Optional[Client], out) -> int:
             f.write(pages[-1])
     manager = unescape(pages[0]).lower()
     for term in sorted({t for p in people for t in [p.name] + p.emails}):
-        if term.lower() in manager:
+        word = r"(?<!\w)%s(?!\w)" % re.escape(term.lower())
+        if (term.lower() in manager) if "@" in term else re.search(word, manager):
             _warn(out, "manager file mentions %s" % term)
     for line in notes.warnings:
         _warn(out, line)

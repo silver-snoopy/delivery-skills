@@ -42,7 +42,7 @@ Alfa status: AMBER - reason
 - A sprint figure is "delivered X of Y planned": items that finished in the sprint against items in the sprint at the end of its first day, not counting removed items. An unfinished planned item that is still on this sprint or moved to a later sprint is a carry-over; it is removed only when it went back to the backlog (or another path that is not a sprint) or was closed with a not-delivered reason.
 - Cycle time runs from the first In Progress or Resolved state to the first delivered completion, in days; the report shows the median and the P85 (nearest rank) over the last 6 sprints.
 - Waiting is time in states you mark as waiting (or with the Blocked tag). More than 3 working days is a DM flag; more than 10 makes the status RED.
-- Board history covers the last `history_days` days (default 200) and is kept in the cache, which only grows.
+- Board history covers the last `history_days` days (default 200) and is kept in the cache. Every run fetches the cached items again, so an item that left the query keeps its real latest state; an item that is deleted or no longer readable is dropped, with a warning.
 - Status is GREEN at 80% delivered or more with no old, unagreed carry-over; AMBER if one condition is missed; RED if both are, or on a long wait. You can override it in `notes.txt`.
 - Thresholds are fixed local conventions, not industry standards, and the footnote says so. Every figure depends on the board being kept up to date.
 

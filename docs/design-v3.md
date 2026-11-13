@@ -130,7 +130,7 @@ Azure DevOps **Analytics OData** (`WorkItems`, `WorkItemRevisions`, `Iterations`
   - the full revision history of all of those, plus the titles of their parents.
 - Fields: `WorkItemId, Revision, ChangedDate, WorkItemType, State, StateCategory, Reason, ParentWorkItemId, Title, TagNames`, with `$expand=AssignedTo($select=UserEmail),Area($select=AreaPath),Iteration($select=IterationPath)` (area and iteration paths are navigation properties). Date literals in filters are written `YYYY-MM-DDT00:00:00Z`.
 - Sprint dates come from `Iterations` (the calendar date of `StartDate`/`EndDate`). The stories and tasks levels come from the project's process configuration (requirement and task backlogs).
-- Each run merges the new rows into `.delivery-skills/cache/revisions.json`: revisions by (id, revision), iterations by path, parent titles by id; levels and the fetch time are replaced. The cache only grows, so a later run still has the history of older sprints. `--offline` reports from the cache.
+- Each run also fetches again every item already in `.delivery-skills/cache/revisions.json`, then merges: an item the run asked for takes its full history from the new fetch, so an item that left the query scope gets its real latest state, and an item that returns no rows (deleted or no longer readable) is dropped with one warning (count and first ids). Cached iterations that no revision uses any more (renamed or moved) are dropped; parent titles are merged by id; levels and the fetch time are replaced. A later run therefore still has the history of older sprints. An unreadable cache is replaced with a warning. `--offline` reports from the cache.
 - Errors: a fetch that returns no revisions is an error ("the query returned no work items") and leaves the cache untouched. Query ids that return no revisions are a warning with their count (possible area-path permission gaps). HTTP errors show the first 300 characters of the response body. A response that is not JSON (often a sign-in page), a missing, unreadable or invalid cache (missing keys or fields, unknown state category) are errors with a next step.
 
 The figures are computed by replaying revisions to fixed points in time (sprint start, end of day 1, sprint end), never from current values. That makes them idempotent: Azure DevOps's own velocity chart re-reads current data, which is why its past sprints can change.
@@ -182,7 +182,7 @@ Times: t0 = 24:00 local on the sprint's first day; t1 = 24:00 local on its last 
 - 6-sprint trend: X of Y, delivered in total, P85;
 - footnote with the method.
 
-Ticket titles and the DM's own text appear as written. After writing manager_, `report` scans it (ignoring case) for every roster full name and email and prints `warning: manager file mentions <name>` for each one found; the DM decides.
+Ticket titles and the DM's own text appear as written. After writing manager_, `report` scans it (ignoring case) for every roster full name as a whole word and every email and prints `warning: manager file mentions <name>` for each one found; the DM decides.
 
 **dm_ (private)**: everything in manager_, plus:
 - **Needs attention**, first on the page, after the DM's notes. Evaluated at the sprint end. Each entry names the item or person, the reason and the next question:
@@ -233,9 +233,9 @@ The agent reads ticket titles to write the summary. The wording may differ betwe
 - "Ours" depends on assignee history. Pair work without an assignee change is invisible.
 - Waiting time is only as good as the waiting states and the `Blocked` tag the squads actually use.
 - The rest-of-squad comparison mixes different kinds of work. The DM report says so next to the table.
-- On the first run, items not changed within `history_days` (and not assigned to our people in that time) are not fetched; once fetched, an item stays in the cache.
+- On the first run, items not changed within `history_days` (and not assigned to our people in that time) are not fetched; once fetched, an item stays in the cache until it is deleted or no longer readable.
 - Per-person reporting may fall under local labour law and works-council rules. The operator checks.
 
 ## 10. Decisions
 
-Decided on 2026-11-13: the squad-vs-rest comparison stays in dm_ only; manager_ has a RAG status line; `vacations.xlsx` is the team calendar layout (months side by side under merged title cells, day numbers in one header row, `Name` and `Squad` columns), with letter codes and public holidays marked per person. The final review added: carry-over versus removed by where the item is at the sprint end; teams from `team.csv`; a cache that only grows; a names warning for manager_; a code cap of about 2,400 lines.
+Decided on 2026-11-13: the squad-vs-rest comparison stays in dm_ only; manager_ has a RAG status line; `vacations.xlsx` is the team calendar layout (months side by side under merged title cells, day numbers in one header row, `Name` and `Squad` columns), with letter codes and public holidays marked per person. The final review added: carry-over versus removed by where the item is at the sprint end; teams from `team.csv`; a cache that keeps older items and refetches them; a names warning for manager_; a code cap of about 2,400 lines.

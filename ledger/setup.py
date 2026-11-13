@@ -4,7 +4,7 @@ from collections import Counter
 from datetime import date
 from typing import Callable, Dict, List, Optional
 
-from ledger.ado import AdoError, Client, az_defaults, cache_path, check_rows, fetch, save_cache
+from ledger.ado import AdoError, Client, az_defaults, cache_path, cached_ids, fetch, save_cache
 from ledger.config import (CONFIG_FILE, DEFAULT_NOT_DELIVERED, Config, Person, load_config, merge_staff,
                            parse_staff, read_team, save_config, write_team)
 from ledger.metrics import histories, level_of
@@ -191,9 +191,8 @@ def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out
     team_path = os.path.join(d, TEAM_FILE)
     known = read_team(team_path) if os.path.exists(team_path) else []
     emails = sorted({e for es in staff.values() for e in es})
-    data = fetch(client, args.query, emails, today, cfg.history_days,
-                 lambda line: print("warning: %s" % line, file=out))
-    check_rows(data)
+    warn = lambda line: print("warning: %s" % line, file=out)  # noqa: E731
+    data = fetch(client, args.query, emails, today, cfg.history_days, warn, known=cached_ids(d))
     seen = {r["assigned"] for r in data["revisions"] if r["assigned"]}
     warnings += ["%s is never assigned on the board; check the sign-in email" % e
                  for e in emails if e not in seen]
@@ -232,7 +231,7 @@ def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out
     cfg.staff, cfg.vacations = os.path.abspath(args.staff), os.path.abspath(args.vacations)
     if not cfg.waiting_states:
         cfg.waiting_states = sug["waiting"]
-    save_cache(d, data)
+    save_cache(d, data, warn)
     cache = cache_path(d)
     write_team(team_path, people)
     save_config(d, cfg)

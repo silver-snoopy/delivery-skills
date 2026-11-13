@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest import mock
 from urllib.parse import unquote
 
-from ledger.ado import (AdoError, Client, az_defaults, az_http, az_token, cache_path, fetch,
+from ledger.ado import (AdoError, _flatten, Client, az_defaults, az_http, az_token, cache_path, fetch,
                         load_cache, org_name, save_cache)
 
 GUID = "11111111-2222-3333-4444-555555555555"
@@ -131,8 +131,10 @@ class AdoTest(unittest.TestCase):
         self.assertEqual(data["revisions"][1]["tags"], [])
         self.assertEqual(data["parents"], {"9": "Epic"})
         with tempfile.TemporaryDirectory() as d:
-            self.assertEqual(save_cache(d, data), data)
-            self.assertEqual(load_cache(d), data)
+            saved = {k: v for k, v in data.items() if k != "requested"}
+            self.assertEqual(data["requested"], [1, 2, 3])
+            self.assertEqual(save_cache(d, data), saved)
+            self.assertEqual(load_cache(d), saved)
         it_call = [unquote(c[1]) for c in http.calls if "/Iterations?" in c[1]][0]
         self.assertIn("$filter=StartDate ne null and EndDate ne null", it_call)
         for it in data["iterations"]:
@@ -205,20 +207,64 @@ class AdoTest(unittest.TestCase):
                     "state": "Active", "category": "InProgress", "reason": "", "iteration": it,
                     "area": "A", "assigned": None, "parent": None, "title": "T", "tags": []}
         old = {"fetched": "old", "levels": {"stories": ["A"]}, "parents": {"9": "Old", "8": "Kept"},
-               "iterations": [{"path": "P\\S1", "name": "S1", "start": "2026-01-01", "end": "2026-01-02"}],
-               "revisions": [flat(1, 1), flat(1, 2)]}
+               "iterations": [{"path": "Proj\\S1", "name": "S1", "start": "2026-01-01", "end": "2026-01-02"}],
+               "revisions": [flat(1, 1), flat(1, 2), flat(4, 1)]}
         new = {"fetched": "new", "levels": {"stories": ["B"]}, "parents": {"9": "New"},
-               "iterations": [{"path": "P\\S2", "name": "S2", "start": "2026-02-01", "end": "2026-02-02"}],
+               "iterations": [{"path": "Proj\\S2", "name": "S2", "start": "2026-02-01", "end": "2026-02-02"}],
                "revisions": [flat(1, 2, "Proj\\S2"), flat(2, 1)]}
         with tempfile.TemporaryDirectory() as d:
             save_cache(d, old)
             merged = save_cache(d, new)
             self.assertEqual(load_cache(d), merged)
-        self.assertEqual([(r["id"], r["rev"]) for r in merged["revisions"]], [(1, 1), (1, 2), (2, 1)])
-        self.assertEqual(merged["revisions"][1]["iteration"], "Proj\\S2")
+        # an item the new fetch returns takes its rows from it; item 4 was not asked for and stays
+        self.assertEqual([(r["id"], r["rev"]) for r in merged["revisions"]], [(1, 2), (2, 1), (4, 1)])
+        self.assertEqual(merged["revisions"][0]["iteration"], "Proj\\S2")
         self.assertEqual([i["name"] for i in merged["iterations"]], ["S1", "S2"])
         self.assertEqual(merged["parents"], {"9": "New", "8": "Kept"})
         self.assertEqual((merged["levels"], merged["fetched"]), ({"stories": ["B"]}, "new"))
+
+    def test_refetch_drops_gone_items_and_keeps_newest_state(self):
+        def raw(i, r, it):
+            return rev(i, r, Iteration={"IterationPath": it}, ChangedDate="2026-11-0%dT10:00:00Z" % r)
+        old = {"fetched": "old", "levels": {}, "parents": {},
+               "iterations": [{"path": "Proj\\Old\\S30", "name": "S30", "start": "2026-11-10",
+                               "end": "2026-11-21"}],
+               "revisions": [_flatten(raw(5, 1, "Proj\\Old\\S30")), _flatten(raw(6, 1, "Proj\\Old\\S30"))]}
+        http = Fake(revisions=[raw(1, 1, "Proj\\S1"), raw(6, 1, "Proj\\S2"), raw(6, 2, "Proj\\S2")],
+                    wiql_ids=(1,))
+        warnings = []
+        with tempfile.TemporaryDirectory() as d:
+            save_cache(d, old)
+            new = fetch(self.client(http), "Proj", [], date(2026, 11, 13), known=[5, 6],
+                        warn=warnings.append)
+            rev_call = [unquote(c[1]) for c in http.calls if "/WorkItemRevisions?" in c[1]][0]
+            self.assertIn("WorkItemId in (1,3,5,6)", rev_call)
+            merged = save_cache(d, new)
+            self.assertEqual(load_cache(d), merged)
+        self.assertEqual(sorted({r["id"] for r in merged["revisions"]}), [1, 6])
+        self.assertEqual([r["iteration"] for r in merged["revisions"] if r["id"] == 6],
+                         ["Proj\\S2", "Proj\\S2"])
+        self.assertEqual(warnings, ["1 saved work items returned no history and were dropped "
+                                    "(deleted or no longer readable): #5"])
+        self.assertNotIn("Proj\\Old\\S30", [i["path"] for i in merged["iterations"]])
+        self.assertNotIn("requested", merged)
+
+    def test_unreadable_cache_is_replaced_with_a_warning(self):
+        warnings = []
+        empty = {"fetched": "x", "levels": {}, "iterations": [], "revisions": [], "parents": {}}
+        with tempfile.TemporaryDirectory() as d:
+            save_cache(d, empty, warnings.append)
+            self.assertEqual(warnings, [])
+            with open(cache_path(d), "w") as f:
+                f.write("{broken")
+            save_cache(d, empty, warnings.append)
+        self.assertEqual(warnings, ["the saved board data was unreadable and has been replaced; "
+                                    "older sprints may have lost history"])
+
+    def test_fetch_checks_rows(self):
+        with self.assertRaises(AdoError):
+            fetch(self.client(Fake(revisions=[rev(1, 1, StateCategory="Weird")])), "Proj", [],
+                  date(2026, 11, 13))
 
     def test_corrupt_or_invalid_cache(self):
         with tempfile.TemporaryDirectory() as d:

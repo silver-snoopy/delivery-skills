@@ -7,7 +7,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timezone
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 BATCH = 200
@@ -205,9 +205,10 @@ def check_rows(data: dict) -> None:
 
 
 def fetch(client: Client, query: str, emails: List[str], today: date, history_days: int = 200,
-          warn: Callable[[str], None] = lambda line: None) -> dict:
-    """Revisions of the query's items, their children and items assigned to `emails` since
-    `history_days` before `today`; raises AdoError when nothing comes back."""
+          warn: Callable[[str], None] = lambda line: None, known: Sequence[int] = ()) -> dict:
+    """Revisions of the query's items, their children, items assigned to `emails` since
+    `history_days` before `today` and the `known` (cached) items; raises AdoError when nothing
+    comes back. "requested" lists every id asked for, for save_cache."""
     since = date.fromordinal(today.toordinal() - history_days)
     stamp = since.isoformat() + "T00:00:00Z"
     query_ids = set(client.query_ids(query, since))
@@ -223,6 +224,7 @@ def fetch(client: Client, query: str, emails: List[str], today: date, history_da
                            % (mails, stamp),
                 "$select": "WorkItemId"}):
             ids.add(r["WorkItemId"])
+    ids |= set(known)
     rows = []  # type: List[dict]
     for chunk in _chunks(sorted(ids)):
         for raw in client.odata("WorkItemRevisions", {
@@ -233,10 +235,16 @@ def fetch(client: Client, query: str, emails: List[str], today: date, history_da
         raise AdoError("the query returned no work items",
                        "check the query and your access to its area paths")
     rows.sort(key=lambda r: (r["id"], r["rev"]))
-    missing = query_ids - {r["id"] for r in rows}
+    found = {r["id"] for r in rows}
+    missing = query_ids - found - set(known)
     if missing:
         warn("%d work items from the query returned no history (possible area-path permission "
              "gaps)" % len(missing))
+    gone = sorted(set(known) - found)
+    if gone:
+        warn("%d saved work items returned no history and were dropped (deleted or no longer "
+             "readable): %s" % (len(gone), ", ".join("#%d" % i for i in gone[:5])
+                                + (", ..." if len(gone) > 5 else "")))
     iterations = [{"path": r["IterationPath"], "name": r["IterationName"],
                    "start": (r.get("StartDate") or "")[:10], "end": (r.get("EndDate") or "")[:10]}
                   for r in client.odata("Iterations", {
@@ -250,7 +258,8 @@ def fetch(client: Client, query: str, emails: List[str], today: date, history_da
                                             "$select": "WorkItemId,Title"}):
             parents[str(r["WorkItemId"])] = r.get("Title")
     data = {"fetched": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "levels": client.levels(), "iterations": iterations, "revisions": rows, "parents": parents}
+            "levels": client.levels(), "iterations": iterations, "revisions": rows, "parents": parents,
+            "requested": sorted(ids)}
     check_rows(data)
     return data
 
@@ -259,23 +268,42 @@ def cache_path(dir: str) -> str:
     return os.path.join(dir, CACHE_FILE)
 
 
-def _merge(old: dict, new: dict) -> dict:
-    """`new` over `old`: revisions by (id, rev), iterations by path, parents by id; levels and
-    the fetch time from `new`. Items that left the query or the window stay."""
-    revs = {(r["id"], r["rev"]): r for r in old["revisions"] + new["revisions"]}
-    its = {i["path"]: i for i in old["iterations"] + new["iterations"]}
+def _merge(old: dict, new: dict, requested: set) -> dict:
+    """`new` over `old`. An item in `new` or in `requested` takes its rows from `new` only, so a
+    requested item with no rows (deleted, unreadable) is dropped; other old items stay. Old
+    iterations stay only while a revision still uses their path. Parents by id; levels and the
+    fetch time from `new`."""
+    replaced = requested | {r["id"] for r in new["revisions"]}
+    revs = [r for r in old["revisions"] if r["id"] not in replaced] + new["revisions"]
+    used = {r["iteration"] for r in revs}
+    its = {i["path"]: i for i in old["iterations"] if i["path"] in used}
+    its.update((i["path"], i) for i in new["iterations"])
     return {"fetched": new["fetched"], "levels": new["levels"],
             "iterations": sorted(its.values(), key=lambda i: (i["start"], i["path"])),
-            "revisions": [revs[k] for k in sorted(revs)], "parents": {**old["parents"], **new["parents"]}}
+            "revisions": sorted(revs, key=lambda r: (r["id"], r["rev"])),
+            "parents": {**old["parents"], **new["parents"]}}
 
 
-def save_cache(dir: str, data: dict) -> dict:
-    """Merge `data` into the cache in `dir` (an unreadable cache is replaced); return the result."""
-    path = cache_path(dir)
+def cached_ids(dir: str) -> List[int]:
+    """Work item ids in the cache in `dir`; none when it is missing or unreadable."""
     try:
-        data = _merge(load_cache(dir), data)
+        return sorted({r["id"] for r in load_cache(dir)["revisions"]})
     except AdoError:
-        pass
+        return []
+
+
+def save_cache(dir: str, data: dict, warn: Callable[[str], None] = lambda line: None) -> dict:
+    """Merge `data` into the cache in `dir` (an unreadable cache is replaced, with a warning);
+    return the result."""
+    path = cache_path(dir)
+    data = dict(data)
+    requested = set(data.pop("requested", ()))
+    if os.path.exists(path):
+        try:
+            data = _merge(load_cache(dir), data, requested)
+        except AdoError:
+            warn("the saved board data was unreadable and has been replaced; older sprints may "
+                 "have lost history")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

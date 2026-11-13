@@ -30,6 +30,11 @@ class DocsTest(unittest.TestCase):
                   "carry-over without note", "delivered: #ID"):
             self.assertIn(s, text)
         self.assertIn("Never open the HTML files", text)
+        for doc in (text, (ROOT / "AGENTS.md").read_text(encoding="utf-8")):
+            for s in ("figures can change if the board changed", "warning:", "not-delivered reasons",
+                      "picked up"):
+                self.assertIn(s, doc)
+            self.assertNotIn("numbers do not change", doc)
         self.assertNotRegex(text, r"(?i)(?<!never )(?<!not )\bopen the html")
 
     def test_no_forbidden_words(self):

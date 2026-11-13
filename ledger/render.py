@@ -2,13 +2,14 @@
 import os
 import re
 from datetime import date, datetime
-from html import escape
+from html import escape, unescape
 from typing import Dict, List, Optional
 
 from ledger.ado import Client, fetch, load_cache, save_cache
 from ledger.config import Notes, Person, email_index, load_config, parse_notes, read_team
 from ledger.metrics import (histories, CARRIED_FLAG, GREEN_SHARE, STALE_DAYS, TREND, WAIT_FLAG_DAYS,
                             WAIT_RED_DAYS, WIP_FLAG, team_sprint, team_sprints)
+from ledger.replay import local_tz, parse_ts
 from ledger.xlsx import read_vacations, resolve_name
 
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
@@ -103,14 +104,20 @@ def _page(title: str, body: str) -> str:
             '</div></body></html>\n' % (escape(title), CSS, body))
 
 
-def _head(title: str, teams: List[dict], generated: datetime, private: bool) -> str:
+def _head(title: str, teams: List[dict], generated: datetime, private: bool, board: str) -> str:
     dated = next((t["sprint"] for t in teams if not t.get("missing")), None)
     meta = [_dates(dated)] if dated else []
     meta.append("%d team%s" % (len(teams), "" if len(teams) == 1 else "s"))
+    if board:
+        meta.append("Board data as of %s" % board)
     return "\n".join(([_tag("p", "Private: delivery manager only", "private")] if private else [])
-                     + [_tag("h1", escape(title)), _tag("p", " · ".join(meta), "meta"),
+                     + [_tag("h1", escape(title)), _tag("p", escape(" · ".join(meta)), "meta"),
                         _tag("p", "generated %s" % generated.strftime("%Y-%m-%d %H:%M %Z").strip(),
                              "meta")])
+
+
+def _title(sprint_name: str, kind: str, running: bool) -> str:
+    return "%s delivery %s%s" % (sprint_name, kind, " (sprint still running)" if running else "")
 
 
 def _missing(sprint_name: str, t: dict) -> str:
@@ -225,10 +232,12 @@ def _teams(sprint_name: str, teams: List[dict]) -> List[str]:
     return [_missing(sprint_name, t) if t.get("missing") else _team(t) for t in teams]
 
 
-def render_manager(sprint_name: str, teams: List[dict], generated: datetime) -> str:
-    body = [_head("%s delivery summary" % sprint_name, teams, generated, False)]
-    return _page("%s delivery summary" % sprint_name,
-                 "\n".join(body + _teams(sprint_name, teams) + [_footnote(False)]))
+def render_manager(sprint_name: str, teams: List[dict], generated: datetime, running: bool = False,
+                   board: str = "") -> str:
+    """`board` is the board data time; `running` marks a sprint that has not ended."""
+    title = _title(sprint_name, "summary", running)
+    body = [_head(title, teams, generated, False, board)]
+    return _page(title, "\n".join(body + _teams(sprint_name, teams) + [_footnote(False)]))
 
 
 def _person_row(p: dict) -> List[str]:
@@ -260,11 +269,13 @@ def _dm_team(t: dict) -> str:
     return _tag("article", "\n".join(parts), "squad")
 
 
-def render_dm(sprint_name: str, teams: List[dict], generated: datetime) -> str:
+def render_dm(sprint_name: str, teams: List[dict], generated: datetime, running: bool = False,
+              board: str = "") -> str:
+    title = _title(sprint_name, "review", running)
     present = [t for t in teams if not t.get("missing")]
     notes = [_tag("li", escape("%s: %s" % (t["team"], t["notes"]["note"])))
              for t in present if t["notes"]["note"]]
-    body = [_head("%s delivery review" % sprint_name, teams, generated, True),
+    body = [_head(title, teams, generated, True, board),
             _tag("h2", "Needs attention"),
             _tag("div", _tag("div", _tag("p", "<b>Your notes for this sprint</b>")
                              + (_tag("ul", "".join(notes)) if notes else
@@ -279,7 +290,7 @@ def render_dm(sprint_name: str, teams: List[dict], generated: datetime) -> str:
     body += [_missing(sprint_name, t) for t in teams if t.get("missing")]
     body += [_dm_team(t) for t in present]
     body += [_tag("h2", "Team figures (as in the manager report)")] + _teams(sprint_name, teams)
-    return _page("%s delivery review" % sprint_name, "\n".join(body + [_footnote(True)]))
+    return _page(title, "\n".join(body + [_footnote(True)]))
 
 
 def render_person(person: Person, rows: List[dict], generated: datetime) -> str:
@@ -403,12 +414,23 @@ def run_report(args, client: Optional[Client], out) -> int:
     for s in {(t["sprint"]["start"], t["sprint"]["end"]) for t in teams if not t.get("missing")}:
         if not any(date.fromisoformat(s[0]) <= d <= date.fromisoformat(s[1]) for d in vac.days):
             _warn(out, "the calendar does not cover %s (%s to %s); leave is not counted" % (name, *s))
+    running = any(date.fromisoformat(t["sprint"]["end"]) >= today
+                  for t in teams if not t.get("missing"))
+    if running:
+        _warn(out, "%s has not ended by %s; the report shows it as it stands (sprint still running)"
+              % (name, today.isoformat()))
+    board = parse_ts(data["fetched"]).astimezone(local_tz(cfg.timezone)).strftime("%Y-%m-%d %H:%M %Z")
     generated = datetime.now().astimezone()
-    paths = []
+    paths, pages = [], []
     for prefix, render in (("manager", render_manager), ("dm", render_dm)):
         paths.append(os.path.join(folder, "%s_%s.html" % (prefix, today.isoformat())))
+        pages.append(render(name, teams, generated, running, board))
         with open(paths[-1], "w", encoding="utf-8") as f:
-            f.write(render(name, teams, generated))
+            f.write(pages[-1])
+    manager = unescape(pages[0]).lower()
+    for term in sorted({t for p in people for t in [p.name] + p.emails}):
+        if term.lower() in manager:
+            _warn(out, "manager file mentions %s" % term)
     for line in notes.warnings:
         _warn(out, line)
     _check_notes(notes, teams, name, out)

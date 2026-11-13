@@ -306,6 +306,30 @@ class RunReportTest(unittest.TestCase):
         with open(os.path.join(self.d, "Sprint 29", "manager_2026-11-13.html"), encoding="utf-8") as f:
             self.assertIn("15 of 18 engineer-days available", text(f.read()))  # 2 + 1 days off
 
+    def test_manager_file_names_are_warnings(self):
+        self.edit(CACHE_FILE, lambda t: t.replace("Retry & reconcile", "Maya Brook: retry"))
+        os.makedirs(os.path.join(self.d, "Sprint 29"))
+        with open(os.path.join(self.d, "Sprint 29", "notes.txt"), "w") as f:
+            f.write("ALFA summary: Ask IVAN.H@vendor.example.\nALFA note: Lena Ford helped.\n")
+        code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: manager file mentions Maya Brook", out)
+        self.assertIn("warning: manager file mentions %s" % IVAN, out)
+        self.assertNotIn("mentions Lena Ford", out)  # a note is in the DM file only
+
+    def test_running_sprint_and_board_time(self):
+        code, out = self.run_cli("report", "--offline", "--today", "2026-11-05", "--sprint", "Sprint 29")
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: Sprint 29 has not ended by 2026-11-05", out)
+        for prefix in ("manager", "dm"):
+            with open(os.path.join(self.d, "Sprint 29", "%s_2026-11-05.html" % prefix),
+                      encoding="utf-8") as f:
+                page = f.read()
+            self.assertRegex(page, r"<h1>Sprint 29 delivery \w+ \(sprint still running\)</h1>")
+            self.assertIn("Board data as of 2026-11-13 01:00 CET", page)
+        _, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertNotIn("has not ended", out)
+
     def test_missing_config(self):
         out = io.StringIO()
         self.assertEqual(cli.main(["--dir", self.d + "x", "report"], out=out), 1)

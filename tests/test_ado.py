@@ -111,7 +111,15 @@ class AdoTest(unittest.TestCase):
         self.assertEqual(r["assigned"], "maya.r@vendor.example")
         self.assertEqual(r["tags"], ["Blocked", "x"])
         self.assertEqual(data["revisions"][1]["tags"], [])
-        self.assertEqual(data["parents"], {9: "Epic"})
+        self.assertEqual(data["parents"], {"9": "Epic"})
+        with tempfile.TemporaryDirectory() as d:
+            save_cache(d, data)
+            self.assertEqual(load_cache(d), data)
+        it_call = [unquote(c[1]) for c in http.calls if "/Iterations?" in c[1]][0]
+        self.assertIn("$filter=StartDate ne null and EndDate ne null", it_call)
+        for it in data["iterations"]:
+            self.assertRegex(it["start"], r"^\d{4}-\d{2}-\d{2}$")
+            self.assertRegex(it["end"], r"^\d{4}-\d{2}-\d{2}$")
         self.assertEqual([i["name"] for i in data["iterations"]], ["S1", "S2"])
         self.assertEqual(data["iterations"][0]["start"], "2026-10-19")
         self.assertEqual(data["levels"]["tasks"], ["Task"])

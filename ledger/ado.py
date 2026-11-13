@@ -183,14 +183,14 @@ def fetch(client: Client, query: str, emails: List[str], today: date, history_da
                    "start": (r.get("StartDate") or "")[:10], "end": (r.get("EndDate") or "")[:10]}
                   for r in client.odata("Iterations", {
                       "$select": "IterationPath,IterationName,StartDate,EndDate",
-                      "$filter": "StartDate ne null"})]
+                      "$filter": "StartDate ne null and EndDate ne null"})]
     iterations.sort(key=lambda i: (i["start"], i["path"]))
     parent_ids = sorted({r["parent"] for r in rows if r["parent"] is not None})
-    parents = {}  # type: Dict[int, str]
+    parents = {}  # type: Dict[str, str]
     for chunk in _chunks(parent_ids):
         for r in client.odata("WorkItems", {"$filter": "WorkItemId in " + _id_list(chunk),
                                             "$select": "WorkItemId,Title"}):
-            parents[r["WorkItemId"]] = r.get("Title")
+            parents[str(r["WorkItemId"])] = r.get("Title")
     return {"fetched": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "levels": client.levels(), "iterations": iterations, "revisions": rows, "parents": parents}
 

@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -5,6 +6,7 @@ from datetime import date
 
 from ledger.config import (Config, Person, email_index, load_config, merge_staff, parse_notes,
                            parse_staff, read_team, save_config, write_team)
+from ledger.replay import local_tz
 
 
 class ConfigTest(unittest.TestCase):
@@ -53,6 +55,44 @@ class ConfigTest(unittest.TestCase):
                                                      "Duplicate", "Obsolete", "Deferred", "Abandoned"])
         self.assertEqual(cfg.teams["ALFA"]["count"], "tasks")
         self.assertEqual(cfg.name_aliases, {"Maya Rao": "Maya R."})
+
+        self.assertEqual(cfg.history_days, 200)
+
+    def test_parse_staff_skips_entries_without_email(self):
+        warnings = []
+        pairs = parse_staff("John Doe; Maya R. <maya@vendor.example>; Tom <tom>", warnings)
+        self.assertEqual(pairs, [("Maya R.", "maya@vendor.example")])
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("John Doe", warnings[0])
+
+    def test_team_csv_bom_and_team_case(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "team.csv")
+            with open(path, "w", encoding="utf-8-sig") as f:
+                f.write("name,email,team,joined,left,allocation\nAnn,Ann@vendor.example, alfa ,,,1\n")
+            self.assertEqual(read_team(path), [Person("Ann", ["ann@vendor.example"], "ALFA", None, None)])
+
+    def load(self, raw):
+        warnings = []
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "config.json"), "w") as f:
+                json.dump(raw, f)
+            return load_config(d, warnings.append), warnings
+
+    def test_unknown_config_keys_are_a_warning(self):
+        cfg, warnings = self.load({"timezone": "UTC", "waiting_state": ["QA"], "zzz": 1})
+        self.assertEqual(cfg.waiting_states, [])
+        self.assertEqual(warnings, ["config.json keys not recognised and ignored: waiting_state, zzz"])
+
+    def test_bad_count_and_timezone_are_errors(self):
+        with self.assertRaises(ValueError) as e:
+            self.load({"teams": {"ALFA": {"count": "story"}}})
+        self.assertIn("ALFA", str(e.exception))
+        with self.assertRaises(ValueError) as e:
+            self.load({"timezone": "Europe/Zürich"})
+        self.assertIn("Europe/Zürich", str(e.exception))
+        with self.assertRaises(ValueError):
+            local_tz("Nowhere/City")
 
 
 if __name__ == "__main__":

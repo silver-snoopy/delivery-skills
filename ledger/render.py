@@ -9,7 +9,7 @@ from ledger.ado import Client, fetch, load_cache, save_cache
 from ledger.config import Notes, Person, email_index, load_config, parse_notes, read_team
 from ledger.metrics import (histories, CARRIED_FLAG, GREEN_SHARE, STALE_DAYS, TREND, WAIT_FLAG_DAYS,
                             WAIT_RED_DAYS, WIP_FLAG, team_sprint, team_sprints)
-from ledger.xlsx import match_name, read_vacations
+from ledger.xlsx import read_vacations, resolve_name
 
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 CSS = """:root{--bg:#F6F7F9;--paper:#FFF;--fg:#16202A;--muted:#5A6573;--line:#DCE1E7;--accent:#1E5B86;
@@ -308,13 +308,26 @@ def folder_name(name: str) -> str:
     return re.sub(r'[/\\:*?"<>|]', "-", name)
 
 
+def _warn(out, line: str) -> None:
+    print("warning: %s" % line, file=out)
+
+
 def _load(args, client, out):
-    """Config, people, board history and days off by team.csv name, for `report` and `person`."""
+    """Config, people, board history, the calendar (days off by team.csv name), today and the
+    team names from team.csv, for `report` and `person`."""
     d = args.dir
     if not os.path.isfile(os.path.join(d, "config.json")):
         raise ValueError("no config.json in %s; run ledger init first" % d)
-    cfg = load_config(d)
+    cfg = load_config(d, lambda line: _warn(out, line))
     people = read_team(os.path.join(d, "team.csv"))
+    teams = sorted({p.team for p in people if p.team})
+    for team in teams:
+        if not any(k.lower() == team.lower() and (v or {}).get("count") for k, v in cfg.teams.items()):
+            _warn(out, "team %s in team.csv has no counting level in config.json; it counts stories "
+                       "(set \"teams\": {\"%s\": {\"count\": \"stories\" or \"tasks\"}})" % (team, team))
+    for team in sorted(cfg.teams):
+        if team.lower() not in {t.lower() for t in teams}:
+            _warn(out, "team %s in config.json has no one in team.csv; it is not reported" % team)
     today = date.fromisoformat(args.today) if args.today else date.today()
     if not cfg.vacations or not os.path.isfile(cfg.vacations):
         raise ValueError("team calendar not found: '%s'; set \"vacations\" in config.json"
@@ -324,21 +337,25 @@ def _load(args, client, out):
     else:
         data = save_cache(d, fetch(client or Client(cfg.organization, cfg.project), cfg.query,
                                    sorted({e for p in people for e in p.emails}), today,
-                                   cfg.history_days, lambda line: print("warning: %s" % line, file=out)))
+                                   cfg.history_days, lambda line: _warn(out, line)))
     vac = read_vacations(cfg.vacations, cfg.half_day_codes)
     names = [p.name for p in people]
     days_off = {}  # type: Dict[str, Dict[date, float]]
     for cal, days in vac.days_off.items():
-        target = cfg.name_aliases.get(cal)
-        target = target if target in names else match_name(cal, names)
+        target = resolve_name(cal, names, cfg.name_aliases)
         if target is None:
             vac.warnings.append("calendar name '%s' matches no one in team.csv; its leave is not "
                                 "counted (add it to name_aliases in config.json)" % cal)
-        else:
-            days_off[target] = days
+            continue
+        mine = days_off.setdefault(target, {})  # two calendar names for one person: merge
+        for day, off in days.items():
+            mine[day] = max(mine.get(day, 0.0), off)
+    vac.warnings += ["no calendar row for %s; their leave is not counted" % p.name for p in people
+                     if p.name not in days_off and (p.left is None or p.left > today)]
     for line in vac.warnings:
-        print("warning: %s" % line, file=out)
-    return cfg, people, data, days_off, today
+        _warn(out, line)
+    vac.days_off = days_off
+    return cfg, people, data, vac, today, teams
 
 
 def _ended(data, cfg, people, team, today) -> List[dict]:
@@ -346,12 +363,26 @@ def _ended(data, cfg, people, team, today) -> List[dict]:
             if date.fromisoformat(s["end"]) < today]
 
 
+def _check_notes(notes: Notes, teams: List[dict], name: str, out) -> None:
+    """Warn about notes.txt lines that no reported team uses."""
+    present = [t for t in teams if not t.get("missing")]
+    reported = {t["team"].lower() for t in present}
+    for kind in ("summary", "note", "exec note", "status"):
+        for team in getattr(notes, kind.replace(" ", "_")):
+            if team.lower() not in reported:
+                _warn(out, "notes.txt has a %s %s line, but no team %s is in this report"
+                      % (team, kind, team))
+    carried = {c["id"] for t in present for c in t["carry"]}
+    for i in sorted(set(notes.items) - carried):
+        _warn(out, "notes.txt #%d is not a carry-over of any team in %s" % (i, name))
+
+
 def run_report(args, client: Optional[Client], out) -> int:
-    cfg, people, data, days_off, today = _load(args, client, out)
-    by_team = {t: team_sprints(data, cfg, people, t) for t in cfg.teams}
+    cfg, people, data, vac, today, team_names = _load(args, client, out)
+    by_team = {t: team_sprints(data, cfg, people, t) for t in team_names}
     name = args.sprint
     if not name:
-        ended = [s for t in cfg.teams for s in _ended(data, cfg, people, t, today)]
+        ended = [s for t in team_names for s in _ended(data, cfg, people, t, today)]
         if not ended:
             raise ValueError("no sprint ended before %s" % today.isoformat())
         name = max(ended, key=lambda s: (s["end"], s["start"], s["name"]))["name"]
@@ -362,13 +393,16 @@ def run_report(args, client: Optional[Client], out) -> int:
     notes_path = os.path.join(folder, "notes.txt")
     if not os.path.exists(notes_path):
         open(notes_path, "w", encoding="utf-8").close()
-    with open(notes_path, encoding="utf-8") as f:
+    with open(notes_path, encoding="utf-8-sig") as f:
         notes = parse_notes(f.read())
     teams = []
     for team, sprints in by_team.items():
         sprint = next((s for s in reversed(sprints) if s["name"] == name), None)
         teams.append({"team": team, "missing": True} if sprint is None else
-                     team_sprint(data, cfg, people, team, sprint, notes, days_off))
+                     team_sprint(data, cfg, people, team, sprint, notes, vac.days_off))
+    for s in {(t["sprint"]["start"], t["sprint"]["end"]) for t in teams if not t.get("missing")}:
+        if not any(date.fromisoformat(s[0]) <= d <= date.fromisoformat(s[1]) for d in vac.days):
+            _warn(out, "the calendar does not cover %s (%s to %s); leave is not counted" % (name, *s))
     generated = datetime.now().astimezone()
     paths = []
     for prefix, render in (("manager", render_manager), ("dm", render_dm)):
@@ -376,7 +410,8 @@ def run_report(args, client: Optional[Client], out) -> int:
         with open(paths[-1], "w", encoding="utf-8") as f:
             f.write(render(name, teams, generated))
     for line in notes.warnings:
-        print("warning: %s" % line, file=out)
+        _warn(out, line)
+    _check_notes(notes, teams, name, out)
     for t in teams:
         if t.get("missing"):
             print("No sprint named %s for team %s." % (name, t["team"]), file=out)
@@ -393,13 +428,13 @@ def run_report(args, client: Optional[Client], out) -> int:
 
 
 def run_person(args, client: Optional[Client], out) -> int:
-    cfg, people, data, days_off, today = _load(args, client, out)
+    cfg, people, data, vac, today, _ = _load(args, client, out)
     person = email_index(people).get(args.email.strip().lower())
     if person is None:
         raise ValueError("no one in team.csv has the email %s" % args.email)
     rows = []
     for sprint in _ended(data, cfg, people, person.team, today)[-TREND:]:
-        r = team_sprint(data, cfg, people, person.team, sprint, Notes(), days_off)
+        r = team_sprint(data, cfg, people, person.team, sprint, Notes(), vac.days_off)
         p = next((x for x in r["people"] if x["name"] == person.name), None)
         rows.append({"sprint": sprint["name"]} if p is None else {
             "sprint": sprint["name"], "available": p["available"], "nominal": p["nominal"],

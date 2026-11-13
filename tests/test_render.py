@@ -148,6 +148,11 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(folder_name('A/B\\C:D*E?F"G<H>I|J'), "A-B-C-D-E-F-G-H-I-J")
 
 
+def load_vac(d):
+    with open(os.path.join(d, "config.json"), encoding="utf-8") as f:
+        return json.load(f)["vacations"]
+
+
 class RunReportTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -248,6 +253,58 @@ class RunReportTest(unittest.TestCase):
         self.assertEqual(f.call_args[0][4], 200)  # history_days default
         with open(os.path.join(self.d, CACHE_FILE)) as fh:
             self.assertIn(104, {r["id"] for r in json.load(fh)["revisions"]})
+
+    def edit(self, name, fn):
+        path = os.path.join(self.d, name)
+        with open(path, encoding="utf-8") as f:
+            new = fn(f.read())
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new)
+
+    def test_team_renamed_in_team_csv_is_reported(self):
+        self.edit("team.csv", lambda t: t.replace(",BETA,", ",gamma,"))
+        code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: team GAMMA in team.csv has no counting level in config.json; "
+                      "it counts stories", out)
+        self.assertIn("warning: team BETA in config.json has no one in team.csv; it is not reported", out)
+        self.assertNotIn("No sprint named", out)
+        with open(os.path.join(self.d, "Sprint 29", "manager_2026-11-13.html"), encoding="utf-8") as f:
+            page = text(f.read())
+        self.assertIn("GAMMA counts stories", page)
+        self.assertNotIn("BETA", page)
+
+    def test_notes_bom_and_unused_lines_are_warnings(self):
+        os.makedirs(os.path.join(self.d, "Sprint 29"))
+        with open(os.path.join(self.d, "Sprint 29", "notes.txt"), "w", encoding="utf-8-sig") as f:
+            f.write("#103 agreed: ok\n#999 agreed: typo\nDELTA summary: nobody\n")
+        code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("line 1 ignored", out)
+        self.assertNotIn("carry-over without note: #103", out)
+        self.assertIn("warning: notes.txt #999 is not a carry-over of any team in Sprint 29", out)
+        self.assertIn("warning: notes.txt has a DELTA summary line, but no team DELTA is in this "
+                      "report", out)
+
+    def test_calendar_checks(self):
+        code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertIn("warning: no calendar row for Ivan Holt; their leave is not counted", out)
+        self.assertNotIn("calendar does not cover", out)
+        _, out = self.run_cli("report", "--offline", "--today", "2026-11-13", "--sprint", "Sprint 28")
+        self.assertIn("warning: the calendar does not cover Sprint 28", out)
+
+    def test_two_calendar_names_for_one_person_are_merged(self):
+        vac = os.path.join(os.path.dirname(self.d), "vac2.xlsx")
+        rows = calendar_rows()
+        rows[4][4] = "Brook, Maya"
+        rows[5] = {4: "Maya Brook", 7 + 5: "x"}  # 6 Nov, a second row for Maya
+        build_workbook(vac, rows, ["G2:AJ2", "AK2:BO2"])
+        old = json.dumps(load_vac(self.d))
+        self.edit("config.json", lambda t: t.replace(old, json.dumps(vac)))
+        code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertEqual(code, 0, out)
+        with open(os.path.join(self.d, "Sprint 29", "manager_2026-11-13.html"), encoding="utf-8") as f:
+            self.assertIn("15 of 18 engineer-days available", text(f.read()))  # 2 + 1 days off
 
     def test_missing_config(self):
         out = io.StringIO()

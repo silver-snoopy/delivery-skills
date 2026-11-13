@@ -44,6 +44,12 @@ class SuggestTest(unittest.TestCase):
         self.assertEqual([p["team"] for p in s["people"]], ["ALFA", "ALFA"])
         self.assertEqual(s["people"][1]["joined"], date(2026, 1, 5))
 
+    def test_join_date_near_the_window_start_is_left_blank(self):
+        s = setup.suggest(board().cache(), STAFF, [], since=date(2026, 9, 10))
+        self.assertIsNone(s["people"][0]["joined"])  # first seen 2026-10-06, within 30 days
+        s = setup.suggest(board().cache(), STAFF, [], since=date(2026, 9, 5))
+        self.assertEqual(s["people"][0]["joined"], date(2026, 10, 6))
+
     def test_person_without_tickets_is_kept(self):
         s = setup.suggest(board().cache(), {"Ana K.": [ANA]}, [])
         self.assertEqual(s["people"][0], {"name": "Ana K.", "emails": [ANA], "team": "", "joined": None,
@@ -125,6 +131,29 @@ class InitTest(unittest.TestCase):
         self.assertEqual(cfg.waiting_states, ["Custom"])
         self.assertEqual(cfg.name_aliases, {"Nobody X": "John Doe"})
         self.assertIn("left", text)
+
+    def test_unseen_email_typed_team_and_timezone(self):
+        self.write_staff("Maya R. <%s>; John Doe <%s>; Ana K. <%s>; nobody" % (MAYA, JOHN, ANA))
+        a = self.args()
+        a.timezone = None
+        with mock.patch("ledger.setup.machine_timezone", return_value=None):
+            out = io.StringIO()
+            with mock.patch("ledger.setup.fetch", return_value=board().cache()):
+                setup.run_init(a, object(), lambda p, d: " gamma " if "Team? (Ana" in p else d, out)
+        text = out.getvalue()
+        self.assertIn("warning: %s is never assigned on the board; check the sign-in email" % ANA, text)
+        self.assertNotIn("warning: %s is never" % MAYA, text)
+        self.assertIn("'nobody' has no email address", text)
+        self.assertIn("could not detect the time zone", text)
+        self.assertEqual(load_config(self.d).timezone, "UTC")
+        self.assertEqual({p.name: p.team for p in read_team(os.path.join(self.d, "team.csv"))}["Ana K."],
+                         "GAMMA")
+
+    def test_bad_timezone_stops_init(self):
+        a = self.args()
+        a.timezone = "Mars/Base"
+        with self.assertRaises(ValueError):
+            setup.run_init(a, object(), lambda p, d: d, io.StringIO())
 
     def test_unmatched_calendar_name_answer_is_remembered(self):
         asked = []

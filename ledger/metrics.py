@@ -559,7 +559,7 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
         elif row["category"] in ACTIVE:
             stale[h.id] = (row["state"], _workdays_after(t.since(h, t1, False), end))
     return {
-        "team": _by_team({k: k for k in cfg.teams}, team, team), "count": t.count,
+        "team": team, "count": t.count,
         "sprint": {k: sprint[k] for k in ("name", "path", "start", "end")},
         **{k: f[k] for k in ("planned", "delivered_planned", "added", "removed", "delivered",
                              "late", "reopened")},

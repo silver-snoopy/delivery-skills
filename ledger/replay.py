@@ -1,6 +1,5 @@
 """Replay a work item's revision rows: when it became active, was done, waited or moved."""
 import re
-import warnings
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Dict, List, Optional, Sequence, Set
 
@@ -9,12 +8,13 @@ _TS = re.compile(r"^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.(\d+))?(Z|
 
 
 def local_tz(name: str) -> tzinfo:
+    """The named IANA time zone; ValueError when it is unknown (or tz data is missing)."""
+    from zoneinfo import ZoneInfo
     try:
-        from zoneinfo import ZoneInfo
         return ZoneInfo(name)
-    except Exception:  # missing tz data, unknown name or no zoneinfo module
-        warnings.warn("time zone %r is not available; using UTC" % name)
-        return timezone.utc
+    except (ValueError, KeyError, OSError):
+        raise ValueError("unknown time zone '%s'; set \"timezone\" in config.json to a name such "
+                         "as Europe/Zurich (on Windows, install the tzdata package)" % name)
 
 
 def parse_ts(text: str) -> datetime:

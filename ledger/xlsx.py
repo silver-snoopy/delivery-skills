@@ -5,7 +5,7 @@ import unicodedata
 import zipfile
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from xml.etree import ElementTree as ET
 
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -21,6 +21,7 @@ class Vacations:
     days_off: Dict[str, Dict[date, float]] = field(default_factory=dict)
     squad: Dict[str, str] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
+    days: Set[date] = field(default_factory=set)  # every date the calendar has a column for
 
 
 def match_name(name: str, candidates: Iterable[str]) -> Optional[str]:
@@ -36,6 +37,12 @@ def match_name(name: str, candidates: Iterable[str]) -> Optional[str]:
         if key(candidate) == wanted:
             return candidate
     return None
+
+
+def resolve_name(cal: str, names: Sequence[str], aliases: Dict[str, str]) -> Optional[str]:
+    """The roster name for a calendar name: its name_aliases entry, else match_name."""
+    target = aliases.get(cal)
+    return target if target in names else match_name(cal, names)
 
 
 def _col_row(ref: str) -> Tuple[int, int]:
@@ -196,6 +203,7 @@ def read_vacations(path: str, half_day_codes: Sequence[str] = ()) -> Vacations:
                     except ValueError:
                         result.warnings.append("Sheet '%s': day %d does not exist in %04d-%02d (column %d)"
                                                % (sheet_name, d, year, month, c))
+            result.days.update(col_day.values())
             last_row = max(r for r, _ in cells)
             for r in range(header_row + 1, last_row + 1):
                 name = cells.get((r, name_col))

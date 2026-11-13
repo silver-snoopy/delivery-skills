@@ -9,7 +9,7 @@ from ledger.config import (CONFIG_FILE, DEFAULT_NOT_DELIVERED, Config, Person, l
                            parse_staff, read_team, save_config, write_team)
 from ledger.metrics import histories, level_of
 from ledger.replay import History, local_tz, parse_ts
-from ledger.xlsx import match_name, read_vacations
+from ledger.xlsx import match_name, read_vacations, resolve_name
 
 WAITING_WORDS = ("review", "qa", "test", "accept", "wait", "blocked", "verify", "uat")
 TASKS_FACTOR = 5
@@ -39,8 +39,13 @@ def count_stats(data: dict, members: Dict[str, List[str]], hs: Optional[Dict[int
     return out
 
 
+JOINED_MARGIN = 30  # a first activity this close to the window start says nothing about joining
+
+
 def suggest(data: dict, staff: Dict[str, List[str]], known: List[Person],
-            squads: Optional[Dict[str, str]] = None, tz: str = "UTC") -> dict:
+            squads: Optional[Dict[str, str]] = None, tz: str = "UTC",
+            since: Optional[date] = None) -> dict:
+    """Team, join date and counting level suggestions; `since` is the history window start."""
     squads = squads or {}
     zone = local_tz(tz)
     by_email = {}  # type: Dict[str, str]
@@ -74,8 +79,9 @@ def suggest(data: dict, staff: Dict[str, List[str]], known: List[Person],
             chosen.setdefault(area, team)
         joined = k.joined if k and k.joined else None
         if joined is None and mine[name]:
-            first = min(parse_ts(r["changed"]) for r in mine[name])
-            joined = first.astimezone(zone).date()
+            first = min(parse_ts(r["changed"]) for r in mine[name]).astimezone(zone).date()
+            if since is None or (first - since).days > JOINED_MARGIN:
+                joined = first
         merged = list(k.emails) if k else []
         merged += [e for e in emails if e not in merged]
         people.append({"name": name, "emails": merged, "team": team, "joined": joined,
@@ -94,16 +100,23 @@ def suggest(data: dict, staff: Dict[str, List[str]], known: List[Person],
             "states": [{"name": s, "category": states[s]} for s in names], "waiting": waiting}
 
 
-def machine_timezone() -> str:
-    if os.environ.get("TZ"):
-        return os.environ["TZ"]
+def machine_timezone() -> Optional[str]:
+    """The machine's IANA time zone name, or None when it cannot be found."""
+    names = [os.environ.get("TZ")]
     try:
         target = os.path.realpath("/etc/localtime")
         if "zoneinfo/" in target:
-            return target.split("zoneinfo/", 1)[1]
+            names.append(target.split("zoneinfo/", 1)[1])
     except OSError:
         pass
-    return "UTC"
+    for name in names:
+        try:
+            if name:
+                local_tz(name)
+                return name
+        except ValueError:
+            pass
+    return None
 
 
 def _exists(path: str) -> str:
@@ -132,8 +145,7 @@ def _match_calendar(vac, staff, cfg, ask):
     """Return ({staff name: squad}, [unmatched calendar names]); new answers go to cfg.name_aliases."""
     squads, unmatched = {}, []
     for cal in vac.days_off:
-        target = cfg.name_aliases.get(cal)
-        target = target if target in staff else match_name(cal, staff)
+        target = resolve_name(cal, list(staff), cfg.name_aliases)
         if target is None:
             answer = ask("Which person in staff.txt is '%s'? (blank if none)" % cal, "").strip()
             target = match_name(answer, staff) if answer else None
@@ -151,7 +163,8 @@ def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out
     today = date.today()
     path = os.path.join(d, CONFIG_FILE)
     had_config = os.path.exists(path)
-    cfg = load_config(d) if had_config else Config()
+    warnings = []  # type: List[str]
+    cfg = load_config(d, warnings.append) if had_config else Config()
     org = args.org or cfg.organization or getattr(client, "org", None)
     project = args.project or cfg.project or getattr(client, "project", None)
     if client is None:
@@ -163,17 +176,26 @@ def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out
                            "pass --org and --project, or run az devops configure --defaults "
                            "organization=URL project=NAME")
         client = Client(org, project)
-    staff = merge_staff(parse_staff(_read(args.staff)))
+    staff = merge_staff(parse_staff(_read(args.staff), warnings))
     vac = read_vacations(_exists(args.vacations), cfg.half_day_codes)
     squads, unmatched = _match_calendar(vac, staff, cfg, ask)
     tz = args.timezone or (cfg.timezone if had_config else machine_timezone())
+    if not tz:
+        tz = "UTC"
+        warnings.append("could not detect the time zone; using UTC. Set \"timezone\" in config.json "
+                        "(for example Europe/Zurich)")
+    local_tz(tz)
     team_path = os.path.join(d, TEAM_FILE)
     known = read_team(team_path) if os.path.exists(team_path) else []
     emails = sorted({e for es in staff.values() for e in es})
     data = fetch(client, args.query, emails, today, cfg.history_days,
                  lambda line: print("warning: %s" % line, file=out))
     check_rows(data)
-    sug = suggest(data, staff, known, squads, tz)
+    seen = {r["assigned"] for r in data["revisions"] if r["assigned"]}
+    warnings += ["%s is never assigned on the board; check the sign-in email" % e
+                 for e in emails if e not in seen]
+    sug = suggest(data, staff, known, squads, tz,
+                  date.fromordinal(today.toordinal() - cfg.history_days))
     known_by = {p.name: p for p in known}
     people = []
     for s in sug["people"]:
@@ -182,7 +204,7 @@ def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out
             k.emails, k.left = s["emails"], None
             people.append(k)
             continue
-        team = ask("Team? (%s)" % s["name"], s["team"]).strip() or s["team"]
+        team = (ask("Team? (%s)" % s["name"], s["team"]).strip() or s["team"]).upper()
         default = s["joined"].isoformat() if s["joined"] else ""
         joined = _ask_valid(ask, "Joined the team on? (%s) YYYY-MM-DD" % s["name"], default,
                             lambda t: date.fromisoformat(t) if t else None)
@@ -211,7 +233,8 @@ def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out
     cache = cache_path(d)
     write_team(team_path, people)
     save_config(d, cfg)
-    _summary(out, people, stats, cfg, sug, unmatched, vac.warnings, [path, team_path, cache])
+    _summary(out, people, stats, cfg, sug, unmatched, warnings + vac.warnings,
+             [path, team_path, cache])
     return 0
 
 

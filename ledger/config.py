@@ -5,7 +5,9 @@ import os
 import re
 from dataclasses import dataclass, field, fields
 from datetime import date
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
+
+from ledger.replay import local_tz
 
 DEFAULT_NOT_DELIVERED = ["Removed", "Won't Fix", "Won't Do", "Cut", "Duplicate", "Obsolete", "Deferred",
                          "Abandoned"]
@@ -31,7 +33,9 @@ def _clean_name(raw: str) -> str:
     return " ".join(name.split())
 
 
-def parse_staff(text: str) -> List[Tuple[str, str]]:
+def parse_staff(text: str, warnings: Optional[List[str]] = None) -> List[Tuple[str, str]]:
+    """(name, email) pairs from `Name <email>;` entries or bare emails; entries without an
+    email address are skipped with a line in `warnings`."""
     pairs = []
     for chunk in re.split(r"[;\n]", text):
         chunk = chunk.strip()
@@ -40,12 +44,12 @@ def parse_staff(text: str) -> List[Tuple[str, str]]:
         m = re.match(r"^(.*?)<([^>]+)>\s*$", chunk)
         if m:
             email = m.group(2).strip().lower()
-            name = _clean_name(m.group(1)) or email.split("@")[0]
-            pairs.append((name, email))
-            continue
-        for token in re.split(r"[,\s]+", chunk):
-            if token:
-                pairs.append((token.split("@")[0], token.lower()))
+            found = [(_clean_name(m.group(1)) or email.split("@")[0], email)]
+        else:
+            found = [(t.split("@")[0], t.lower()) for t in re.split(r"[,\s]+", chunk) if t]
+        if not all("@" in email for _, email in found) and warnings is not None:
+            warnings.append("staff.txt entry '%s' has no email address; skipped" % chunk)
+        pairs += [(name, email) for name, email in found if "@" in email]
     return pairs
 
 
@@ -65,14 +69,14 @@ def _date(text: str) -> Optional[date]:
 
 def read_team(path: str) -> List[Person]:
     people: Dict[str, Person] = {}
-    with open(path, newline="", encoding="utf-8") as f:
+    with open(path, newline="", encoding="utf-8-sig") as f:
         for row in csv.DictReader(f):
             name = row["name"].strip()
             email = row["email"].strip().lower()
             person = people.get(name)
             if person is None:
                 alloc = (row.get("allocation") or "").strip()
-                person = Person(name, [], row["team"].strip(), _date(row.get("joined")),
+                person = Person(name, [], row["team"].strip().upper(), _date(row.get("joined")),
                                 _date(row.get("left")), float(alloc) if alloc else 1.0)
                 people[name] = person
             if email not in person.emails:
@@ -114,11 +118,21 @@ class Config:
     history_days: int = 200
 
 
-def load_config(directory: str) -> Config:
-    with open(os.path.join(directory, CONFIG_FILE), encoding="utf-8") as f:
+def load_config(directory: str, warn: Callable[[str], None] = lambda line: None) -> Config:
+    """Read config.json; unknown keys are passed to `warn`, a bad count or time zone raises."""
+    with open(os.path.join(directory, CONFIG_FILE), encoding="utf-8-sig") as f:
         data = json.load(f)
     known = {f.name for f in fields(Config)}
-    return Config(**{k: v for k, v in data.items() if k in known})
+    unknown = sorted(set(data) - known)
+    if unknown:
+        warn("config.json keys not recognised and ignored: %s" % ", ".join(unknown))
+    cfg = Config(**{k: v for k, v in data.items() if k in known})
+    for team, entry in cfg.teams.items():
+        if (entry or {}).get("count") not in (None, "", "stories", "tasks"):
+            raise ValueError("config.json: team %s has count '%s'; use \"stories\" or \"tasks\""
+                             % (team, entry["count"]))
+    local_tz(cfg.timezone)
+    return cfg
 
 
 def save_config(directory: str, cfg: Config) -> None:

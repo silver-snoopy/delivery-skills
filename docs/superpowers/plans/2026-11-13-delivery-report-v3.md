@@ -380,7 +380,7 @@ def test_person_page(self):
 
 **Interfaces:** none new.
 
-- [ ] **Step 1: Write failing tests** in `tests/test_docs.py`: README has sections `## Installation`, `## Usage`, `## How figures are counted`; SKILL.md front matter has `name: delivery-report` and a `description` under 300 characters; SKILL.md mentions `init --yes`, "Anything to add for team", `notes.txt`, and never tells the agent to open the HTML files; no file in the repo (excluding `.git`, `research/`) contains `epam`, `palantir` (case-insensitive).
+- [ ] **Step 1: Write failing tests** in `tests/test_docs.py`: README has sections `## Installation`, `## Usage`, `## How figures are counted`; SKILL.md front matter has `name: delivery-report` and a `description` under 300 characters; SKILL.md mentions `init --yes`, "Anything to add for team", `notes.txt`, and never tells the agent to open the HTML files; no file in the repo (excluding `.git`, `research/`) contains two forbidden company names (case-insensitive; built by concatenation in the test).
 - [ ] **Step 2:** FAIL.
 - [ ] **Step 3:** Write the docs.
   - SKILL.md follows spec section 7 steps 1–7. The agent runs `bin/ledger init ... --yes`, shows the DM `team.csv` and asks them to correct teams and join dates, then edits `team.csv`. It asks "Anything to add for team T this sprint?" per team, writes answers as `T note:` or `T exec note:` lines, asks about each carry-over without a note (`#id agreed|not agreed|unknown: reason`), and writes `T summary:` from delivered titles. It never computes figures and never sends reports.

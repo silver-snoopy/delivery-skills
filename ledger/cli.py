@@ -21,6 +21,13 @@ def _parser() -> argparse.ArgumentParser:
     i.add_argument("--org")
     i.add_argument("--project")
     i.add_argument("--timezone")
+    r = sub.add_parser("report", help="write the manager and DM reports for one sprint")
+    r.add_argument("--sprint", help="sprint name (default: the most recently ended sprint)")
+    pp = sub.add_parser("person", help="one engineer over the team's last 6 sprints")
+    pp.add_argument("email")
+    for s in (r, pp):
+        s.add_argument("--offline", action="store_true", help="use the cached board history")
+        s.add_argument("--today", help="YYYY-MM-DD (default: today)")
     return p
 
 
@@ -44,6 +51,8 @@ def main(argv: Optional[List[str]] = None, client=None, out=None) -> int:
         if args.command == "init":
             from ledger.setup import run_init
             return run_init(args, client, _ask_for(args, out), out)
+        from ledger.render import run_person, run_report
+        return (run_report if args.command == "report" else run_person)(args, client, out)
     except (AdoError, ValueError) as e:
         print("error: %s" % e, file=out)
         if isinstance(e, AdoError) and e.next_step:

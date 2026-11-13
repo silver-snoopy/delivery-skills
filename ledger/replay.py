@@ -32,6 +32,11 @@ def parse_ts(text: str) -> datetime:
     return dt
 
 
+def is_waiting(row: dict, waiting_states: Sequence[str]) -> bool:
+    """In a waiting state or tagged Blocked."""
+    return row["state"] in waiting_states or any(str(t).lower() == "blocked" for t in row["tags"] or [])
+
+
 def day_start(d: date, tz: tzinfo) -> datetime:
     """UTC instant of 00:00 local on `d`."""
     return datetime(d.year, d.month, d.day, tzinfo=tz).astimezone(timezone.utc)
@@ -91,13 +96,11 @@ class History:
                 if ts <= until and row["category"] in ACTIVE and row["assigned"]}
 
     def waiting_seconds(self, start: datetime, end: datetime, waiting_states: Sequence[str]) -> float:
-        states = set(waiting_states)
         total = 0.0
         for i, (row, ts) in enumerate(zip(self.rows, self.times)):
             nxt = self.times[i + 1] if i + 1 < len(self.rows) else end
             lo, hi = max(ts, start), min(nxt, end)
-            blocked = any(str(t).lower() == "blocked" for t in row["tags"] or [])
-            if hi > lo and (row["state"] in states or blocked):
+            if hi > lo and is_waiting(row, waiting_states):
                 total += (hi - lo).total_seconds()
         return total
 

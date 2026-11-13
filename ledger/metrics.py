@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Sequence
 
 from ledger.config import Config, Notes, Person
-from ledger.replay import ACTIVE, History, day_end, day_start, local_tz
+from ledger.replay import ACTIVE, History, day_end, day_start, is_waiting, local_tz
 
 P85 = 0.85
 CARRIED_FLAG = 2
@@ -112,10 +112,6 @@ def is_onboarding(person: Person, team_sprints: List[dict], sprint: dict, n: int
 def _workdays_after(a: date, b: date) -> int:
     """Mon-Fri days after `a` up to and including `b`."""
     return sum(1 for k in range(1, (b - a).days + 1) if (a + timedelta(days=k)).weekday() < 5)
-
-
-def _is_waiting(row: dict, states: Sequence[str]) -> bool:
-    return row["state"] in states or any(str(t).lower() == "blocked" for t in row["tags"] or [])
 
 
 def _working_days(person: Person, start: date, end: date) -> List[date]:
@@ -320,7 +316,7 @@ class _Team:
                                   if ts <= t1))
         start = None
         for r, ts in reversed(rows):
-            if not _is_waiting(r, self.cfg.waiting_states):
+            if not is_waiting(r, self.cfg.waiting_states):
                 break
             start = ts
         return self.local(start) if start is not None else None
@@ -431,12 +427,11 @@ def _attention(t: _Team, f: dict, carry: List[dict], people: List[dict], waits: 
             add("amber", "stale", "#%d is %s with no board change for %d working days."
                 % (i, state, days), i)
     for p in people:
-        if p["onboarding"] or p["available"] <= 0:
-            pass
-        elif p["no_assignment"]:
+        expected_to_deliver = not p["onboarding"] and p["available"] > 0
+        if expected_to_deliver and p["no_assignment"]:
             add("red", "none", "%s had %g available days but no item assigned during the sprint."
                 % (p["name"], p["available"]), name=p["name"])
-        elif not p["delivered"]:
+        elif expected_to_deliver and not p["delivered"]:
             add("amber", "nothing", "%s had %g available days and delivered nothing."
                 % (p["name"], p["available"]), name=p["name"])
         if len(p["in_progress"]) > WIP_FLAG:
@@ -552,7 +547,7 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
             continue
         if age is not None:
             open_ages[h.id] = age
-        if _is_waiting(row, cfg.waiting_states):
+        if is_waiting(row, cfg.waiting_states):
             what = "in %s" % row["state"] if row["state"] in cfg.waiting_states \
                 else "with the Blocked tag"
             waits[h.id] = (what, _workdays_after(t.since(h, t1, True), end))

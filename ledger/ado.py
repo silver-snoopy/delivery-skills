@@ -230,7 +230,8 @@ def fetch(client: Client, query: str, emails: List[str], today: date, history_da
                 "$expand": REVISION_EXPAND}):
             rows.append(_flatten(raw))
     if not rows:
-        raise AdoError("the query returned no work items", "check the query and your access to its area paths")
+        raise AdoError("the query returned no work items",
+                       "check the query and your access to its area paths")
     rows.sort(key=lambda r: (r["id"], r["rev"]))
     missing = query_ids - {r["id"] for r in rows}
     if missing:

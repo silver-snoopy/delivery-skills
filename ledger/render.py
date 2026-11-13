@@ -215,14 +215,15 @@ def _footnote(dm: bool) -> str:
         "<b>Status rule</b> (our convention, not an industry standard): GREEN = at least %d%% of planned "
         "work items delivered, not counting removed ones, and no carry-over older than the team's P85 "
         "without PO agreement; AMBER = one condition missed; RED = both missed, or a work item waiting "
-        "(in a waiting state or blocked) for more than %d working days." % (round(GREEN_SHARE * 100), WAIT_RED_DAYS)]
+        "(in a waiting state or blocked) for more than %d working days."
+        % (round(GREEN_SHARE * 100), WAIT_RED_DAYS)]
     if dm:
         lines.append(
             "<b>Needs attention</b> thresholds (our convention, not an industry standard), evaluated "
             "at the sprint end: open longer than the team's P85; carried over %d or more sprints; "
-            "waiting (in a waiting state or blocked) more than %d working days; no board change for %d working days; more than %d "
-            "work items in progress for one engineer." % (CARRIED_FLAG, WAIT_FLAG_DAYS, STALE_DAYS,
-                                                        WIP_FLAG))
+            "waiting (in a waiting state or blocked) more than %d working days; no board change for "
+            "%d working days; more than %d work items in progress for one engineer."
+            % (CARRIED_FLAG, WAIT_FLAG_DAYS, STALE_DAYS, WIP_FLAG))
     lines.append("Figures are recomputed from the board history on every run and do not change for "
                  "a closed sprint unless the history changes.")
     return _tag("div", "".join(_tag("p", line) for line in lines), "foot")

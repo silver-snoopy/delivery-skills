@@ -184,6 +184,21 @@ class ItemFlagTests(unittest.TestCase):
              "ask": "Confirm with the PO and record it in notes.txt."}])
 
 
+class SharedItemTests(unittest.TestCase):
+    def test_item_counted_for_two_teams_is_marked_in_each(self):
+        gus = Person("Gus Lane", ["gus@vendor.example"], "GAMMA", None, None)
+        b = board()
+        b.item(1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
+            .at("2026-10-30 09:00", assigned=gus.emails[0]).at("2026-11-03 09:00", state="Closed")
+        closed(b, 2)
+        want = {"level": "grey", "text": "#1 is counted for teams ALFA and GAMMA.",
+                "ask": "Check that both teams should count it."}
+        for team in ("ALFA", "GAMMA"):
+            t = run(b, team, "S29", people=PEOPLE + [gus])
+            self.assertIn(1, t["delivered"])
+            self.assertEqual([a for a in flags(t, "grey") if "counted for" in a["text"]], [want])
+
+
 class RestOfSquadTests(unittest.TestCase):
     def test_rest_of_squad(self):
         b = board()
@@ -252,8 +267,8 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(self.status(4, 0, agreed="agreed", wait_from="2026-10-22 09:00"), {
             "colour": "RED", "manual": False,
             "reason": "80% of planned work items delivered, not counting 1 removed item; the "
-                      "one old carry-over (#50) was agreed with the PO; #50 has waited on the "
-                      "customer for 11 working days."})
+                      "one old carry-over (#50) was agreed with the PO; #50 has been waiting (in "
+                      "a waiting state or blocked) for 11 working days."})
         self.assertEqual(self.status(4, 0, agreed="agreed",
                                      wait_from="2026-10-26 10:00")["colour"], "GREEN")
         b, notes = self._board(3, 1)
@@ -265,22 +280,39 @@ class StatusTests(unittest.TestCase):
         f = {"planned": list(range(49)), "delivered_planned": list(range(39)), "removed": []}
         self.assertEqual(_status(f, [], None, {}, None), {
             "colour": "AMBER", "manual": False,
-            "reason": "79% of planned work items delivered; no carry-over is older than the "
-                      "squad's P85."})
+            "reason": "79% of planned work items delivered; too few finished work items in the "
+                      "last 6 sprints to judge age."})
 
     def test_status_when_every_planned_item_was_removed(self):
         f = {"planned": [1, 2], "delivered_planned": [], "removed": [1, 2]}
         self.assertEqual(_status(f, [], None, {}, None)["reason"],
-                         "All planned work items were removed from the sprint; no carry-over is "
-                         "older than the squad's P85.")
+                         "All planned work items were removed from the sprint; too few finished "
+                         "work items in the last 6 sprints to judge age.")
 
     def test_status_without_planned_or_old_carry(self):
         b = board()
         b.item(1).at("2026-10-29 09:00", iteration=S29, assigned=MAYA)
         self.assertEqual(run(b, "ALFA", "S29")["status"], {
             "colour": "GREEN", "manual": False,
-            "reason": "There were no planned work items; no carry-over is older than the "
-                      "squad's P85."})
+            "reason": "There were no planned work items; too few finished work items in the "
+                      "last 6 sprints to judge age."})
+
+    def test_status_without_p85_judges_agreement_only(self):
+        b = board()
+        b.item(1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active")
+        b.item(2).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active")
+        t = run(b, "ALFA", "S29", notes=Notes(items={2: ("agreed", "API late")}))
+        self.assertIsNone(t["cycle_window"]["p85"])
+        self.assertEqual(t["status"], {
+            "colour": "RED", "manual": False,
+            "reason": "0% of planned work items delivered; too few finished work items in the "
+                      "last 6 sprints to judge age; 1 of 2 carry-overs (#1) is not recorded as "
+                      "agreed with the PO."})
+        self.assertEqual([a["text"] for a in flags(t) if "old" in a["text"]], [])
+        t = run(b, "ALFA", "S29", notes=Notes(items={1: ("agreed", "x"), 2: ("agreed", "y")}))
+        self.assertEqual(t["status"]["reason"], "0% of planned work items delivered; too few "
+                         "finished work items in the last 6 sprints to judge age; the 2 "
+                         "carry-overs (#1, #2) were agreed with the PO.")
 
 
 if __name__ == "__main__":

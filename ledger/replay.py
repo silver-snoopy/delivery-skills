@@ -46,7 +46,7 @@ class History:
     def __init__(self, rows: List[dict], not_delivered: Sequence[str]):
         self.rows = sorted(rows, key=lambda r: r["rev"])
         self.times = [parse_ts(r["changed"]) for r in self.rows]
-        self.not_delivered = set(not_delivered)
+        self.not_delivered = {r.lower() for r in not_delivered}
         last = self.rows[-1]
         self.id = last["id"]
         self.type = last["type"]
@@ -67,10 +67,15 @@ class History:
                 return ts
         return None
 
+    def cut(self, row: dict) -> bool:
+        """Closed without delivery: category Removed, or a not-delivered reason (any case)."""
+        return row["category"] == "Removed" or (
+            row["category"] == "Completed" and (row["reason"] or "").lower() in self.not_delivered)
+
     @property
     def done_at(self) -> Optional[datetime]:
         for row, ts in zip(self.rows, self.times):
-            if row["category"] == "Completed" and row["reason"] not in self.not_delivered:
+            if row["category"] == "Completed" and not self.cut(row):
                 return ts
         return None
 

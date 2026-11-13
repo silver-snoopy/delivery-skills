@@ -14,6 +14,7 @@ STALE_DAYS = 5
 WIP_FLAG = 3
 GREEN_SHARE = 0.8
 TREND = 6
+MAX_SPRINT_DAYS = 42  # longer dated iterations are releases or PIs, not sprints
 CLOSED = ("Completed", "Removed")
 
 
@@ -56,8 +57,21 @@ def level_of(h: History, levels, histories, at: Optional[datetime] = None) -> Op
     return "tasks" if prow is not None and prow["type"] in levels.get("stories", []) else "stories"
 
 
+def is_sprint(it: dict) -> bool:
+    """A dated iteration no longer than MAX_SPRINT_DAYS."""
+    if not (it.get("start") and it.get("end")):
+        return False
+    days = (date.fromisoformat(it["end"]) - date.fromisoformat(it["start"])).days + 1
+    return days <= MAX_SPRINT_DAYS
+
+
 def _by_team(mapping: dict, team: str, default):
     return next((v for k, v in mapping.items() if k.lower() == team.lower()), default)
+
+
+def count_of(cfg: Config, team: str) -> str:
+    """The team's counting level from config.json; "stories" when the team has none."""
+    return _by_team(cfg.teams, team, {}).get("count") or "stories"
 
 
 def _emails(people: List[Person], team: str) -> set:
@@ -123,8 +137,9 @@ class _Team:
         for r in data["revisions"]:
             if r["parent"] is not None:
                 self.children.setdefault(r["parent"], set()).add(r["id"])
-        self.count = _by_team(cfg.teams, team, {}).get("count", "stories")
+        self.count = count_of(cfg, team)
         self.emails = _emails(people, team)
+        self.sprint_at = {s["path"]: s for s in data["iterations"] if is_sprint(s)}
 
     def counted(self, t: Optional[datetime]) -> List[History]:
         return [self.hist[i] for i in sorted(self.hist)
@@ -146,26 +161,27 @@ class _Team:
             if any((r["assigned"] or "").lower() in self.emails
                    for x in [h] + self.kids(h, until) for r in seen(x)):
                 paths |= {r["iteration"] for r in seen(h)}
-        return sorted((dict(s) for s in self.data["iterations"]
-                       if s["path"] in paths and s.get("start") and s.get("end")), key=_key)
+        return sorted((dict(s) for p, s in self.sprint_at.items() if p in paths), key=_key)
 
     def instants(self, sprint: dict):
         start, end = date.fromisoformat(sprint["start"]), date.fromisoformat(sprint["end"])
         return day_start(start, self.tz), day_end(start, self.tz), day_end(end, self.tz)
 
-    def _assigned(self, h: History, t0, t1) -> bool:
-        if any(a.lower() in self.emails for a in h.assignees_active(t1)):
+    @staticmethod
+    def _assigned(h: History, t0, t1, emails: set) -> bool:
+        if any(a.lower() in emails for a in h.assignees_active(t1)):
             return True
         if h.first_active is not None and h.first_active <= t1:
             return False
         rows = [h.at(t0), h.at(t1)]
-        return any(r and r["assigned"] and r["assigned"].lower() in self.emails for r in rows)
+        return any(r and r["assigned"] and r["assigned"].lower() in emails for r in rows)
 
-    def ours(self, h: History, t0, t1) -> bool:
-        """Ruling D: assignee while active up to t1, else (never active) at t0 or t1; or a child."""
-        if self._assigned(h, t0, t1):
-            return True
-        return any(self._assigned(k, t0, t1) for k in self.kids(h, t1))
+    def ours(self, h: History, t0, t1, emails: Optional[set] = None) -> bool:
+        """Ours: one of `emails` (default: the team's) was the assignee while the item was active
+        up to t1; an item never active by t1 counts by its assignee at t0 or t1. At the stories
+        level the same test on a child item also makes the item ours."""
+        emails = self.emails if emails is None else emails
+        return any(self._assigned(x, t0, t1, emails) for x in [h] + self.kids(h, t1))
 
     def local(self, t) -> date:
         return t.astimezone(self.tz).date()
@@ -206,9 +222,11 @@ class _Team:
             f["open"].append(h.id)
             if done is not None:
                 f["late"].append(h.id)
-            cut = row1["category"] == "Removed" or (
-                row1["category"] == "Completed" and row1["reason"] in h.not_delivered)
-            if row1["iteration"] != path or cut:  # Rulings F and G
+            # Carry-over: still open on this sprint or on a later sprint at the end. Removed: cut,
+            # or moved to a path that is not a later sprint (backlog, area root, release).
+            later = self.sprint_at.get(row1["iteration"])
+            moved = row1["iteration"] != path and not (later and later["start"] > sprint["start"])
+            if moved or h.cut(row1):
                 f["removed"].append(h.id)
             elif row1["category"] not in CLOSED:
                 f["carry"].append(h.id)
@@ -249,7 +267,7 @@ class _Team:
         return found
 
     def mine(self, h: History, emails: set, t1) -> bool:
-        """Ruling J: assignee while active up to t1, or of a child whose parent at t1 is `h`."""
+        """Assignee while active up to t1, or of a child whose parent at t1 is `h`."""
         return any(a.lower() in emails for x in [h] + self.kids(h, t1)
                    for a in x.assignees_active(t1))
 
@@ -359,7 +377,8 @@ ASK = {"old": "Ask what is blocking it.",
        "wip": "Ask which item to finish first.",
        "reopened": "Ask why it was reopened.",
        "hygiene": "Fix the board or add the email to team.csv.",
-       "never_active": "Ask them to move items through Active on the board."}
+       "never_active": "Ask them to move items through Active on the board.",
+       "shared": "Check that both teams should count it."}
 _LEVELS = ("red", "amber", "grey")
 
 
@@ -373,7 +392,7 @@ def _ids(ids) -> str:
 
 def _attention(t: _Team, f: dict, carry: List[dict], people: List[dict], waits: Dict[int, tuple],
                stale: Dict[int, tuple], unknown: List[tuple], p85: Optional[int],
-               open_ages: Dict[int, int]) -> List[dict]:
+               open_ages: Dict[int, int], shared: Dict[int, List[str]]) -> List[dict]:
     """DM flags at sprint end, ordered red, amber, grey; then by item id, person name, text."""
     found = []
 
@@ -432,6 +451,9 @@ def _attention(t: _Team, f: dict, carry: List[dict], people: List[dict], waits: 
         add("grey", "reopened", "#%d was reopened." % i, i)
     for i, email in unknown:
         add("grey", "hygiene", "#%d is assigned to %s, which is not in team.csv." % (i, email), i)
+    for i, names in sorted(shared.items()):
+        add("grey", "shared", "#%d is counted for teams %s and %s." % (
+            i, ", ".join(names[:-1]), names[-1]), i)
     return [entry[-1] for entry in sorted(found, key=lambda e: e[:-1])]
 
 
@@ -451,22 +473,31 @@ def _status(f: dict, carry: List[dict], p85: Optional[int], waits: Dict[int, tup
         share = 1.0
         parts = ["All planned work items were removed from the sprint" if f["removed"]
                  else "There were no planned work items"]
-    old = [c["id"] for c in carry if p85 is not None and c["age"] is not None and c["age"] > p85]
+    if p85 is None:  # no age to judge: the agreement test applies to every carry-over
+        parts.append("too few finished work items in the last %d sprints to judge age" % TREND)
+        old, kind = [c["id"] for c in carry], "carry-over"
+    else:
+        old = [c["id"] for c in carry if c["age"] is not None and c["age"] > p85]
+        kind = "old carry-over"
     bad = [c["id"] for c in carry if c["id"] in old and c["agreed"] != "agreed"]
     many = len(old) > 1
     if not old:
-        parts.append("no carry-over is older than the squad's P85")
+        if p85 is not None:
+            parts.append("no carry-over is older than the squad's P85")
     elif not bad:
-        parts.append("the %s old carry-over%s (%s) %s agreed with the PO" % (
-            len(old) if many else "one", "s" if many else "", _ids(old), "were" if many else "was"))
+        parts.append("the %s %s%s (%s) %s agreed with the PO" % (
+            len(old) if many else "one", kind, "s" if many else "", _ids(old),
+            "were" if many else "was"))
     elif len(bad) == len(old):
-        parts.append("the %s old carry-over%s (%s) %s not recorded as agreed with the PO" % (
-            len(old) if many else "one", "s" if many else "", _ids(old), "are" if many else "is"))
+        parts.append("the %s %s%s (%s) %s not recorded as agreed with the PO" % (
+            len(old) if many else "one", kind, "s" if many else "", _ids(old),
+            "are" if many else "is"))
     else:
-        parts.append("%d of %d old carry-overs (%s) %s not recorded as agreed with the PO" % (
-            len(bad), len(old), _ids(bad), "are" if len(bad) > 1 else "is"))
+        parts.append("%d of %d %ss (%s) %s not recorded as agreed with the PO" % (
+            len(bad), len(old), kind, _ids(bad), "are" if len(bad) > 1 else "is"))
     long_waits = [(i, d) for i, (_, d) in sorted(waits.items()) if d > WAIT_RED_DAYS]
-    parts += ["#%d has waited on the customer for %d working days" % w for w in long_waits]
+    parts += ["#%d has been waiting (in a waiting state or blocked) for %d working days" % w
+              for w in long_waits]
     met = (share >= GREEN_SHARE) + (not bad)
     colour = "RED" if long_waits or met == 0 else ("GREEN" if met == 2 else "AMBER")
     return {"colour": colour, "reason": "; ".join(parts) + ".", "manual": False}
@@ -475,7 +506,7 @@ def _status(f: dict, carry: List[dict], p85: Optional[int], waits: Dict[int, tup
 def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint: dict,
                 notes: Notes, days_off: Dict[str, Dict[date, float]]) -> dict:
     t = _Team(data, cfg, people, team)
-    t1 = t.instants(sprint)[2]
+    _, t0, t1 = t.instants(sprint)
     sprints = t.sprints(t1)
     upto = [s for s in _with(sprints, sprint) if _key(s) <= _key(sprint)]
     figs = {s["path"]: t.figures(s) for s in upto}
@@ -505,6 +536,13 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
     counted = t.counted(t1)
     members = t.members(people, team, sprints, sprint, days_off)
     persons = [t.person(m, f, counted, sprint) for m in members]
+    others = {o: _emails(people, o) for o in sorted({p.team for p in people if p.team})
+              if o.lower() != team.lower() and count_of(cfg, o) == t.count}
+    shared = {}  # type: Dict[int, List[str]]
+    for i in sorted(set(f["planned"] + f["added"] + f["delivered"] + f["reopened"])):
+        also = [o for o, emails in others.items() if t.ours(t.hist[i], t0, t1, emails)]
+        if also:
+            shared[i] = sorted(also + [team.upper()])
     open_ages, waits, stale = {}, {}, {}  # type: Dict[int, int], Dict[int, tuple], Dict[int, tuple]
     for h in counted:
         if h.id not in f["carry"] and not t.mine(h, t.emails, t1):
@@ -540,7 +578,7 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
         "people": persons,
         "rest": t.rest(members, counted, sprint),
         "attention": _attention(t, f, carry, persons, waits, stale, t.unknown(people, counted, sprint),
-                                cycle_window["p85"], open_ages),
+                                cycle_window["p85"], open_ages, shared),
         "status": _status(f, carry, cycle_window["p85"], waits,
                           _by_team(notes.status, team, None)),
         "notes": {"summary": _by_team(notes.summary, team, ""), "note": _by_team(notes.note, team, ""),

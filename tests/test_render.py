@@ -88,6 +88,10 @@ class RenderTest(unittest.TestCase):
         self.assertIn("BETA counts tasks", page)
         self.assertIn("Claims intake (2 work items)", page)
         self.assertIn("our convention, not an industry standard", page)
+        for render in (render_manager, render_dm):
+            page = text(render("Sprint 29", teams(), GEN))
+            self.assertNotIn("on the customer", page)
+            self.assertIn("waiting (in a waiting state or blocked)", page)
         for word in ("story", "task"):
             stripped = page.replace("counts stories", "").replace("counts tasks", "")
             stripped = re.sub(r"Method\..*", "", stripped)

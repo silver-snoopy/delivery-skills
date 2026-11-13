@@ -7,7 +7,8 @@ from dataclasses import dataclass, field, fields
 from datetime import date
 from typing import Dict, List, Optional, Tuple
 
-DEFAULT_NOT_DELIVERED = ["Removed", "Won't Fix", "Cut", "Duplicate"]
+DEFAULT_NOT_DELIVERED = ["Removed", "Won't Fix", "Won't Do", "Cut", "Duplicate", "Obsolete", "Deferred",
+                         "Abandoned"]
 CONFIG_FILE = "config.json"
 TEAM_COLUMNS = ["name", "email", "team", "joined", "left", "allocation"]
 

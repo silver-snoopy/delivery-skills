@@ -186,6 +186,50 @@ class SprintFigureTests(unittest.TestCase):
         self.assertEqual((t["planned"], t["removed"], t["delivered_planned"], t["carry"]),
                          ([901], [901], [], []))
 
+    def test_moved_to_next_sprint_before_the_end_is_a_carry_over(self):
+        def sprint(done):
+            b = board().sprint("S30", "2026-11-10", "2026-11-21")
+            for i in range(1, 11):
+                it = b.item(i).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active")
+                if i <= done:
+                    it.at("2026-11-04 09:00", state="Closed")
+                else:  # moved to the next sprint the day before the sprint ends
+                    it.at("2026-11-06 15:00", iteration="Proj\\S30")
+            return run(b, "ALFA", "S29"), run(b, "ALFA", "S30")
+        t, nxt = sprint(8)
+        self.assertEqual((len(t["planned"]), len(t["delivered_planned"]), t["removed"]),
+                         (10, 8, []))
+        self.assertEqual([c["id"] for c in t["carry"]], [9, 10])
+        self.assertTrue(t["status"]["reason"].startswith("80% of planned work items delivered;"))
+        self.assertEqual(t["status"]["colour"], "AMBER")  # the old rule gave 8 of 8, GREEN
+        self.assertEqual([c["sprints"] for c in nxt["carry"]], [2, 2])
+        t, _ = sprint(7)
+        self.assertEqual(t["status"]["colour"], "RED")
+        self.assertTrue(t["status"]["reason"].startswith("70% of planned work items delivered;"))
+
+    def test_moved_to_backlog_or_cut_is_removed(self):
+        b = board().sprint("PI 4", "2026-10-12", "2026-12-18", path="Proj\\PI 4")
+        b.item(1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
+            .at("2026-11-03 09:00", iteration="Proj\\PI 4")
+        b.item(2).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
+            .at("2026-11-03 09:00", state="Closed", reason="won't fix")
+        b.item(3).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
+            .at("2026-11-03 09:00", state="Closed", reason="Obsolete")
+        b.item(4).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
+            .at("2026-11-03 09:00", state="Removed")
+        t = run(b, "ALFA", "S29")
+        self.assertEqual((t["planned"], t["removed"], t["delivered"], t["carry"]),
+                         ([1, 2, 3, 4], [1, 2, 3, 4], [], []))
+
+    def test_long_iterations_are_not_sprints(self):
+        b = board().sprint("PI 4", "2026-10-12", "2026-12-18", path="Proj\\PI 4") \
+            .sprint("Six weeks", "2026-09-01", "2026-10-12", path="Proj\\Six weeks")
+        b.item(1).at("2026-10-13 09:00", iteration="Proj\\PI 4", assigned=MAYA) \
+            .at("2026-10-27 09:00", iteration=S29)
+        b.item(2).at("2026-09-02 09:00", iteration="Proj\\Six weeks", assigned=MAYA)
+        names = [s["name"] for s in team_sprints(b.cache(), config(), PEOPLE, "ALFA")]
+        self.assertEqual(names, ["Six weeks", "S29"])
+
     def test_team_sprints(self):
         b = board().sprint("S30", "2026-11-10", "2026-11-21")
         b.item(1).at("2026-10-13 09:00", iteration=S28, assigned=PO)

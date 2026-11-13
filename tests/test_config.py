@@ -49,7 +49,8 @@ class ConfigTest(unittest.TestCase):
                                   name_aliases={"Maya Rao": "Maya R."}))
             cfg = load_config(d)
         self.assertEqual(cfg.onboarding_sprints, 2)
-        self.assertEqual(cfg.not_delivered_reasons, ["Removed", "Won't Fix", "Cut", "Duplicate"])
+        self.assertEqual(cfg.not_delivered_reasons, ["Removed", "Won't Fix", "Won't Do", "Cut",
+                                                     "Duplicate", "Obsolete", "Deferred", "Abandoned"])
         self.assertEqual(cfg.teams["ALFA"]["count"], "tasks")
         self.assertEqual(cfg.name_aliases, {"Maya Rao": "Maya R."})
 

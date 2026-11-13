@@ -205,7 +205,8 @@ class SprintFigureTests(unittest.TestCase):
             b = board().sprint("S27", "2026-09-28", "2026-10-09")
             one = b.item(1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
                 .at("2026-11-03 09:00", state="Closed")
-            two = b.item(2).at("2026-10-13 09:00", iteration=S28, assigned=IVAN, state="Active") \
+            two = b.item(2, area="Proj\\Pay").at("2026-10-13 09:00", iteration=S28,
+                                                  assigned=IVAN, state="Active") \
                 .at("2026-10-26 09:00", iteration=S29)
             b.item(10).at("2026-10-27 09:00", iteration=S29, assigned=PO) \
                 .at("2026-10-28 09:00", state="Active").at("2026-11-05 09:00", state="Closed")
@@ -214,6 +215,9 @@ class SprintFigureTests(unittest.TestCase):
                 .at("2026-11-04 09:00", state="Closed")
             old = b.item(20).at("2026-09-28 09:00", iteration="Proj\\S27", assigned=PO,
                                 state="Active").at("2026-10-08 09:00", state="Closed")
+            b.item(21, area="Proj\\Pay").at("2026-10-28 09:00", iteration=S29, assigned=PO,
+                                              state="Active") \
+                .at("2026-10-30 09:00", state="Closed")
             if later:  # all after S29 ended
                 one.type = "Task"
                 one.at("2026-11-10 09:00")
@@ -221,11 +225,21 @@ class SprintFigureTests(unittest.TestCase):
                 child.at("2026-11-10 09:00")
                 old.at("2026-11-10 09:00", assigned=MAYA)
                 two.at("2026-11-12 09:00", state="Closed")
+                one.at("2026-11-11 09:00", assigned="tom.h2@vendor.example")
+                for n in range(3):  # would move Ivan's main area and his assignment
+                    b.item(30 + n, area="Proj\\Other").at("2026-11-10 09:00", iteration=S29,
+                                                         assigned=IVAN, state="Active")
+                b.item(40).at("2026-11-09 09:00", iteration=S29, assigned=PO, state="Active") \
+                    .at("2026-11-10 09:00", state="Closed")
             return b
         first = run(build(False), "ALFA", "S29")
         self.assertEqual(first, run(build(False), "ALFA", "S29"))
         self.assertEqual((first["delivered"], [r["sprint"] for r in first["trend"]]),
                          ([1, 10], ["S28", "S29"]))
+        self.assertEqual(first["rest"]["delivered"], 1)
+        self.assertEqual([p["delivered"] for p in first["people"]], [[], [1, 10]])
+        self.assertEqual([a["level"] for a in first["attention"]], ["red"] + ["amber"] * 3)
+        self.assertEqual(first["status"]["colour"], "RED")
         again = run(build(True), "ALFA", "S29")
         self.assertEqual((first["late"], again["late"]), ([], [2]))
         again["late"] = first["late"]

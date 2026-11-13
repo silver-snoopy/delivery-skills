@@ -1,282 +1,98 @@
+import json
+import os
 import tempfile
 import unittest
-from datetime import date, datetime, timezone
-from pathlib import Path
-from zoneinfo import ZoneInfo
+from datetime import date
 
-from ledger.config import (DEFAULT_THRESHOLDS, load_config, load_roster,
-                           validate)
-from ledger.errors import LedgerError
-from ledger.home import Home
-
-TZ = ZoneInfo("Europe/Budapest")
+from ledger.config import (Config, Person, email_index, load_config, merge_staff, parse_notes,
+                           parse_staff, read_team, save_config, write_team)
+from ledger.replay import local_tz
 
 
-def utc(y, m, d, h=0):
-    return datetime(y, m, d, h, tzinfo=timezone.utc)
+class ConfigTest(unittest.TestCase):
+    def test_parse_staff_list_formats(self):
+        pairs = parse_staff('Maya R. <Maya.R@vendor.example>; "Doe, John" <john.doe@vendor.example>;\nann@vendor.example')
+        self.assertEqual(pairs, [("Maya R.", "maya.r@vendor.example"), ("John Doe", "john.doe@vendor.example"),
+                                 ("ann", "ann@vendor.example")])
 
+    def test_same_name_two_emails_is_one_person(self):
+        m = merge_staff([("Tom H.", "tom.h@vendor.example"), ("Tom H.", "tom.h2@vendor.example")])
+        self.assertEqual(m, {"Tom H.": ["tom.h@vendor.example", "tom.h2@vendor.example"]})
 
-def team(name, areas, phases=None):
-    return {"name": name, "ado_team": name + " Team", "area_paths": areas,
-            "phases": phases or [{"state": "Active", "phase": "doing"}]}
+    def test_team_csv_round_trip_and_case_insensitive_index(self):
+        people = [Person("Tom H.", ["tom.h@vendor.example", "tom.h2@vendor.example"], "ALFA",
+                         date(2024, 11, 4), None, 0.5),
+                  Person("Ann", ["ann@vendor.example"], "BETA", None, date(2026, 1, 5))]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "sub", "team.csv")
+            write_team(path, people)
+            self.assertEqual(read_team(path), people)
+            idx = email_index(read_team(path))
+        self.assertEqual(idx["TOM.H2@VENDOR.EXAMPLE".lower()].name, "Tom H.")
 
+    def test_parse_notes(self):
+        n = parse_notes("#48211 agreed: QA env down\n#48277 Unknown: API dependency\nALFA summary: Done upload.\n"
+                        "ALFA status: amber - QA slot lost\nBETA exec note: Pilot live\nnonsense line")
+        self.assertEqual(n.items[48211], ("agreed", "QA env down"))
+        self.assertEqual(n.items[48277], ("unknown", "API dependency"))
+        self.assertEqual(n.summary["ALFA"], "Done upload.")
+        self.assertEqual(n.status["ALFA"], ("AMBER", "QA slot lost"))
+        self.assertEqual(n.exec_note["BETA"], "Pilot live")
+        self.assertEqual(len(n.warnings), 1)
 
-def person(pid, assignments, **extra):
-    d = {"id": pid, "display_name": pid.title(), "assignments": assignments}
-    d.update(extra)
-    return d
+    def test_parse_notes_not_agreed_and_bad_status(self):
+        n = parse_notes("#1 not agreed: late\nALFA status: purple - x")
+        self.assertEqual(n.items[1], ("not agreed", "late"))
+        self.assertEqual(len(n.warnings), 1)
 
+    def test_config_round_trip_defaults(self):
+        with tempfile.TemporaryDirectory() as d:
+            save_config(d, Config(organization="https://dev.azure.com/ORG", teams={"ALFA": {"count": "tasks"}},
+                                  name_aliases={"Maya Rao": "Maya R."}))
+            cfg = load_config(d)
+        self.assertEqual(cfg.onboarding_sprints, 2)
+        self.assertEqual(cfg.not_delivered_reasons, ["Removed", "Won't Fix", "Won't Do", "Cut",
+                                                     "Duplicate", "Obsolete", "Deferred", "Abandoned"])
+        self.assertEqual(cfg.teams["ALFA"]["count"], "tasks")
+        self.assertEqual(cfg.name_aliases, {"Maya Rao": "Maya R."})
 
-class ConfigTestBase(unittest.TestCase):
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.home = Home(Path(tmp.name))
+        self.assertEqual(cfg.history_days, 200)
 
-    def write(self, config=None, roster=None):
-        base = {"ado": {"org_url": "https://dev.azure.com/example",
-                        "project": "P"},
-                "timezone": "Europe/Budapest",
-                "teams": [team("Claims", ["P\\Claims"]),
-                          team("Pricing", ["P\\Pricing"])]}
-        base.update(config or {})
-        self.home.write_json(base, "config.json")
-        self.home.write_json(
-            roster if roster is not None else {"people": []}, "roster.json")
+    def test_parse_staff_skips_entries_without_email(self):
+        warnings = []
+        pairs = parse_staff("John Doe; Maya R. <maya@vendor.example>; Tom <tom>", warnings)
+        self.assertEqual(pairs, [("Maya R.", "maya@vendor.example")])
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("John Doe", warnings[0])
 
-    def load(self, config=None, roster=None):
-        self.write(config, roster)
-        return load_config(self.home), load_roster(self.home)
+    def test_team_csv_bom_and_team_case(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "team.csv")
+            with open(path, "w", encoding="utf-8-sig") as f:
+                f.write("name,email,team,joined,left,allocation\nAnn,Ann@vendor.example, alfa ,,,1\n")
+            self.assertEqual(read_team(path), [Person("Ann", ["ann@vendor.example"], "ALFA", None, None)])
 
+    def load(self, raw):
+        warnings = []
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "config.json"), "w") as f:
+                json.dump(raw, f)
+            return load_config(d, warnings.append), warnings
 
-class ConfigTests(ConfigTestBase):
-    def test_defaults_applied(self):
-        cfg, _ = self.load()
-        self.assertEqual(cfg.thresholds, DEFAULT_THRESHOLDS)
-        self.assertEqual(cfg.unit_level, "stories")
-        self.assertEqual(cfg.unit_types,
-                         ("User Story", "Product Backlog Item", "Bug"))
-        self.assertEqual(cfg.agent_text_access, "none")
-        self.assertEqual(cfg.vendor_label, "Vendor team")
-        self.assertEqual(cfg.org_url, "https://dev.azure.com/example")
-        self.assertEqual(DEFAULT_THRESHOLDS["window_sprints"], 6)
-        self.assertEqual(DEFAULT_THRESHOLDS["unready_share"], 0.3334)
-        self.assertEqual(DEFAULT_THRESHOLDS["worked_min_days"], 0.02)
-        self.assertEqual(len(DEFAULT_THRESHOLDS), 27)
+    def test_unknown_config_keys_are_a_warning(self):
+        cfg, warnings = self.load({"timezone": "UTC", "waiting_state": ["QA"], "zzz": 1})
+        self.assertEqual(cfg.waiting_states, [])
+        self.assertEqual(warnings, ["config.json keys not recognised and ignored: waiting_state, zzz"])
 
-    def test_threshold_override_and_unknown_key(self):
-        cfg, _ = self.load({"thresholds": {"quiet_days": 9}})
-        self.assertEqual(cfg.thresholds["quiet_days"], 9)
-        self.assertEqual(cfg.thresholds["window_sprints"], 6)
-        self.assertEqual(DEFAULT_THRESHOLDS["quiet_days"], 5)
-        with self.assertRaises(LedgerError) as cm:
-            self.load({"thresholds": {"bogus": 1}})
-        self.assertIn("bogus", cm.exception.message)
-
-    def test_optional_fields_parsed(self):
-        cfg, _ = self.load({
-            "holidays": ["2026-12-25"],
-            "not_delivered": {"states": ["Removed"], "reasons": ["Dropped"]},
-            "service_identities": ["svc-1"],
-            "labels": {"vendor": "Acme crew"},
-            "agent_text_access": "titles",
-            "teams": [team("Claims", ["P\\Claims"], [
-                {"state": "Resolved", "phase": "handoff", "column": "QA",
-                 "column_done": True, "wait_label": "test"}])],
-        })
-        self.assertEqual(cfg.holidays, frozenset([date(2026, 12, 25)]))
-        self.assertEqual(cfg.not_delivered_states, frozenset(["Removed"]))
-        self.assertEqual(cfg.not_delivered_reasons, frozenset(["Dropped"]))
-        self.assertEqual(cfg.service_identities, ("svc-1",))
-        self.assertEqual(cfg.vendor_label, "Acme crew")
-        rule = cfg.team("Claims").phases[0]
-        self.assertEqual((rule.column, rule.column_done, rule.wait_label),
-                         ("QA", True, "test"))
-
-    def test_overlapping_area_paths_rejected(self):
-        cfg, r = self.load({"teams": [team("Alpha", ["P\\A"]),
-                                      team("Beta", ["P\\A\\B"])]})
-        with self.assertRaises(LedgerError) as cm:
-            validate(cfg, r)
-        self.assertIn("Alpha", cm.exception.message)
-        self.assertIn("Beta", cm.exception.message)
-
-    def test_team_for_area_longest_prefix(self):
-        cfg, _ = self.load({"teams": [team("Claims", ["P\\Claims"]),
-                                      team("Intake", ["P\\Other"])]})
-        self.assertEqual(cfg.team_for_area("P\\Claims\\Intake"), "Claims")
-        self.assertEqual(cfg.team_for_area("p\\claims"), "Claims")
-        self.assertIsNone(cfg.team_for_area("P\\ClaimsX"))
-
-    def test_team_lookup_unknown(self):
-        cfg, _ = self.load()
-        self.assertEqual(cfg.team("Claims").ado_team, "Claims Team")
-        with self.assertRaises(LedgerError):
-            cfg.team("Nope")
-
-    def test_bad_timezone_and_unknown_team_rejected(self):
-        with self.assertRaises(LedgerError) as cm:
-            self.load({"timezone": "Mars/Olympus"})
-        self.assertIn("could not be loaded", cm.exception.hint)
-        cfg, r = self.load(roster={"people": [person("anna", [
-            {"team": "Ghost", "from": "2026-10-01"}])]})
-        with self.assertRaises(LedgerError) as cm:
-            validate(cfg, r)
-        self.assertIn("Ghost", cm.exception.message)
-
-    def test_invalid_phase_or_unit_level_rejected(self):
-        cfg, r = self.load({"teams": [team("Claims", ["P\\Claims"], [
-            {"state": "Active", "phase": "sideways"}])]})
-        with self.assertRaises(LedgerError) as cm:
-            validate(cfg, r)
-        self.assertIn("sideways", cm.exception.message)
-        cfg, r = self.load({"unit_level": "epics-ish"})
-        with self.assertRaises(LedgerError):
-            validate(cfg, r)
-
-    def rejected(self, config=None, roster=None):
-        cfg, r = self.load(config, roster)
-        with self.assertRaises(LedgerError) as cm:
-            validate(cfg, r)
-        self.assertTrue(cm.exception.hint)
-        return cm.exception.message
-
-    def test_assignment_ending_before_it_starts_rejected(self):
-        msg = self.rejected(roster={"people": [person("anna", [
-            {"team": "Claims", "from": "2026-10-10", "to": "2026-10-01"}])]})
-        self.assertIn("anna", msg)
-        self.assertIn("2026-10-01", msg)
-        self.assertIn("2026-10-10", msg)
-
-    def test_absence_ending_before_it_starts_rejected(self):
-        msg = self.rejected(roster={"people": [person(
-            "anna", [{"team": "Claims", "from": "2026-10-01"}],
-            absences=[{"from": "2026-10-20", "to": "2026-10-12"}])]})
-        self.assertIn("anna", msg)
-        self.assertIn("absence", msg)
-
-    def test_duplicate_team_names_rejected(self):
-        msg = self.rejected({"teams": [team("Claims", ["P\\Claims"]),
-                                       team("Claims", ["P\\Other"])]})
-        self.assertIn("Claims", msg)
-        self.assertIn("more than once", msg)
-
-    def test_team_names_with_the_same_folder_rejected(self):
-        msg = self.rejected({"teams": [team("Claims Intake", ["P\\A"]),
-                                       team("claims-intake", ["P\\B"])]})
-        self.assertIn("Claims Intake", msg)
-        self.assertIn("claims-intake", msg)
-        self.assertIn("same folder", msg)
-
-    def test_duplicate_person_ids_rejected(self):
-        msg = self.rejected(roster={"people": [
-            person("anna", [{"team": "Claims", "from": "2026-10-01"}]),
-            person("anna", [{"team": "Pricing", "from": "2026-10-01"}])]})
-        self.assertIn("anna", msg)
-        self.assertIn("more than once", msg)
-
-    def test_valid_setup_passes(self):
-        cfg, r = self.load(roster={"people": [person("anna", [
-            {"team": "Claims", "from": "2026-10-01"}])]})
-        validate(cfg, r)
-
-    def test_missing_files_hint_setup_skill(self):
-        for name in ("config.json", "roster.json"):
-            self.write()
-            self.home.path(name).unlink()
-            loader = load_config if name == "config.json" else load_roster
-            with self.assertRaises(LedgerError) as cm:
-                loader(self.home)
-            self.assertIn("delivery-setup", cm.exception.hint)
-
-
-class RosterTests(ConfigTestBase):
-    def roster(self):
-        _, r = self.load(roster={"people": [
-            person("anna", [{"team": "Claims", "from": "2026-10-01",
-                             "to": "2026-10-31"}],
-                   identity_ids=["id-1"], aliases=["Anna K"],
-                   absences=[{"from": "2026-10-05", "to": "2026-10-06",
-                              "note": "leave"}]),
-            person("ben", [{"team": "Claims", "from": "2026-10-01",
-                            "allocation": 0}]),
-        ]})
-        return r
-
-    def test_allocation_over_one_rejected(self):
-        cfg, r = self.load(roster={"people": [person("anna", [
-            {"team": "Claims", "from": "2026-10-01", "to": "2026-10-31",
-             "allocation": 0.6},
-            {"team": "Pricing", "from": "2026-10-15", "allocation": 0.6}])]})
-        with self.assertRaises(LedgerError) as cm:
-            validate(cfg, r)
-        self.assertIn("anna", cm.exception.message)
-
-    def test_three_overlapping_half_allocations_rejected(self):
-        cfg, r = self.load(roster={"people": [person("anna", [
-            {"team": "Claims", "from": "2026-10-01", "allocation": 0.5},
-            {"team": "Pricing", "from": "2026-10-02", "allocation": 0.5},
-            {"team": "Claims", "from": "2026-10-03", "allocation": 0.5}])]})
-        with self.assertRaises(LedgerError) as cm:
-            validate(cfg, r)
-        self.assertIn("anna", cm.exception.message)
-
-    def test_agent_text_access_validated(self):
-        for ok in ("full", "titles", "none"):
-            cfg, r = self.load({"agent_text_access": ok})
-            validate(cfg, r)
-        cfg, r = self.load({"agent_text_access": "everything"})
-        with self.assertRaises(LedgerError) as cm:
-            validate(cfg, r)
-        self.assertIn("everything", cm.exception.message)
-
-    def test_adjacent_assignments_not_overlapping(self):
-        cfg, r = self.load(roster={"people": [person("anna", [
-            {"team": "Claims", "from": "2026-10-01", "to": "2026-10-14",
-             "allocation": 1.0},
-            {"team": "Pricing", "from": "2026-10-15", "allocation": 1.0}])]})
-        validate(cfg, r)
-
-    def test_vendor_on_respects_assignment_dates(self):
-        r = self.roster()
-        self.assertTrue(r.vendor_on("p:anna", "Claims", utc(2026, 10, 15, 12), TZ))
-        self.assertTrue(r.vendor_on("p:anna", "Claims", utc(2026, 10, 31, 12), TZ))
-        self.assertFalse(r.vendor_on("p:anna", "Claims", utc(2026, 11, 2, 12), TZ))
-        self.assertFalse(r.vendor_on("p:anna", "Pricing", utc(2026, 10, 15, 12), TZ))
-        self.assertFalse(r.vendor_on("o:abc", "Claims", utc(2026, 10, 15, 12), TZ))
-        self.assertFalse(r.vendor_on(None, "Claims", utc(2026, 10, 15, 12), TZ))
-
-    def test_vendor_on_uses_local_date_and_zero_allocation(self):
-        r = self.roster()
-        # 23:30 UTC on Oct 31 is Nov 1 in Budapest: past the inclusive end.
-        self.assertFalse(r.vendor_on("p:anna", "Claims", utc(2026, 10, 31, 23), TZ))
-        self.assertFalse(r.vendor_on("p:ben", "Claims", utc(2026, 10, 15, 12), TZ))
-        self.assertFalse(r.vendor_on("p:nobody", "Claims", utc(2026, 10, 15, 12), TZ))
-
-    def test_match_identity_id_then_alias(self):
-        r = self.roster()
-        self.assertEqual(r.match_identity("id-1", ["Someone"]), "p:anna")
-        self.assertEqual(r.match_identity(None, ["x", "anna k"]), "p:anna")
-        self.assertEqual(r.match_identity("zzz", ["ANNA K"]), "p:anna")
-        self.assertIsNone(r.match_identity("zzz", ["Nobody"]))
-        self.assertIsNone(r.match_identity(None, []))
-
-    def test_person_assignment_and_people_on(self):
-        r = self.roster()
-        self.assertEqual(r.person("anna").display_name, "Anna")
-        with self.assertRaises(LedgerError):
-            r.person("zed")
-        self.assertEqual(
-            r.assignment_on("anna", "Claims", date(2026, 10, 31)).end,
-            date(2026, 10, 31))
-        self.assertIsNone(r.assignment_on("anna", "Claims", date(2026, 11, 1)))
-        ids = [p.id for p in r.people_on("Claims", date(2026, 10, 28),
-                                         date(2026, 11, 5))]
-        self.assertEqual(ids, ["anna"])
-        ids = [p.id for p in r.people_on("Claims", date(2026, 11, 1),
-                                         date(2026, 11, 5))]
-        self.assertEqual(ids, [])
-        self.assertEqual(r.person("anna").absences[0].note, "leave")
+    def test_bad_count_and_timezone_are_errors(self):
+        with self.assertRaises(ValueError) as e:
+            self.load({"teams": {"ALFA": {"count": "story"}}})
+        self.assertIn("ALFA", str(e.exception))
+        with self.assertRaises(ValueError) as e:
+            self.load({"timezone": "Europe/Zürich"})
+        self.assertIn("Europe/Zürich", str(e.exception))
+        with self.assertRaises(ValueError):
+            local_tz("Nowhere/City")
 
 
 if __name__ == "__main__":

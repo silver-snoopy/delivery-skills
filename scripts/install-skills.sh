@@ -9,7 +9,6 @@
 # --agents LIST  comma-separated: claude, copilot (default: both)
 # --force        overwrite installed files whose content differs
 #
-# Locations are recorded in docs/team-performance-report/skill-locations.md.
 set -eu
 
 usage() {
@@ -103,6 +102,7 @@ NL='
 IFS=$NL
 for dest in $DESTS; do
     for skill_dir in "$REPO"/skills/*/; do
+        [ -d "$skill_dir" ] || continue
         name=$(basename "$skill_dir")
         for rel in $(cd "$skill_dir" && find . -type f | sort); do
             rel=${rel#./}

@@ -1,582 +1,581 @@
-"""One metrics document per team sprint, plus a ledger naming the tickets
-behind every figure so each number can be traced."""
-import statistics
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+"""Sprint figures per team, replayed from the revision cache at fixed instants."""
+import math
+from datetime import date, datetime, timedelta
+from typing import Dict, List, Optional, Sequence
 
-from .buckets import first_vendor_hold, time_split
-from .classify import (CarryAge, carry_age, held_by_vendor_at_end,
-                       involvement, is_member, is_planned, left_sprint,
-                       outcome, workers)
-from .config import Config, Roster
-from .model import Phase, Revision, Snapshot, Sprint, Ticket, _dt_in
-from .people import person_observations
-from .phases import PhaseMapper
-from .received import received_state
-from .scope import ROLE_PREFIX, party, placed_by, removed_by, split
-from .timeline import Event, Timeline, build_timeline, find_bulk_edits
-from .workcal import WorkCalendar, display_days
+from ledger.config import Config, Notes, Person
+from ledger.replay import ACTIVE, History, day_end, day_start, is_waiting, local_tz
 
-RULES_VERSION = "1"
-SCHEMA = 1
-
-_TICK = timedelta(microseconds=1)
-_CARRIED = ("carried_in_progress", "carried_not_started")
-_PERSON_DURATIONS = ("available_days", "nominal_days",
-                     "days_nothing_in_progress", "concurrency_avg",
-                     "pickup_median", "joiner_days_to_first_delivery")
+P85 = 0.85
+CARRIED_FLAG = 2
+WAIT_FLAG_DAYS = 3
+WAIT_RED_DAYS = 10
+STALE_DAYS = 5
+WIP_FLAG = 3
+GREEN_SHARE = 0.8
+TREND = 6
+MAX_SPRINT_DAYS = 42  # longer dated iterations are releases or PIs, not sprints
+CLOSED = ("Completed", "Removed")
 
 
-def _round(x: Optional[float]) -> Optional[float]:
-    return None if x is None else display_days(x)
-
-
-def _median(xs: List[float]) -> Optional[float]:
-    return display_days(statistics.median(xs)) if xs else None
-
-
-def _rev_at(ticket: Ticket, at: datetime) -> Optional[Revision]:
-    last = None
-    for r in sorted(ticket.revisions, key=lambda r: (r.changed, r.rev)):
-        if r.changed <= at:
-            last = r
-    return last
-
-
-class _Ctx:
-    def __init__(self, snap: Snapshot, cfg: Config, roster: Roster,
-                 team: str, sprint: Sprint,
-                 roles: Optional[Dict[str, str]] = None):
-        self.snap, self.cfg, self.roster = snap, cfg, roster
-        self.roles = dict(roles or {})
-        self.role_ids = [r.id for r in cfg.backlog_roles
-                         if r.applies_to(team)]
-        self.team, self.sprint = team, sprint
-        self.cal = WorkCalendar(cfg.timezone, cfg.holidays)
-        self.cutoff = _dt_in(snap.meta["cutoff"])
-        self.last = sprint.end - _TICK
-        self.team_sprints = snap.sprints[team]
-        idx = self.team_sprints.index(sprint)
-        self.earlier = self.team_sprints[:idx]
-        self.upto = self.team_sprints[:idx + 1]
-
-    def owner(self, ticket: Ticket) -> Optional[str]:
-        """Team owning the ticket's area at the sprint's last instant, or
-        None; also None-safe for tickets not yet created."""
-        r = _rev_at(ticket, min(self.last, self.cutoff - _TICK))
-        return None if r is None else self.cfg.team_for_area(r.area)
-
-    def counted_type(self, ticket: Ticket) -> bool:
-        r = _rev_at(ticket, min(self.last, self.cutoff - _TICK))
-        return r is not None and r.type in self.cfg.unit_types
-
-    def timeline(self, ticket: Ticket, bulk) -> Timeline:
-        owner = self.owner(ticket) or self.team
-        mapper = PhaseMapper(self.cfg.team(owner), self.cfg)
-        return build_timeline(ticket, mapper, self.cutoff, bulk)
-
-    def in_period(self, e: Event) -> bool:
-        return not e.admin and self.sprint.period_start <= e.at < \
-            self.sprint.end
-
-    def vendor(self, actor: Optional[str], at: datetime) -> bool:
-        return self.roster.vendor_on(actor, self.team, at, self.cal.tz)
-
-
-@dataclass
-class _Rec:
-    ticket: Ticket
-    tl: Timeline
-    inv: str
-    out: str
-    outside: bool
-    workers: Dict[str, float]
-    carry: CarryAge
-    held: bool
-    holder: Optional[str]
-
-    @property
-    def id(self) -> int:
-        return self.ticket.id
-
-
-def _holder_label(ctx: _Ctx, actor: Optional[str]) -> Optional[str]:
-    """A roster id, "other" or None; never a pseudonym."""
-    if not actor:
+def percentile(values: List[int], p: float) -> Optional[int]:
+    """Nearest rank: sorted(v)[ceil(p*n)-1]; None for no values."""
+    if not values:
         return None
-    if actor.startswith("p:") and any(p.id == actor[2:]
-                                      for p in ctx.roster.people):
-        return actor[2:]
-    return "other"
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(round(p * len(ordered), 9)) - 1)]
 
 
-def _collect(ctx: _Ctx) -> Tuple[List[_Rec], Dict[int, Timeline]]:
-    """The team's ticket records, and the timeline of every collected
-    ticket of a counted type whatever its area: a person's own figures
-    are measured over all of those."""
-    th = ctx.cfg.thresholds
-    bulk = find_bulk_edits(ctx.snap.tickets, int(th["bulk_edit_count"]),
-                           int(th["bulk_edit_seconds"]))
-    recs = []
-    every: Dict[int, Timeline] = {}
-    for t in ctx.snap.tickets:
-        if not ctx.counted_type(t):
-            continue
-        owner = ctx.owner(t)
-        tl = ctx.timeline(t, bulk)
-        every[t.id] = tl
-        if owner is not None and owner != ctx.team:
-            continue
-        inv = involvement(tl, ctx.sprint, ctx.team, ctx.roster, ctx.cal,
-                          float(th["worked_min_days"]))
-        out = outcome(tl, ctx.sprint, ctx.earlier)
-        if inv is None or out is None:
-            continue
-        w = workers(tl, ctx.sprint.end, ctx.team, ctx.roster, ctx.cal)
-        end = tl.at(ctx.last)
-        holder = end.holder if end else None
-        if owner is None and not (w or ctx.vendor(holder, ctx.last)):
-            continue
-        recs.append(_Rec(
-            t, tl, inv, out, owner is None, w,
-            carry_age(tl, ctx.upto, ctx.team, ctx.roster, ctx.cal),
-            held_by_vendor_at_end(tl, ctx.sprint, ctx.team, ctx.roster,
-                                  ctx.cal),
-            holder))
-    return recs, every
+def _stats(values: List[int]) -> dict:
+    return {"n": len(values), "median": percentile(values, 0.5), "p85": percentile(values, P85)}
 
 
-# ---- per-ticket helpers ----------------------------------------------------
-
-def _first_doing(tl: Timeline) -> Optional[datetime]:
-    i = tl.first(lambda i: i.phase == Phase.DOING)
-    return i.start if i else None
-
-
-def _delivered_at(tl: Timeline, before: datetime) -> Optional[datetime]:
-    at = None
-    for e in tl.events:
-        if e.to_phase == Phase.DONE and e.from_phase != Phase.DONE \
-                and e.at < before:
-            at = e.at
-    return at
+def histories(data: dict, not_delivered: Sequence[str]) -> Dict[int, History]:
+    rows = {}  # type: Dict[int, List[dict]]
+    for r in data["revisions"]:
+        rows.setdefault(r["id"], []).append(r)
+    return {i: History(rs, not_delivered) for i, rs in rows.items()}
 
 
-def _days_waiting(ctx: _Ctx, r: _Rec) -> float:
-    if r.out != "awaiting_acceptance":
-        return 0.0
-    ivs = r.tl.intervals
-    k = next(k for k, i in enumerate(ivs) if i.start <= ctx.last < i.end)
-    while k > 0 and ivs[k - 1].phase == Phase.HANDOFF \
-            and ivs[k - 1].end == ivs[k].start:
-        k -= 1
-    return ctx.cal.working_days(ivs[k].start, ctx.sprint.end)
+def _row(h: History, t: Optional[datetime]) -> Optional[dict]:
+    """The revision in force at `t`, or the last one when `t` is None."""
+    return h.rows[-1] if t is None else h.at(t)
 
 
-def _handoffs(ctx: _Ctx, r: _Rec) -> List[Event]:
-    """Hand-offs by a vendor person on the team inside the period."""
-    return [e for e in r.tl.events
-            if e.to_handoff and ctx.in_period(e)
-            and ctx.vendor(e.holder_before, e.at)]
-
-
-def _handed_off_by(ctx: _Ctx, r: _Rec) -> List[str]:
-    """Vendor actors who handed the ticket off inside the period."""
-    return [e.holder_before for e in _handoffs(ctx, r)]
-
-
-def _attributed(ctx: _Ctx, tl: Timeline, e: Event) -> Optional[str]:
-    """Roster id holding the latest DOING interval before the event, when
-    they were on the team then."""
-    best = None
-    for i in tl.intervals:
-        if i.phase == Phase.DOING and i.start < e.at:
-            best = i
-    if best is None or not ctx.vendor(best.holder, min(best.end, e.at)
-                                      - _TICK):
+def level_of(h: History, levels, histories, at: Optional[datetime] = None) -> Optional[str]:
+    """"stories" or "tasks" at `at` (default: now); an unlisted Bug follows its parent's level."""
+    row = _row(h, at)
+    if row is None:
         return None
-    return best.holder[2:]
+    for level in ("stories", "tasks"):
+        if row["type"] in levels.get(level, []):
+            return level
+    if row["type"] != "Bug":
+        return None
+    parent = histories.get(row["parent"])
+    prow = _row(parent, at) if parent is not None else None
+    return "tasks" if prow is not None and prow["type"] in levels.get("stories", []) else "stories"
 
 
-def _since_vendor(ctx: _Ctx, tl: Timeline) -> Tuple[List[Event],
-                                                    List[Event]]:
-    """Non-administrative events before the sprint's end, split into those
-    before the first vendor hold on the team and those from it on. Only
-    the second list is counted in a figure, a flag, a status or a risk."""
-    first = first_vendor_hold(tl, ctx.team, ctx.roster, ctx.cal.tz)
-    upto = [e for e in tl.events if not e.admin and e.at < ctx.sprint.end]
+def is_sprint(it: dict) -> bool:
+    """A dated iteration no longer than MAX_SPRINT_DAYS."""
+    if not (it.get("start") and it.get("end")):
+        return False
+    days = (date.fromisoformat(it["end"]) - date.fromisoformat(it["start"])).days + 1
+    return days <= MAX_SPRINT_DAYS
+
+
+def _by_team(mapping: dict, team: str, default):
+    return next((v for k, v in mapping.items() if k.lower() == team.lower()), default)
+
+
+def count_of(cfg: Config, team: str) -> str:
+    """The team's counting level from config.json; "stories" when the team has none."""
+    return _by_team(cfg.teams, team, {}).get("count") or "stories"
+
+
+def _emails(people: List[Person], team: str) -> set:
+    return {e.lower() for p in people if p.team.lower() == team.lower() for e in p.emails}
+
+
+def _key(sprint: dict):
+    return sprint["start"], sprint["path"]
+
+
+def team_sprints(data: dict, cfg: Config, people: List[Person], team: str,
+                 until: Optional[datetime] = None) -> List[dict]:
+    """Dated iterations that held one of the team's counted items, from history up to `until`."""
+    return _Team(data, cfg, people, team).sprints(until)
+
+
+def _with(sprints: List[dict], sprint: dict) -> List[dict]:
+    rest = [s for s in sprints if s["path"] != sprint["path"]]
+    return sorted(rest + [sprint], key=_key)
+
+
+def is_onboarding(person: Person, team_sprints: List[dict], sprint: dict, n: int) -> bool:
+    """In the sprint containing `joined` (or the next one, if `joined` falls in a gap shorter than
+    a sprint) or the following n - 1 sprints."""
+    if person.joined is None:
+        return False
+    ordered = _with(team_sprints, sprint)
+    first = next((i for i, s in enumerate(ordered) if date.fromisoformat(s["end"]) >= person.joined),
+                 None)
     if first is None:
-        return upto, []
-    return ([e for e in upto if e.at < first],
-            [e for e in upto if e.at >= first])
+        return False
+    start, end = (date.fromisoformat(ordered[first][k]) for k in ("start", "end"))
+    if start - person.joined > end - start:  # joined long before any known sprint
+        return False
+    return first <= ordered.index(sprint) < first + n
 
 
-def _ticket_record(ctx: _Ctx, r: _Rec, received: Dict[str, Any]
-                   ) -> Dict[str, Any]:
-    last_rev = _rev_at(r.ticket, ctx.last)
-    end = r.tl.at(ctx.last)
-    before, upto = _since_vendor(ctx, r.tl)
-    handoffs = _handoffs(ctx, r)
-    member = is_member(r.tl, ctx.sprint)
-    at_start = member and is_planned(
-        r.tl, ctx.sprint, ctx.cal,
-        int(ctx.cfg.thresholds["planned_grace_days"]))
-    placed = placed_by(r.tl, ctx.sprint) if member else None
-    left = left_sprint(r.tl, ctx.sprint, ctx.team_sprints)
-    removed = removed_by(r.tl, ctx.sprint) if left else None
-    return {
-        "type": last_rev.type, "title": r.ticket.title,
-        "parent": last_rev.parent, "parent_title": r.ticket.parent_title,
-        "state": end.state, "outcome": r.out, "involvement": r.inv,
-        "planned": r.inv == "worked" and at_start,
-        "left_sprint": left,
-        "in_sprint_at_start": at_start,
-        "placed_by": party(placed.by, ctx.roles)
-        if placed is not None else None,
-        "removed_by": party(removed.by, ctx.roles)
-        if removed is not None else None,
-        "workers": {p: display_days(d) for p, d in sorted(r.workers.items())},
-        "sprints_carried": r.carry.sprints_carried,
-        "carried_since": r.carry.carried_since, "trail": r.carry.trail,
-        "sprints_waiting": r.carry.sprints_waiting,
-        "days_waiting": display_days(_days_waiting(ctx, r)),
-        "wait_label": end.wait_label if end.phase == Phase.HANDOFF else None,
-        "backward_moves": sum(1 for e in upto if e.backward),
-        "returns": [{"rev": e.rev, "at": e.at.isoformat(),
-                     "reopen": e.reopen, "in_sprint": ctx.in_period(e)}
-                    for e in upto if e.is_return],
-        "backward_moves_before_vendor": sum(1 for e in before if e.backward),
-        "returns_before_vendor": sum(1 for e in before if e.is_return),
-        "handed_off_in_sprint": bool(handoffs),
-        "handed_off_at": handoffs[0].at.isoformat() if handoffs else None,
-        "received": received,
-        "outside_teams": r.outside,
-        "held_by_vendor_at_end": r.held,
-        "holder_at_end": _holder_label(ctx, r.holder),
-    }
+def _workdays_after(a: date, b: date) -> int:
+    """Mon-Fri days after `a` up to and including `b`."""
+    return sum(1 for k in range(1, (b - a).days + 1) if (a + timedelta(days=k)).weekday() < 5)
 
 
-# ---- team figures ----------------------------------------------------------
-
-class _Ledger(dict):
-    def count(self, key: str, items: list) -> int:
-        self[key] = list(items)
-        return len(items)
-
-
-def _outcome_figures(L: _Ledger, recs: List[_Rec], tickets) -> Dict:
-    worked = [r for r in recs if r.inv == "worked"]
-
-    def by(name, pool=worked):
-        return [r.id for r in pool if r.out == name]
-
-    carried = [r for r in recs if r.out in _CARRIED]
-    planned = [r for r in worked if tickets[str(r.id)]["planned"]]
-
-    def plan(r):
-        if r.out == "closed_not_delivered":
-            return "not_delivered"
-        if tickets[str(r.id)]["left_sprint"]:
-            return "left"
-        if r.out in ("delivered", "reclosed"):
-            return "delivered"
-        if r.out == "awaiting_acceptance":
-            return "awaiting"
-        if r.out in _CARRIED:
-            return "carried" if r.held else "with_other_party"
-        return "left"
-
-    return {
-        "delivered": L.count("figures.delivered", by("delivered")),
-        "closed_not_delivered": L.count("figures.closed_not_delivered",
-                                        by("closed_not_delivered")),
-        "reclosed": L.count("figures.reclosed", by("reclosed")),
-        "carried": {
-            "in_progress": L.count("figures.carried.in_progress", [
-                r.id for r in carried
-                if r.held and r.out == "carried_in_progress"]),
-            "not_started": L.count("figures.carried.not_started", [
-                r.id for r in carried
-                if r.held and r.out == "carried_not_started"]),
-            "with_other_party": L.count("figures.carried.with_other_party",
-                                        [r.id for r in carried
-                                         if not r.held])},
-        "active_outside_sprint": L.count("figures.active_outside_sprint",
-                                         by("active_outside_sprint")),
-        "assigned_outside_sprint": L.count(
-            "figures.assigned_outside_sprint",
-            by("assigned_outside_sprint", recs)),
-        "planned": dict(
-            total=L.count("figures.planned.total", [r.id for r in planned]),
-            **{k: L.count("figures.planned." + k,
-                          [r.id for r in planned if plan(r) == k])
-               for k in ("delivered", "awaiting", "carried",
-                         "with_other_party", "left", "not_delivered")}),
-    }
+def _working_days(person: Person, start: date, end: date) -> List[date]:
+    days, d = [], start
+    while d <= end:
+        if d.weekday() < 5 and (person.joined is None or d >= person.joined) \
+                and (person.left is None or d < person.left):
+            days.append(d)
+        d += timedelta(days=1)
+    return days
 
 
-def _scope_figures(ctx: _Ctx, L: _Ledger, recs: List[_Rec],
-                   tickets) -> Dict:
-    """Who decided the sprint's scope, over the team's vendor tickets:
-    in the sprint at its start (worked on or only assigned), added after
-    the start, and taken out of the sprint before its end."""
-    def group(name: str, pick, field: str) -> Dict[str, Any]:
-        ids = [r.id for r in recs if pick(tickets[str(r.id)])]
-        out: Dict[str, Any] = {"total": L.count("figures.scope.%s.total"
-                                                % name, ids)}
-        parties = split([tickets[str(i)][field] for i in ids],
-                        ctx.role_ids)
-        for p in parties:
-            L.count("figures.scope.%s.parties.%s" % (name, p),
-                    [i for i in ids if tickets[str(i)][field] == p])
-        out["parties"] = parties
-        return out
+class _Team:
+    def __init__(self, data: dict, cfg: Config, people: List[Person], team: str):
+        self.cfg, self.data = cfg, data
+        self.tz = local_tz(cfg.timezone)
+        self.hist = histories(data, cfg.not_delivered_reasons)
+        self.children = {}  # type: Dict[int, set]
+        for r in data["revisions"]:
+            if r["parent"] is not None:
+                self.children.setdefault(r["parent"], set()).add(r["id"])
+        self.count = count_of(cfg, team)
+        self.emails = _emails(people, team)
+        self.sprint_at = {s["path"]: s for s in data["iterations"] if is_sprint(s)}
 
-    return {
-        "labels": {ROLE_PREFIX + r.id: r.label for r in ctx.cfg.backlog_roles
-                   if r.id in ctx.role_ids},
-        "role_order": ",".join(ROLE_PREFIX + r for r in ctx.role_ids),
-        "at_start": group("at_start", lambda t: t["in_sprint_at_start"],
-                          "placed_by"),
-        "added": group("added", lambda t: t["placed_by"] is not None
-                       and not t["in_sprint_at_start"], "placed_by"),
-        "removed": group("removed", lambda t: t["removed_by"] is not None,
-                         "removed_by"),
-    }
+    def counted(self, t: Optional[datetime]) -> List[History]:
+        return [self.hist[i] for i in sorted(self.hist)
+                if level_of(self.hist[i], self.data["levels"], self.hist, t) == self.count]
+
+    def kids(self, h: History, t: Optional[datetime]) -> List[History]:
+        """Child items whose parent at `t` is `h` (stories level only)."""
+        if self.count != "stories":
+            return []
+        kids = (self.hist[c] for c in sorted(self.children.get(h.id, ())))
+        return [k for k in kids if (_row(k, t) or {}).get("parent") == h.id]
+
+    def sprints(self, until: Optional[datetime]) -> List[dict]:
+        def seen(h):
+            return [r for r, ts in zip(h.rows, h.times) if until is None or ts <= until]
+
+        paths = set()
+        for h in self.counted(until):
+            if any((r["assigned"] or "").lower() in self.emails
+                   for x in [h] + self.kids(h, until) for r in seen(x)):
+                paths |= {r["iteration"] for r in seen(h)}
+        return sorted((dict(s) for p, s in self.sprint_at.items() if p in paths), key=_key)
+
+    def instants(self, sprint: dict):
+        start, end = date.fromisoformat(sprint["start"]), date.fromisoformat(sprint["end"])
+        return day_start(start, self.tz), day_end(start, self.tz), day_end(end, self.tz)
+
+    @staticmethod
+    def _assigned(h: History, t0, t1, emails: set) -> bool:
+        if any(a.lower() in emails for a in h.assignees_active(t1)):
+            return True
+        if h.first_active is not None and h.first_active <= t1:
+            return False
+        rows = [h.at(t0), h.at(t1)]
+        return any(r and r["assigned"] and r["assigned"].lower() in emails for r in rows)
+
+    def ours(self, h: History, t0, t1, emails: Optional[set] = None) -> bool:
+        """Ours: one of `emails` (default: the team's) was the assignee while the item was active
+        up to t1; an item never active by t1 counts by its assignee at t0 or t1. At the stories
+        level the same test on a child item also makes the item ours."""
+        emails = self.emails if emails is None else emails
+        return any(self._assigned(x, t0, t1, emails) for x in [h] + self.kids(h, t1))
+
+    def local(self, t) -> date:
+        return t.astimezone(self.tz).date()
+
+    def cycle_days(self, h: History) -> Optional[int]:
+        fa, done = h.first_active, h.done_at
+        if fa is None or done is None or fa > done:
+            return None
+        return (self.local(done) - self.local(fa)).days + 1
+
+    def figures(self, sprint: dict) -> Dict[str, list]:
+        path = sprint["path"]
+        s0, t0, t1 = self.instants(sprint)
+        f = {k: [] for k in ("planned", "delivered_planned", "added", "removed", "delivered",
+                             "late", "reopened", "carry", "open")}
+        for h in self.counted(t1):
+            done, row0, row1 = h.done_at, h.at(t0), h.at(t1)
+            on_path0 = row0 is not None and row0["iteration"] == path
+            planned = on_path0 and row0["category"] not in CLOSED and not (done and done <= t0)
+            added = not on_path0 and any(t0 < ts < t1 and r["iteration"] == path
+                                         for r, ts in zip(h.rows, h.times))
+            delivered = done is not None and s0 <= done < t1
+            reopened = done is not None and any(
+                s0 <= ts < t1 and ts > done and r["category"] in ACTIVE
+                and h.rows[i - 1]["category"] not in ACTIVE
+                for i, (r, ts) in enumerate(zip(h.rows, h.times)) if i)
+            if not (planned or added or delivered or reopened) or not self.ours(h, t0, t1):
+                continue
+            for key, hit in (("planned", planned), ("added", added), ("delivered", delivered),
+                             ("reopened", reopened)):
+                if hit:
+                    f[key].append(h.id)
+            if not planned:
+                continue
+            if done is not None and done < t1:
+                f["delivered_planned"].append(h.id)
+                continue
+            f["open"].append(h.id)
+            if done is not None:
+                f["late"].append(h.id)
+            # Carry-over: still open on this sprint or on a later sprint at the end. Removed: cut,
+            # or moved to a path that is not a later sprint (backlog, area root, release).
+            later = self.sprint_at.get(row1["iteration"])
+            moved = row1["iteration"] != path and not (later and later["start"] > sprint["start"])
+            if moved or h.cut(row1):
+                f["removed"].append(h.id)
+            elif row1["category"] not in CLOSED:
+                f["carry"].append(h.id)
+        return f
+
+    def parent_title(self, h: History, t1) -> str:
+        parent = h.at(t1)["parent"]
+        if parent is None:
+            return "Other"
+        title = self.data.get("parents", {}).get(str(parent))
+        if title is None and parent in self.hist:
+            title = self.hist[parent].title
+        return title or "Parent %s" % parent
+
+    def waiting_share(self, ids: List[int]) -> Optional[float]:
+        waited = total = 0.0
+        for i in ids:
+            h = self.hist[i]
+            if self.cycle_days(h) is None:
+                continue
+            waited += h.waiting_seconds(h.first_active, h.done_at, self.cfg.waiting_states)
+            total += (h.done_at - h.first_active).total_seconds()
+        return waited / total if total else None
+
+    def members(self, people: List[Person], team: str, sprints: List[dict], sprint: dict,
+                days_off: Dict[str, Dict[date, float]]) -> List[dict]:
+        """Team members with working days in the sprint, ordered by name, with their capacity."""
+        start, end = date.fromisoformat(sprint["start"]), date.fromisoformat(sprint["end"])
+        found = []
+        for p in sorted(people, key=lambda p: p.name):
+            days = _working_days(p, start, end) if p.team.lower() == team.lower() else []
+            if days:
+                off = sum(days_off.get(p.name, {}).get(d, 0.0) for d in days)
+                found.append({"person": p, "nominal": len(days) * p.allocation,
+                              "available": (len(days) - off) * p.allocation,
+                              "onboarding": is_onboarding(p, sprints, sprint,
+                                                          self.cfg.onboarding_sprints)})
+        return found
+
+    def mine(self, h: History, emails: set, t1) -> bool:
+        """Assignee while active up to t1, or of a child whose parent at t1 is `h`."""
+        return any(a.lower() in emails for x in [h] + self.kids(h, t1)
+                   for a in x.assignees_active(t1))
+
+    def active_during(self, h: History, s0, t1) -> bool:
+        return any(r is not None and r["category"] in ACTIVE
+                   for x in [h] + self.kids(h, t1)
+                   for r in [x.at(s0)] + [r for r, ts in zip(x.rows, x.times) if s0 <= ts <= t1])
+
+    def open_age(self, h: History, t1, end: date) -> Optional[int]:
+        row, fa = h.at(t1), h.first_active
+        if row is None or row["category"] in CLOSED or fa is None or fa > t1:
+            return None
+        return (end - self.local(fa)).days + 1
+
+    def assigned_any(self, emails: set, s0, t1) -> bool:
+        """Any revision in [s0, t1] assigned to `emails`, or an open item assigned to them at s0."""
+        for h in self.hist.values():
+            row = h.at(s0)
+            if row is not None and row["category"] not in CLOSED \
+                    and (row["assigned"] or "").lower() in emails:
+                return True
+            if any(s0 <= ts <= t1 and (r["assigned"] or "").lower() in emails
+                   for r, ts in zip(h.rows, h.times)):
+                return True
+        return False
+
+    def person(self, m: dict, f: dict, counted: List[History], sprint: dict) -> dict:
+        p, (s0, _, t1) = m["person"], self.instants(sprint)
+        end, emails = date.fromisoformat(sprint["end"]), {e.lower() for e in p.emails}
+        mine = [h for h in counted if self.mine(h, emails, t1)]
+        delivered = [h.id for h in mine if h.id in f["delivered"]]
+        ages = [(self.open_age(h, t1, end), h.id) for h in mine]
+        oldest = max(((a, -i) for a, i in ages if a is not None), default=None)
+        return {"name": p.name, "available": m["available"], "nominal": m["nominal"],
+                "delivered": delivered,
+                "in_progress": [h.id for h in mine if h.at(t1)["category"] in ACTIVE],
+                "oldest": [-oldest[1], oldest[0]] if oldest else None,
+                "median": percentile([c for c in (self.cycle_days(self.hist[i]) for i in delivered)
+                                      if c is not None], 0.5),
+                "items": [h.id for h in mine if h.id in delivered or self.active_during(h, s0, t1)],
+                "onboarding": m["onboarding"],
+                "no_assignment": not self.assigned_any(emails, s0, t1)}
+
+    def since(self, h: History, t1, waiting: bool) -> Optional[date]:
+        """Local date the item last entered a waiting state (or Blocked), or last changed
+        (counting changes to its children at the stories level)."""
+        rows = [(r, ts) for r, ts in zip(h.rows, h.times) if ts <= t1]
+        if not waiting:
+            return self.local(max(ts for x in [h] + self.kids(h, t1) for ts in x.times
+                                  if ts <= t1))
+        start = None
+        for r, ts in reversed(rows):
+            if not is_waiting(r, self.cfg.waiting_states):
+                break
+            start = ts
+        return self.local(start) if start is not None else None
+
+    def rest(self, members: List[dict], counted: List[History], sprint: dict) -> Optional[dict]:
+        """Delivered items at the team's level under members' main areas that are not ours."""
+        s0, t0, t1 = self.instants(sprint)
+        areas = set()
+        for m in members:
+            emails = {e.lower() for e in m["person"].emails}
+            seen = {}  # type: Dict[str, int]
+            for h in self.hist.values():
+                for r, ts in zip(h.rows, h.times):
+                    if ts <= t1 and (r["assigned"] or "").lower() in emails:
+                        seen[r["area"]] = seen.get(r["area"], 0) + 1
+            if seen:
+                areas.add(min(seen.items(), key=lambda kv: (-kv[1], kv[0]))[0])
+        ids = [h.id for h in counted if h.at(t1)["area"] in areas and h.done_at is not None
+               and s0 <= h.done_at < t1 and not self.ours(h, t0, t1)]
+        if not ids:
+            return None
+        cycles = [c for c in (self.cycle_days(self.hist[i]) for i in ids) if c is not None]
+        def workers(h):  # engineers on the children (stories level), else the item's assignees
+            kids = {a.lower() for k in self.kids(h, t1) for a in k.assignees_active(t1)}
+            return kids or {a.lower() for a in h.assignees_active(t1)}
+
+        return {"assignees": len({a for i in ids for a in workers(self.hist[i])}),
+                "delivered": len(ids), "median": percentile(cycles, 0.5),
+                "p85": percentile(cycles, P85), "waiting_share": self.waiting_share(ids)}
+
+    def unknown(self, people: List[Person], counted: List[History], sprint: dict) -> List[tuple]:
+        """(id, email) for assignees on the sprint path in a roster domain but not on the roster,
+        on the team's counted items and their children."""
+        s0, _, t1 = self.instants(sprint)
+        roster = {e.lower() for p in people for e in p.emails}
+        domains = {e.split("@")[-1] for e in roster}
+        found = set()
+        for h in {x.id: x for c in counted for x in [c] + self.kids(c, t1)}.values():
+            rows = [h.at(s0)] + [r for r, ts in zip(h.rows, h.times) if s0 < ts <= t1]
+            for r in rows:
+                email = ((r or {}).get("assigned") or "").lower()
+                if r and r["iteration"] == sprint["path"] and email not in roster \
+                        and email.split("@")[-1] in domains:
+                    found.add((h.id, email))
+        return sorted(found)
 
 
-def _flow_figures(ctx: _Ctx, L: _Ledger, recs: List[_Rec], tickets) -> Dict:
-    worked = [r for r in recs if r.inv == "worked"]
-    waiting = [r for r in worked if r.out == "awaiting_acceptance"]
-    events = [{"ticket": r.id, "rev": e.rev} for r in worked
-              for e in _since_vendor(ctx, r.tl)[1]
-              if e.is_return and ctx.in_period(e)]
-    delivered = [r for r in worked if r.out == "delivered"]
-    elapsed = {}
-    for r in delivered:
-        a, z = _first_doing(r.tl), _delivered_at(r.tl, ctx.sprint.end)
-        if a is not None and z is not None and a < z:
-            elapsed[r.id] = ctx.cal.working_days(a, z)
-    split: Dict[str, float] = {}
-    for r in worked:
-        for k, v in time_split(r.tl, ctx.sprint.start, ctx.sprint.end,
-                               ctx.cal, ctx.team, ctx.roster).items():
-            split[k] = split.get(k, 0.0) + v
-    split = {k: display_days(v) for k, v in sorted(split.items())
-             if display_days(v) > 0}
-    L["figures.time_split"] = [r.id for r in worked]
-    for k in split:
-        L["figures.time_split." + k] = [r.id for r in worked]
-    L["figures.awaiting_acceptance.longest_wait_days"] = [r.id for r in
-                                                          waiting]
-    L["figures.median_days_with_vendor"] = [r.id for r in delivered]
-    L["figures.median_elapsed_days"] = sorted(elapsed)
-    return {
-        "awaiting_acceptance": {
-            "count": L.count("figures.awaiting_acceptance.count",
-                             [r.id for r in waiting]),
-            "longest_wait_days": _round(max(
-                (_days_waiting(ctx, r) for r in waiting), default=None))},
-        "returns": {
-            "events": L.count("figures.returns.events", events),
-            "tickets": L.count("figures.returns.tickets",
-                               sorted({e["ticket"] for e in events})),
-            "handed_off": L.count("figures.returns.handed_off", [
-                r.id for r in worked
-                if tickets[str(r.id)]["handed_off_in_sprint"]])},
-        "median_days_with_vendor": _median(
-            [sum(r.workers.values()) for r in delivered]),
-        "median_elapsed_days": _median(list(elapsed.values())),
-        "time_split": split,
-    }
+ASK = {"old": "Ask what is blocking it.",
+       "agreed": "Confirm with the PO and record it in notes.txt.",
+       "waiting": "Raise it with the PO.",
+       "stale": "Ask whether it is moving and the board is behind, or it is stuck.",
+       "none": "Find out what they worked on; if it was off-board work, add it to notes.txt.",
+       "nothing": "Ask what is blocking them.",
+       "wip": "Ask which item to finish first.",
+       "reopened": "Ask why it was reopened.",
+       "hygiene": "Fix the board or add the email to team.csv.",
+       "never_active": "Ask them to move items through Active on the board.",
+       "shared": "Check that both teams should count it."}
+_LEVELS = ("red", "amber", "grey")
 
 
-def _received_figures(ctx: _Ctx, L: _Ledger, recs: List[_Rec],
-                      tickets) -> Dict:
-    lo, hi = ctx.sprint.period_start, ctx.sprint.end
-    got = []
-    for r in recs:
-        at = tickets[str(r.id)]["received"]["received_at"]
-        if at is not None and lo <= _dt_in(at) < hi:
-            got.append((r.id, tickets[str(r.id)]["received"]))
-    pick = {"no_criteria": lambda x: x["no_criteria"],
-            "text_changed": lambda x: x["text_changes_after"] > 0,
-            "added_mid_sprint": lambda x: x["added_mid_sprint"],
-            "assigned_late": lambda x: x["assigned_late"]}
-    out = {"received": L.count("figures.received.received",
-                               [i for i, _ in got])}
-    for k, f in pick.items():
-        out[k] = L.count("figures.received." + k, [i for i, x in got if f(x)])
-    return out
+def _plural(n: int, word: str) -> str:
+    return "%d %s%s" % (n, word, "" if n == 1 else "s")
 
 
-# ---- people ----------------------------------------------------------------
-
-def _own_doing_days(ctx: _Ctx, tl: Timeline, actor: str) -> float:
-    return sum(ctx.cal.working_days(i.start, min(i.end, ctx.sprint.end))
-               for i in tl.intervals
-               if i.phase == Phase.DOING and i.holder == actor
-               and i.start < ctx.sprint.end)
+def _ids(ids) -> str:
+    return ", ".join("#%d" % i for i in ids)
 
 
-def _elsewhere(ctx: _Ctx, actor: str, recs: List[_Rec],
-               every: Dict[int, Timeline]) -> Tuple[List[int], List[int]]:
-    """Tickets outside the team's own records that the person delivered or
-    handed off in this sprint: (delivered ids, handed-off ids)."""
-    own = {r.id for r in recs}
-    need = float(ctx.cfg.thresholds["worked_min_days"])
-    delivered, handed = [], []
-    for tid, tl in sorted(every.items()):
-        if tid in own:
+def _attention(t: _Team, f: dict, carry: List[dict], people: List[dict], waits: Dict[int, tuple],
+               stale: Dict[int, tuple], unknown: List[tuple], p85: Optional[int],
+               open_ages: Dict[int, int], shared: Dict[int, List[str]]) -> List[dict]:
+    """DM flags at sprint end, ordered red, amber, grey; then by item id, person name, text."""
+    found = []
+
+    def add(level, ask, text, item=None, name=""):
+        found.append((_LEVELS.index(level), item is None, item or 0, name, text,
+                      {"level": level, "text": text, "ask": ASK[ask]}))
+
+    def old(age):
+        return p85 is not None and age is not None and age > p85
+
+    red_carry = set()
+    for c in carry:
+        if old(c["age"]) and c["sprints"] >= CARRIED_FLAG:
+            red_carry.add(c["id"])
+            add("red", "old", "#%d has been carried over for %d sprints and is %d days old, older "
+                "than the squad's P85 of %d days." % (c["id"], c["sprints"], c["age"], p85), c["id"])
+        elif c["sprints"] >= CARRIED_FLAG:
+            add("amber", "old", "#%d has been carried over for %d sprints."
+                % (c["id"], c["sprints"]), c["id"])
+        if c["agreed"] != "agreed":
+            if c["agreed"] == "not agreed":
+                why = "and was not agreed with the PO"
+            else:
+                why = "and whether the PO agreed is unknown" if c["reason"] \
+                    else "with no note in notes.txt"
+            add("amber", "agreed", "#%d was carried over %s." % (c["id"], why), c["id"])
+    for i, age in sorted(open_ages.items()):
+        if old(age) and i not in red_carry:
+            add("amber", "old", "#%d is %d days old, older than the squad's P85 of %d days."
+                % (i, age, p85), i)
+    for i, (what, days) in sorted(waits.items()):
+        if days > WAIT_FLAG_DAYS:
+            add("amber", "waiting", "#%d has waited %s for %d working days." % (i, what, days), i)
+    for i, (state, days) in sorted(stale.items()):
+        if days >= STALE_DAYS:
+            add("amber", "stale", "#%d is %s with no board change for %d working days."
+                % (i, state, days), i)
+    for p in people:
+        expected_to_deliver = not p["onboarding"] and p["available"] > 0
+        if expected_to_deliver and p["no_assignment"]:
+            add("red", "none", "%s had %g available days but no item assigned during the sprint."
+                % (p["name"], p["available"]), name=p["name"])
+        elif expected_to_deliver and not p["delivered"]:
+            add("amber", "nothing", "%s had %g available days and delivered nothing."
+                % (p["name"], p["available"]), name=p["name"])
+        if len(p["in_progress"]) > WIP_FLAG:
+            add("amber", "wip", "%s has %s in progress: %s." % (
+                p["name"], _plural(len(p["in_progress"]), "item"), _ids(p["in_progress"])),
+                name=p["name"])
+    for i in f["delivered"]:
+        fa, done = t.hist[i].first_active, t.hist[i].done_at
+        if fa is None or fa > done:
+            add("grey", "never_active", "#%d was closed without ever being in progress." % i, i)
+    for i in f["reopened"]:
+        add("grey", "reopened", "#%d was reopened." % i, i)
+    for i, email in unknown:
+        add("grey", "hygiene", "#%d is assigned to %s, which is not in team.csv." % (i, email), i)
+    for i, names in sorted(shared.items()):
+        add("grey", "shared", "#%d is counted for teams %s and %s." % (
+            i, ", ".join(names[:-1]), names[-1]), i)
+    return [entry[-1] for entry in sorted(found, key=lambda e: e[:-1])]
+
+
+def _status(f: dict, carry: List[dict], p85: Optional[int], waits: Dict[int, tuple],
+            manual: Optional[tuple]) -> dict:
+    """GREEN/AMBER/RED by the share of planned work delivered and old unagreed carry-overs."""
+    if manual is not None:
+        return {"colour": manual[0], "reason": manual[1], "manual": True}
+    denom = len(f["planned"]) - len(f["removed"])
+    removed = (", not counting %s" % _plural(len(f["removed"]), "removed item")
+               if f["removed"] else "")
+    if denom:
+        share = len(f["delivered_planned"]) / denom
+        parts = ["%d%% of planned work items delivered%s"
+                 % (math.floor(share * 100), removed)]
+    else:
+        share = 1.0
+        parts = ["All planned work items were removed from the sprint" if f["removed"]
+                 else "There were no planned work items"]
+    if p85 is None:  # no age to judge: the agreement test applies to every carry-over
+        parts.append("too few finished work items in the last %d sprints to judge age" % TREND)
+        old, kind = [c["id"] for c in carry], "carry-over"
+    else:
+        old = [c["id"] for c in carry if c["age"] is not None and c["age"] > p85]
+        kind = "old carry-over"
+    bad = [c["id"] for c in carry if c["id"] in old and c["agreed"] != "agreed"]
+    many = len(old) > 1
+    if not old:
+        if p85 is not None:
+            parts.append("no carry-over is older than the squad's P85")
+    elif not bad:
+        parts.append("the %s %s%s (%s) %s agreed with the PO" % (
+            len(old) if many else "one", kind, "s" if many else "", _ids(old),
+            "were" if many else "was"))
+    elif len(bad) == len(old):
+        parts.append("the %s %s%s (%s) %s not recorded as agreed with the PO" % (
+            len(old) if many else "one", kind, "s" if many else "", _ids(old),
+            "are" if many else "is"))
+    else:
+        parts.append("%d of %d %ss (%s) %s not recorded as agreed with the PO" % (
+            len(bad), len(old), kind, _ids(bad), "are" if len(bad) > 1 else "is"))
+    long_waits = [(i, d) for i, (_, d) in sorted(waits.items()) if d > WAIT_RED_DAYS]
+    parts += ["#%d has been waiting (in a waiting state or blocked) for %d working days" % w
+              for w in long_waits]
+    met = (share >= GREEN_SHARE) + (not bad)
+    colour = "RED" if long_waits or met == 0 else ("GREEN" if met == 2 else "AMBER")
+    return {"colour": colour, "reason": "; ".join(parts) + ".", "manual": False}
+
+
+def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint: dict,
+                notes: Notes, days_off: Dict[str, Dict[date, float]]) -> dict:
+    t = _Team(data, cfg, people, team)
+    _, t0, t1 = t.instants(sprint)
+    sprints = t.sprints(t1)
+    upto = [s for s in _with(sprints, sprint) if _key(s) <= _key(sprint)]
+    figs = {s["path"]: t.figures(s) for s in upto}
+    f = figs[sprint["path"]]
+    end = date.fromisoformat(sprint["end"])
+
+    def cycles(ids):
+        return [c for c in (t.cycle_days(t.hist[i]) for i in ids) if c is not None]
+
+    carry = []
+    for i in f["carry"]:
+        h, row = t.hist[i], t.hist[i].at(t1)
+        fa = h.first_active
+        agreed, reason = notes.items.get(i, ("unknown", ""))
+        carry.append({"id": i, "title": row["title"],
+                      "age": (end - t.local(fa)).days + 1 if fa is not None and fa <= t1 else None,
+                      "sprints": sum(1 for g in figs.values() if i in g["open"]),
+                      "state": row["state"], "waiting": row["state"] in cfg.waiting_states,
+                      "agreed": agreed, "reason": reason})
+    groups = {}  # type: Dict[str, int]
+    for i in sorted(set(f["delivered"]) | set(f["carry"])):
+        title = t.parent_title(t.hist[i], t1)
+        groups[title] = groups.get(title, 0) + 1
+    window = upto[-TREND:]
+    window_ids = sorted({i for s in window for i in figs[s["path"]]["delivered"]})
+    cycle_window = _stats(cycles(window_ids))
+    counted = t.counted(t1)
+    members = t.members(people, team, sprints, sprint, days_off)
+    persons = [t.person(m, f, counted, sprint) for m in members]
+    others = {o: _emails(people, o) for o in sorted({p.team for p in people if p.team})
+              if o.lower() != team.lower() and count_of(cfg, o) == t.count}
+    shared = {}  # type: Dict[int, List[str]]
+    for i in sorted(set(f["planned"] + f["added"] + f["delivered"] + f["reopened"])):
+        also = [o for o, emails in others.items() if t.ours(t.hist[i], t0, t1, emails)]
+        if also:
+            shared[i] = sorted(also + [team.upper()])
+    open_ages, waits, stale = {}, {}, {}  # type: Dict[int, int], Dict[int, tuple], Dict[int, tuple]
+    for h in counted:
+        if h.id not in f["carry"] and not t.mine(h, t.emails, t1):
             continue
-        days = _own_doing_days(ctx, tl, actor)
-        if days > 0 and days >= need and \
-                outcome(tl, ctx.sprint, ctx.earlier) == "delivered":
-            delivered.append(tid)
-        if any(e.to_handoff and ctx.in_period(e)
-               and e.holder_before == actor for e in tl.events):
-            handed.append(tid)
-    return delivered, handed
-
-
-def _person(ctx: _Ctx, L: _Ledger, pid: str, recs: List[_Rec],
-            tickets, capacity: Dict[str, float],
-            every: Dict[int, Timeline]) -> Dict[str, Any]:
-    """recs: the team's own tickets. every: all collected timelines; the
-    person's days, concurrency, pickup and board changes are measured over
-    every ticket they held, whatever its area or owning team."""
-    actor, key = "p:" + pid, "people." + pid
-    obs = person_observations(pid, ctx.team, ctx.sprint, every, ctx.cal,
-                              ctx.roster, ctx.cfg, ctx.team_sprints)
-    for k in ("available", "nominal"):
-        capacity[k] += obs[k + "_days"]
-    for k in _PERSON_DURATIONS:
-        obs[k] = _round(obs[k])
-    L[key + ".allocation"] = [a.start.isoformat() for a in
-                              ctx.roster.person(pid).assignments
-                              if a.team == ctx.team]
-    held_any = [tid for tid, tl in sorted(every.items())
-                if any(i.holder == actor for i in tl.intervals)]
-    for k in ("available_days", "nominal_days", "days_nothing_in_progress",
-              "concurrency_avg", "concurrency_max", "todo_assigned_max",
-              "pickup_median", "joiner_days_to_first_delivery"):
-        L[key + "." + k] = held_any
-    L[key + ".board_change_days"] = sorted({
-        ctx.cal.local_date(rv.changed).isoformat() for tl in every.values()
-        for rv in tl.revisions if rv.by == actor
-        and ctx.sprint.period_start <= rv.changed < ctx.sprint.end})
-
-    delivered = [r for r in recs if r.out == "delivered"
-                 and r.inv == "worked" and pid in r.workers]
-    d_else, h_else = _elsewhere(ctx, actor, recs, every)
-    ends_with = [r for r in recs if r.holder == actor]
-    prog = [r for r in ends_with
-            if r.out in ("carried_in_progress", "active_outside_sprint")]
-    carried = [r for r in ends_with if r.out in _CARRIED]
-    back, rets = [], []
-    for r in recs:
-        for e in r.tl.events:
-            if e.backward and ctx.in_period(e) and \
-                    _attributed(ctx, r.tl, e) == pid:
-                back.append({"ticket": r.id, "rev": e.rev})
-                if e.is_return:
-                    rets.append({"ticket": r.id, "rev": e.rev})
-    oldest = [ctx.cal.working_days(_first_doing(r.tl), ctx.sprint.end)
-              for r in prog if _first_doing(r.tl) is not None]
-    L[key + ".in_progress.oldest_days"] = [r.id for r in prog]
-    L[key + ".carried.longest_sprints"] = [r.id for r in carried]
-    L[key + ".median_days_in_progress"] = [r.id for r in delivered]
-    obs.update({
-        "delivered_worked_on": L.count(key + ".delivered_worked_on",
-                                       [r.id for r in delivered]),
-        "handed_off": L.count(key + ".handed_off", [
-            r.id for r in recs if actor in _handed_off_by(ctx, r)]),
-        "delivered_elsewhere": L.count(key + ".delivered_elsewhere", d_else),
-        "handed_off_elsewhere": L.count(key + ".handed_off_elsewhere",
-                                        h_else),
-        "in_progress": {
-            "count": L.count(key + ".in_progress.count",
-                             [r.id for r in prog]),
-            "oldest_days": _round(max(oldest, default=None))},
-        "carried": {
-            "count": L.count(key + ".carried.count", [r.id for r in carried]),
-            "longest_sprints": max((tickets[str(r.id)]["sprints_carried"]
-                                    for r in carried), default=0)},
-        "backward_moves": L.count(key + ".backward_moves", back),
-        "returns": L.count(key + ".returns", rets),
-        "median_days_in_progress": _median([r.workers[pid]
-                                            for r in delivered]),
-    })
-    return obs
-
-
-# ---- entry points ----------------------------------------------------------
-
-def squad_delivered(snap: Snapshot, cfg: Config, team: str,
-                    sprint: Sprint) -> List[int]:
-    """Tickets of the team's area delivered in the sprint, whoever held
-    them. A vendor ticket the squad file lacks (it left the area after the
-    sprint, so the area query no longer finds it) is taken from the vendor
-    file: the vendor's delivered tickets are always among the squad's."""
-    ctx = _Ctx(snap, cfg, Roster([]), team, sprint)
-    out = []
-    have = {t.id for t in snap.squad}
-    for t in list(snap.squad) + [t for t in snap.tickets
-                                 if t.id not in have]:
-        if ctx.owner(t) != team or not ctx.counted_type(t):
+        row, age = h.at(t1), t.open_age(h, t1, end)
+        if row["category"] in CLOSED:
             continue
-        tl = ctx.timeline(t, set())
-        if outcome(tl, sprint, ctx.earlier) == "delivered":
-            out.append(t.id)
-    return out
-
-
-def analyze_team_sprint(snap: Snapshot, cfg: Config, roster: Roster,
-                        team: str, sprint: Sprint,
-                        roles: Optional[Dict[str, str]] = None
-                        ) -> Tuple[Dict, Dict]:
-    """roles: pseudonym -> backlog role id (ado.pseudonym.role_map)."""
-    ctx = _Ctx(snap, cfg, roster, team, sprint, roles)
-    recs, every = _collect(ctx)
-    tickets = {str(r.id): _ticket_record(ctx, r, received_state(
-        r.ticket, r.tl, sprint, ctx.cal, team, roster, cfg)) for r in recs}
-    mine = [r for r in recs if not r.outside]
-    L = _Ledger()
-    figures = _outcome_figures(L, mine, tickets)
-    figures.update(_flow_figures(ctx, L, mine, tickets))
-    figures["scope"] = _scope_figures(ctx, L, mine, tickets)
-    figures["received"] = _received_figures(ctx, L, mine, tickets)
-    squad = squad_delivered(snap, cfg, team, sprint)
-    figures["squad_delivered"] = L.count("figures.squad_delivered", squad)
-
-    first = ctx.cal.local_date(sprint.start)
-    last = ctx.cal.local_date(ctx.last)
-    capacity = {"available": 0.0, "nominal": 0.0}
-    people = {p.id: _person(ctx, L, p.id, mine, tickets, capacity, every)
-              for p in roster.people_on(team, first, last)}
-    figures["capacity"] = {k: display_days(v) for k, v in capacity.items()}
-    for k in capacity:
-        L["figures.capacity." + k] = sorted(people)
-
-    warnings = []
-    extra = sorted(set(L["figures.delivered"]) - set(squad))
-    if extra:
-        warnings.append("vendor delivered is not a subset of squad "
-                        "delivered: %s" % extra)
-    cov = snap.meta.get("coverage") or {}
-    metrics = {
-        "schema": SCHEMA, "rules_version": RULES_VERSION, "team": team,
-        "sprint": {"id": sprint.id, "name": sprint.name,
-                   "start": first.isoformat(), "finish": last.isoformat()},
-        "cutoff": ctx.cutoff.isoformat(), "backfilled": False,
-        "collected_as": snap.meta.get("account"),
-        "figures": figures, "people": people,
-        "tickets": tickets,
-        "coverage": {"missing": list(cov.get("missing", [])),
-                     "unreadable": list(cov.get("unreadable", [])),
-                     "malformed": list(cov.get("malformed", [])),
-                     "alarm": bool(snap.meta.get("coverage_alarm"))},
-        "warnings": warnings,
+        if age is not None:
+            open_ages[h.id] = age
+        if is_waiting(row, cfg.waiting_states):
+            what = "in %s" % row["state"] if row["state"] in cfg.waiting_states \
+                else "with the Blocked tag"
+            waits[h.id] = (what, _workdays_after(t.since(h, t1, True), end))
+        elif row["category"] in ACTIVE:
+            stale[h.id] = (row["state"], _workdays_after(t.since(h, t1, False), end))
+    return {
+        "team": team, "count": t.count,
+        "sprint": {k: sprint[k] for k in ("name", "path", "start", "end")},
+        **{k: f[k] for k in ("planned", "delivered_planned", "added", "removed", "delivered",
+                             "late", "reopened")},
+        "cycle": _stats(cycles(f["delivered"])), "cycle_window": cycle_window,
+        "waiting_share": t.waiting_share(f["delivered"]),
+        "carry": carry,
+        "worked_on": [[k, v] for k, v in sorted(groups.items(), key=lambda kv: (-kv[1], kv[0]))],
+        "trend": [{"sprint": s["name"], "planned": len(figs[s["path"]]["planned"]),
+                   "delivered_planned": len(figs[s["path"]]["delivered_planned"]),
+                   "delivered": len(figs[s["path"]]["delivered"]),
+                   "p85": percentile(cycles(figs[s["path"]]["delivered"]), P85)} for s in window],
+        "capacity": {"engineers": len(members),
+                     "onboarding": sum(m["onboarding"] for m in members),
+                     "available": sum(m["available"] for m in members),
+                     "nominal": sum(m["nominal"] for m in members)},
+        "people": persons,
+        "rest": t.rest(members, counted, sprint),
+        "attention": _attention(t, f, carry, persons, waits, stale, t.unknown(people, counted, sprint),
+                                cycle_window["p85"], open_ages, shared),
+        "status": _status(f, carry, cycle_window["p85"], waits,
+                          _by_team(notes.status, team, None)),
+        "notes": {"summary": _by_team(notes.summary, team, ""), "note": _by_team(notes.note, team, ""),
+                  "exec_note": _by_team(notes.exec_note, team, "")},
     }
-    return metrics, dict(L)

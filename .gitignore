@@ -3,3 +3,5 @@ __pycache__/
 delivery-ledger-data/
 .DS_Store
 .superpowers/
+research/
+.delivery-skills/

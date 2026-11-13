@@ -1,46 +1,38 @@
-import contextlib
 import io
-import subprocess
-import tempfile
 import unittest
-from pathlib import Path
+from unittest import mock
 
-from ledger.cli import main
-
-REPO = Path(__file__).resolve().parent.parent
-
-
-def run_main(argv):
-    out, err = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        code = main(argv)
-    return code, out.getvalue(), err.getvalue()
+from ledger import cli
+from ledger.ado import AdoError
 
 
 class CliTest(unittest.TestCase):
-    def test_status_on_empty_home(self):
-        code, out, _ = run_main(["--home", tempfile.mkdtemp(), "status"])
-        self.assertEqual(code, 0)
-        self.assertIn("config.json: missing", out)
-        self.assertIn("roster.json: missing", out)
+    def test_cli_error_lines(self):
+        out = io.StringIO()
+        with mock.patch("ledger.setup.run_init", side_effect=AdoError("no token", "az login")):
+            code = cli.main(["init", "--query", "q", "--staff", "s", "--vacations", "v", "--yes"], out=out)
+        self.assertEqual(code, 1)
+        self.assertIn("error: no token", out.getvalue())
+        self.assertIn("next: az login", out.getvalue())
 
-    def test_status_json(self):
-        import json
-        code, out, _ = run_main(["--home", tempfile.mkdtemp(), "--json", "status"])
-        self.assertEqual(code, 0)
-        self.assertIn("summary", json.loads(out))
+    def test_value_error_has_no_next_line(self):
+        out = io.StringIO()
+        with mock.patch("ledger.setup.run_init", side_effect=ValueError("bad")):
+            code = cli.main(["--dir", "x", "init", "--query", "q", "--staff", "s", "--vacations", "v", "--yes"], out=out)
+        self.assertEqual((code, out.getvalue()), (1, "error: bad\n"))
 
-    def test_ledger_error_exit_code(self):
-        code, _, err = run_main(["--home", "/mnt/c/x", "status"])
-        self.assertEqual(code, 2)
-        self.assertIn("error:", err)
-        self.assertIn("next:", err)
+    def test_non_tty_accepts_suggestions_and_says_so(self):
+        out = io.StringIO()
+        seen = {}
 
-    def test_launcher_runs_from_other_cwd(self):
-        r = subprocess.run([str(REPO / "bin" / "ledger"), "--home", tempfile.mkdtemp(), "status"],
-                           cwd="/tmp", capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("config.json", r.stdout)
+        def fake(args, client, ask, o):
+            seen["answer"] = ask("Team?", "ALFA")
+            return 0
+        with mock.patch("ledger.setup.run_init", side_effect=fake), \
+                mock.patch("sys.stdin", io.StringIO("")):
+            code = cli.main(["init", "--query", "q", "--staff", "s", "--vacations", "v"], out=out)
+        self.assertEqual((code, seen["answer"]), (0, "ALFA"))
+        self.assertIn("suggestions were accepted", out.getvalue())
 
 
 if __name__ == "__main__":

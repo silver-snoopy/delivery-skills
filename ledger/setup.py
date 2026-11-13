@@ -96,7 +96,10 @@ def suggest(data: dict, staff: Dict[str, List[str]], known: List[Person],
     names = sorted(states)
     waiting = [s for s in names if states[s] in ("InProgress", "Resolved")
                and any(w in s.lower() for w in WAITING_WORDS)]
+    closures = {(r["id"], r["reason"]) for r in data["revisions"]
+                if r["category"] in ("Completed", "Removed")}
     return {"people": people, "teams": count_stats(data, members),
+            "reasons": Counter(reason for _, reason in closures),
             "states": [{"name": s, "category": states[s]} for s in names], "waiting": waiting}
 
 
@@ -258,6 +261,11 @@ def _summary(out, people, stats, cfg, sug, unmatched, warnings, paths) -> None:
     for s in sug["states"]:
         w("  %s%s: %s" % ("*" if s["name"] in cfg.waiting_states else " ", s["name"], s["category"]))
     w("Proposed waiting states: %s" % (", ".join(sug["waiting"]) or "none"))
+    w("Not-delivered reasons (config): %s" % ", ".join(cfg.not_delivered_reasons))
+    cut = {r.lower() for r in cfg.not_delivered_reasons}
+    reasons = ["%s%s (%d)" % ("*" if (r or "").lower() in cut else "", r or "(no reason)", n)
+               for r, n in sorted(sug["reasons"].items(), key=lambda kv: kv[0] or "")]
+    w("Closure reasons on the board (* = not delivered): %s" % (", ".join(reasons) or "none"))
     if unmatched:
         w("Calendar names not matched to staff.txt: %s" % ", ".join(unmatched))
     for line in warnings:

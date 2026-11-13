@@ -155,6 +155,15 @@ class InitTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             setup.run_init(a, object(), lambda p, d: d, io.StringIO())
 
+    def test_summary_lists_closure_reasons(self):
+        b = board()
+        b.item(950).at("2026-10-06 09:00", state="Active", assigned=MAYA) \
+            .at("2026-10-07 09:00", state="Closed", reason="Obsolete")
+        _, text = self.run_init(b.cache())
+        self.assertIn("Not-delivered reasons (config): Removed, Won't Fix", text)
+        self.assertIn("Closure reasons on the board (* = not delivered): (no reason) (1), "
+                      "*Obsolete (1)", text)
+
     def test_unmatched_calendar_name_answer_is_remembered(self):
         asked = []
         self.run_init(ask=lambda p, d: asked.append(p) or ("John Doe" if "Nobody X" in p else d))

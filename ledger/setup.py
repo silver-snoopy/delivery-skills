@@ -2,7 +2,7 @@
 import os
 from collections import Counter
 from datetime import date
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ledger.ado import AdoError, Client, az_defaults, cache_path, cached_ids, fetch, save_cache
 from ledger.config import (CONFIG_FILE, DEFAULT_NOT_DELIVERED, Config, Person, load_config, merge_staff,
@@ -37,6 +37,15 @@ def count_stats(data: dict, members: Dict[str, List[str]], hs: Optional[Dict[int
                 n[level] += 1
         out[team] = {"count": "tasks" if n["tasks"] > TASKS_FACTOR * n["stories"] else "stories", **n}
     return out
+
+
+def _team_emails(pairs: Iterable[Tuple[str, List[str]]]) -> Dict[str, List[str]]:
+    """Every email per team; entries without a team are skipped."""
+    members = {}  # type: Dict[str, List[str]]
+    for team, emails in pairs:
+        if team:
+            members.setdefault(team, []).extend(emails)
+    return members
 
 
 JOINED_MARGIN = 30  # a first activity this close to the window start says nothing about joining
@@ -86,10 +95,6 @@ def suggest(data: dict, staff: Dict[str, List[str]], known: List[Person],
         merged += [e for e in emails if e not in merged]
         people.append({"name": name, "emails": merged, "team": team, "joined": joined,
                        "items": len({r["id"] for r in mine[name]}), "area": area})
-    members = {}  # type: Dict[str, List[str]]
-    for p in people:
-        if p["team"]:
-            members.setdefault(p["team"], []).extend(p["emails"])
     states = {}  # type: Dict[str, str]
     for r in data["revisions"]:
         states.setdefault(r["state"], r["category"])
@@ -98,7 +103,7 @@ def suggest(data: dict, staff: Dict[str, List[str]], known: List[Person],
                and any(w in s.lower() for w in WAITING_WORDS)]
     closures = {(r["id"], r["reason"]) for r in data["revisions"]
                 if r["category"] in ("Completed", "Removed")}
-    return {"people": people, "teams": count_stats(data, members),
+    return {"people": people, "teams": count_stats(data, _team_emails((p["team"], p["emails"]) for p in people)),
             "reasons": Counter(reason for _, reason in closures),
             "states": [{"name": s, "category": states[s]} for s in names], "waiting": waiting}
 
@@ -215,12 +220,7 @@ def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out
         if k.name not in staff:
             k.left = k.left or today
             people.append(k)
-    active = [p for p in people if not p.left]
-    members = {}  # type: Dict[str, List[str]]
-    for p in active:
-        if p.team:
-            members.setdefault(p.team, []).extend(p.emails)
-    stats = count_stats(data, members)
+    stats = count_stats(data, _team_emails((p.team, p.emails) for p in people if not p.left))
     for team, st in stats.items():
         entry = cfg.teams.setdefault(team, {})
         if not entry.get("count"):

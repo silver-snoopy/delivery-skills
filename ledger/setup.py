@@ -4,14 +4,13 @@ from collections import Counter
 from datetime import date
 from typing import Callable, Dict, List, Optional
 
-from ledger.ado import ROW_KEYS, AdoError, Client, az_defaults, fetch, save_cache
+from ledger.ado import AdoError, Client, az_defaults, cache_path, check_rows, fetch, save_cache
 from ledger.config import (CONFIG_FILE, DEFAULT_NOT_DELIVERED, Config, Person, load_config, merge_staff,
                            parse_staff, read_team, save_config, write_team)
 from ledger.metrics import histories, level_of
 from ledger.replay import History, local_tz, parse_ts
 from ledger.xlsx import match_name, read_vacations
 
-CATEGORIES = ("Proposed", "InProgress", "Resolved", "Completed", "Removed")
 WAITING_WORDS = ("review", "qa", "test", "accept", "wait", "blocked", "verify", "uat")
 TASKS_FACTOR = 5
 TEAM_FILE = "team.csv"
@@ -95,17 +94,6 @@ def suggest(data: dict, staff: Dict[str, List[str]], known: List[Person],
             "states": [{"name": s, "category": states[s]} for s in names], "waiting": waiting}
 
 
-def check_rows(data: dict) -> None:
-    for r in data["revisions"]:
-        for key in ROW_KEYS:
-            if key not in r:
-                raise AdoError("the revisions lack the field '%s' (work item %s)" % (key, r.get("id")),
-                               "check that the Analytics view returns every field and run init again")
-        if r["category"] not in CATEGORIES:
-            raise AdoError("unknown state category '%s' (work item %s)" % (r["category"], r["id"]),
-                           "expected one of: %s" % ", ".join(CATEGORIES))
-
-
 def machine_timezone() -> str:
     if os.environ.get("TZ"):
         return os.environ["TZ"]
@@ -182,7 +170,8 @@ def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out
     team_path = os.path.join(d, TEAM_FILE)
     known = read_team(team_path) if os.path.exists(team_path) else []
     emails = sorted({e for es in staff.values() for e in es})
-    data = fetch(client, args.query, emails, today)
+    data = fetch(client, args.query, emails, today, cfg.history_days,
+                 lambda line: print("warning: %s" % line, file=out))
     check_rows(data)
     sug = suggest(data, staff, known, squads, tz)
     known_by = {p.name: p for p in known}
@@ -211,14 +200,15 @@ def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out
     for team, st in stats.items():
         entry = cfg.teams.setdefault(team, {})
         if not entry.get("count"):
-            prompt = ("Count stories or tasks? (%s: last 120 days, %d tasks, %d stories done)"
-                      % (team, st["tasks"], st["stories"]))
+            prompt = ("Count stories or tasks? (%s: last %d days, %d tasks, %d stories done)"
+                      % (team, cfg.history_days, st["tasks"], st["stories"]))
             entry["count"] = _ask_valid(ask, prompt, st["count"], _level)
     cfg.organization, cfg.project, cfg.query, cfg.timezone = org or "", project or "", args.query, tz
     cfg.staff, cfg.vacations = os.path.abspath(args.staff), os.path.abspath(args.vacations)
     if not cfg.waiting_states:
         cfg.waiting_states = sug["waiting"]
-    cache = save_cache(d, data)
+    save_cache(d, data)
+    cache = cache_path(d)
     write_team(team_path, people)
     save_config(d, cfg)
     _summary(out, people, stats, cfg, sug, unmatched, vac.warnings, [path, team_path, cache])

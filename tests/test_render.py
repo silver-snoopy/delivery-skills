@@ -239,6 +239,16 @@ class RunReportTest(unittest.TestCase):
         self.assertEqual(sorted(f.call_args[0][2]), sorted([MAYA, IVAN, IVAN2, LENA]))
         self.assertTrue(os.path.exists(os.path.join(self.d, CACHE_FILE)))
 
+    def test_online_fetch_merges_into_the_cache(self):
+        smaller = board().cache()
+        smaller["revisions"] = [r for r in smaller["revisions"] if r["id"] != 104]
+        with mock.patch("ledger.render.fetch", return_value=smaller) as f:
+            code, out = self.run_cli("report", "--today", "2026-11-13")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(f.call_args[0][4], 200)  # history_days default
+        with open(os.path.join(self.d, CACHE_FILE)) as fh:
+            self.assertIn(104, {r["id"] for r in json.load(fh)["revisions"]})
+
     def test_missing_config(self):
         out = io.StringIO()
         self.assertEqual(cli.main(["--dir", self.d + "x", "report"], out=out), 1)

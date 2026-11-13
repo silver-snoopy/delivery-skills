@@ -111,6 +111,7 @@ class Config:
     staff: str = ""
     vacations: str = ""
     name_aliases: Dict[str, str] = field(default_factory=dict)
+    history_days: int = 200
 
 
 def load_config(directory: str) -> Config:

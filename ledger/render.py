@@ -5,7 +5,7 @@ from datetime import date, datetime
 from html import escape
 from typing import Dict, List, Optional
 
-from ledger.ado import AdoError, Client, fetch, load_cache, save_cache
+from ledger.ado import Client, fetch, load_cache, save_cache
 from ledger.config import Notes, Person, email_index, load_config, parse_notes, read_team
 from ledger.metrics import (histories, CARRIED_FLAG, GREEN_SHARE, STALE_DAYS, TREND, WAIT_FLAG_DAYS,
                             WAIT_RED_DAYS, WIP_FLAG, team_sprint, team_sprints)
@@ -320,14 +320,11 @@ def _load(args, client, out):
         raise ValueError("team calendar not found: '%s'; set \"vacations\" in config.json"
                          % cfg.vacations)
     if args.offline:
-        try:
-            data = load_cache(d)
-        except FileNotFoundError as e:
-            raise AdoError(str(e).split(";")[0], "run without --offline")
+        data = load_cache(d)
     else:
-        data = fetch(client or Client(cfg.organization, cfg.project), cfg.query,
-                     sorted({e for p in people for e in p.emails}), today)
-        save_cache(d, data)
+        data = save_cache(d, fetch(client or Client(cfg.organization, cfg.project), cfg.query,
+                                   sorted({e for p in people for e in p.emails}), today,
+                                   cfg.history_days, lambda line: print("warning: %s" % line, file=out)))
     vac = read_vacations(cfg.vacations, cfg.half_day_codes)
     names = [p.name for p in people]
     days_off = {}  # type: Dict[str, Dict[date, float]]

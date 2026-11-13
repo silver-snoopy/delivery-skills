@@ -1,6 +1,6 @@
 """Sprint figures per team, replayed from the revision cache at fixed instants."""
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Sequence
 
 from ledger.config import Config, Notes, Person
@@ -36,15 +36,24 @@ def histories(data: dict, not_delivered: Sequence[str]) -> Dict[int, History]:
     return {i: History(rs, not_delivered) for i, rs in rows.items()}
 
 
-def level_of(h: History, levels, histories) -> Optional[str]:
-    """"stories" or "tasks"; a Bug not listed in a backlog follows its parent's level."""
-    for level in ("stories", "tasks"):
-        if h.type in levels.get(level, []):
-            return level
-    if h.type != "Bug":
+def _row(h: History, t: Optional[datetime]) -> Optional[dict]:
+    """The revision in force at `t`, or the last one when `t` is None."""
+    return h.rows[-1] if t is None else h.at(t)
+
+
+def level_of(h: History, levels, histories, at: Optional[datetime] = None) -> Optional[str]:
+    """"stories" or "tasks" at `at` (default: now); an unlisted Bug follows its parent's level."""
+    row = _row(h, at)
+    if row is None:
         return None
-    parent = histories.get(h.parent)
-    return "tasks" if parent is not None and parent.type in levels.get("stories", []) else "stories"
+    for level in ("stories", "tasks"):
+        if row["type"] in levels.get(level, []):
+            return level
+    if row["type"] != "Bug":
+        return None
+    parent = histories.get(row["parent"])
+    prow = _row(parent, at) if parent is not None else None
+    return "tasks" if prow is not None and prow["type"] in levels.get("stories", []) else "stories"
 
 
 def _by_team(mapping: dict, team: str, default):
@@ -59,15 +68,10 @@ def _key(sprint: dict):
     return sprint["start"], sprint["path"]
 
 
-def team_sprints(data: dict, people: List[Person], team: str) -> List[dict]:
-    """Dated iterations that hold at least one item a team member (or a child's assignee) had."""
-    emails = _emails(people, team)
-    revs = data["revisions"]
-    ids = {r["id"] for r in revs if (r["assigned"] or "").lower() in emails}
-    ids |= {r["parent"] for r in revs if r["id"] in ids and r["parent"] is not None}
-    paths = {r["iteration"] for r in revs if r["id"] in ids}
-    return sorted((dict(s) for s in data["iterations"]
-                   if s["path"] in paths and s.get("start") and s.get("end")), key=_key)
+def team_sprints(data: dict, cfg: Config, people: List[Person], team: str,
+                 until: Optional[datetime] = None) -> List[dict]:
+    """Dated iterations that held one of the team's counted items, from history up to `until`."""
+    return _Team(data, cfg, people, team).sprints(until)
 
 
 def _with(sprints: List[dict], sprint: dict) -> List[dict]:
@@ -112,9 +116,29 @@ class _Team:
                 self.children.setdefault(r["parent"], set()).add(r["id"])
         self.count = _by_team(cfg.teams, team, {}).get("count", "stories")
         self.emails = _emails(people, team)
-        self.items = sorted((h for h in self.hist.values()
-                             if level_of(h, data["levels"], self.hist) == self.count),
-                            key=lambda h: h.id)
+
+    def counted(self, t: Optional[datetime]) -> List[History]:
+        return [self.hist[i] for i in sorted(self.hist)
+                if level_of(self.hist[i], self.data["levels"], self.hist, t) == self.count]
+
+    def kids(self, h: History, t: Optional[datetime]) -> List[History]:
+        """Child items whose parent at `t` is `h` (stories level only)."""
+        if self.count != "stories":
+            return []
+        kids = (self.hist[c] for c in sorted(self.children.get(h.id, ())))
+        return [k for k in kids if (_row(k, t) or {}).get("parent") == h.id]
+
+    def sprints(self, until: Optional[datetime]) -> List[dict]:
+        def seen(h):
+            return [r for r, ts in zip(h.rows, h.times) if until is None or ts <= until]
+
+        paths = set()
+        for h in self.counted(until):
+            if any((r["assigned"] or "").lower() in self.emails
+                   for x in [h] + self.kids(h, until) for r in seen(x)):
+                paths |= {r["iteration"] for r in seen(h)}
+        return sorted((dict(s) for s in self.data["iterations"]
+                       if s["path"] in paths and s.get("start") and s.get("end")), key=_key)
 
     def instants(self, sprint: dict):
         start, end = date.fromisoformat(sprint["start"]), date.fromisoformat(sprint["end"])
@@ -132,8 +156,7 @@ class _Team:
         """Ruling D: assignee while active up to t1, else (never active) at t0 or t1; or a child."""
         if self._assigned(h, t0, t1):
             return True
-        return self.count == "stories" and any(
-            self._assigned(self.hist[c], t0, t1) for c in sorted(self.children.get(h.id, ())))
+        return any(self._assigned(k, t0, t1) for k in self.kids(h, t1))
 
     def local(self, t) -> date:
         return t.astimezone(self.tz).date()
@@ -149,7 +172,7 @@ class _Team:
         s0, t0, t1 = self.instants(sprint)
         f = {k: [] for k in ("planned", "delivered_planned", "added", "removed", "delivered",
                              "late", "reopened", "carry", "open")}
-        for h in self.items:
+        for h in self.counted(t1):
             done, row0, row1 = h.done_at, h.at(t0), h.at(t1)
             on_path0 = row0 is not None and row0["iteration"] == path
             planned = on_path0 and row0["category"] not in CLOSED and not (done and done <= t0)
@@ -174,7 +197,9 @@ class _Team:
             f["open"].append(h.id)
             if done is not None:
                 f["late"].append(h.id)
-            if row1["iteration"] != path or row1["category"] == "Removed":
+            cut = row1["category"] == "Removed" or (
+                row1["category"] == "Completed" and row1["reason"] in h.not_delivered)
+            if row1["iteration"] != path or cut:  # Rulings F and G
                 f["removed"].append(h.id)
             elif row1["category"] not in CLOSED:
                 f["carry"].append(h.id)
@@ -220,11 +245,11 @@ class _Team:
 def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint: dict,
                 notes: Notes, days_off: Dict[str, Dict[date, float]]) -> dict:
     t = _Team(data, cfg, people, team)
-    sprints = team_sprints(data, people, team)
+    t1 = t.instants(sprint)[2]
+    sprints = t.sprints(t1)
     upto = [s for s in _with(sprints, sprint) if _key(s) <= _key(sprint)]
     figs = {s["path"]: t.figures(s) for s in upto}
     f = figs[sprint["path"]]
-    t1 = t.instants(sprint)[2]
     end = date.fromisoformat(sprint["end"])
 
     def cycles(ids):

@@ -2,6 +2,7 @@ import unittest
 from datetime import date
 
 from ledger.config import Config, Notes, Person
+from ledger.replay import parse_ts
 from ledger.metrics import (histories, is_onboarding, level_of, percentile, team_sprint,
                             team_sprints)
 from tests.fixture import Board
@@ -177,32 +178,59 @@ class SprintFigureTests(unittest.TestCase):
         self.assertEqual(run(b, "BETA", "S29")["delivered"], [801])
         self.assertEqual(run(b, "ALFA", "S29")["delivered"], [802])
 
+    def test_cut_during_sprint_is_removed(self):
+        b = board()
+        b.item(901).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
+            .at("2026-11-03 10:00", state="Closed", reason="Cut")
+        t = run(b, "ALFA", "S29")
+        self.assertEqual((t["planned"], t["removed"], t["delivered_planned"], t["carry"]),
+                         ([901], [901], [], []))
+
     def test_team_sprints(self):
         b = board().sprint("S30", "2026-11-10", "2026-11-21")
         b.item(1).at("2026-10-13 09:00", iteration=S28, assigned=PO)
         b.item(2, "Task", parent=1).at("2026-10-13 09:00", iteration=S28, assigned=LENA)
         b.item(3).at("2026-10-27 09:00", iteration=S29, assigned=MAYA)
+        b.item(4).at("2026-10-13 09:00", iteration=S28, assigned=PO) \
+            .at("2026-11-12 09:00", assigned=MAYA)
         data = b.cache()
-        self.assertEqual([s["name"] for s in team_sprints(data, PEOPLE, "beta")], ["S28"])
-        self.assertEqual([s["name"] for s in team_sprints(data, PEOPLE, "ALFA")], ["S29"])
+        names = lambda team, until=None: [s["name"] for s in
+                                          team_sprints(data, config(), PEOPLE, team, until)]
+        self.assertEqual(names("beta"), ["S28"])
+        self.assertEqual(names("ALFA"), ["S28", "S29"])
+        self.assertEqual(names("ALFA", parse_ts("2026-11-08T00:00:00Z")), ["S29"])
 
     def test_rerun_is_identical(self):
         def build(later):
-            b = board()
-            b.item(1).at("2026-10-13 09:00", iteration=S28, assigned=MAYA, state="Active") \
-                .at("2026-10-26 09:00", iteration=S29).at("2026-11-03 09:00", state="Closed")
-            two = b.item(2).at("2026-10-13 09:00", iteration=S28, assigned=IVAN, state="Active")
-            b.item(3).at("2026-10-30 09:00", iteration=S29, assigned=IVAN, state="Active")
-            if later:
-                two.at("2026-11-01 09:00", iteration=S29, assigned=PO).at("2026-11-05 09:00",
-                                                                           state="Closed")
+            b = board().sprint("S27", "2026-09-28", "2026-10-09")
+            one = b.item(1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
+                .at("2026-11-03 09:00", state="Closed")
+            two = b.item(2).at("2026-10-13 09:00", iteration=S28, assigned=IVAN, state="Active") \
+                .at("2026-10-26 09:00", iteration=S29)
+            b.item(10).at("2026-10-27 09:00", iteration=S29, assigned=PO) \
+                .at("2026-10-28 09:00", state="Active").at("2026-11-05 09:00", state="Closed")
+            child = b.item(11, "Task", parent=10).at("2026-10-27 09:00", iteration=S29,
+                                                     assigned=MAYA, state="Active") \
+                .at("2026-11-04 09:00", state="Closed")
+            old = b.item(20).at("2026-09-28 09:00", iteration="Proj\\S27", assigned=PO,
+                                state="Active").at("2026-10-08 09:00", state="Closed")
+            if later:  # all after S29 ended
+                one.type = "Task"
+                one.at("2026-11-10 09:00")
+                child.parent = 12
+                child.at("2026-11-10 09:00")
+                old.at("2026-11-10 09:00", assigned=MAYA)
+                two.at("2026-11-12 09:00", state="Closed")
             return b
-        first = run(build(False), "ALFA", "S28")
-        self.assertEqual(first, run(build(False), "ALFA", "S28"))
-        again = run(build(True), "ALFA", "S28")
-        self.assertEqual((first["late"], again["late"]), ([1], [1, 2]))
+        first = run(build(False), "ALFA", "S29")
+        self.assertEqual(first, run(build(False), "ALFA", "S29"))
+        self.assertEqual((first["delivered"], [r["sprint"] for r in first["trend"]]),
+                         ([1, 10], ["S28", "S29"]))
+        again = run(build(True), "ALFA", "S29")
+        self.assertEqual((first["late"], again["late"]), ([], [2]))
         again["late"] = first["late"]
         self.assertEqual(first, again)
+
 
 if __name__ == "__main__":
     unittest.main()

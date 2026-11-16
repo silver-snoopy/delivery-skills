@@ -33,7 +33,7 @@ Anti-goals: this fails even if it works when
 - it ranks people or puts per-person figures in the executive report,
 - a number changes between two runs on the same data,
 - setup asks the operator more than each person's team and join date,
-- the tool grows past about 2,400 lines of code (enforced by a test).
+- the tool grows past about 2,500 lines of code (enforced by a test).
 
 ## 3. Setup
 
@@ -57,7 +57,7 @@ What `init` does:
    - **Joined the team on?** Suggested from the person's first activity on the board. When that first activity is within 30 days of the start of the history window, the suggestion is blank (unknown, so never onboarding): the person was probably there before the window.
    People with no tickets at all are asked too. They stay on the team and show up in the report as having capacity but no assigned work.
    Then, once per team: **Count stories or tasks?** Suggested from the team's delivered items in the window: tasks when it closed more than five times as many tasks as stories, stories otherwise. The suggestion comes with the numbers behind it.
-4. Writes `.delivery-skills/team.csv`, `config.json` and the cache, and prints a summary: people, counting level per team, every state (waiting states marked `*`), the proposed waiting states, the not-delivered reasons, the closure reasons seen on the board (not-delivered ones marked `*`), calendar names it could not match, and warnings. Warnings include each staff email never assigned on the board ("check the sign-in email") and a time zone it could not detect.
+4. Writes `.delivery-skills/team.csv`, `config.json` and the cache, and prints a summary: people, counting level per team, every state (waiting states marked `*`), the proposed waiting states, the proposed hold states, the not-delivered reasons, the closure reasons seen on the board (not-delivered ones marked `*`), calendar names it could not match, and warnings. Warnings include each staff email never assigned on the board ("check the sign-in email") and a time zone it could not detect.
 
 ```
 name,email,team,joined,left,allocation
@@ -81,24 +81,30 @@ Tom H.,tom.h@vendor.example,ALFA,2024-11-04,,0.5
   "project": "PROJECT",
   "query": "<query>",
   "timezone": "Europe/Zurich",
-  "teams": {"ALFA": {"count": "stories"}, "BETA": {"count": "tasks"}},
+  "teams": {"ALFA": {"count": "stories"}, "BETA": {"count": "tasks"},
+            "GAMMA": {"count": ["User Story", "Bug"]}},
   "onboarding_sprints": 2,
   "half_day_codes": [],
   "waiting_states": ["Ready for QA", "In Review", "PO Acceptance"],
+  "hold_states": ["On Hold"],
   "not_delivered_reasons": ["Removed", "Won't Fix", "Won't Do", "Cut", "Duplicate", "Obsolete", "Deferred", "Abandoned"],
   "staff": "/abs/path/staff.txt",
   "vacations": "/abs/path/vacations.xlsx",
   "name_aliases": {"Brandt Zoe (Ext)": "Zoë Brandt"},
+  "squad_teams": {"CLM": "ALFA"},
   "history_days": 200
 }
 ```
 
 - `organization` and `project` come from `--org`/`--project`, else the `az devops` defaults. `timezone` comes from `--timezone`, else the machine (`TZ`, then `/etc/localtime`). If the machine zone cannot be found, `init` uses UTC and warns the operator to set `timezone`. An unknown zone name is an error; it never falls back silently.
-- `count` must be `stories` or `tasks`; anything else is an error naming the team.
+- `count` must be `stories`, `tasks` or a non-empty list of work item type names; anything else is an error naming the team.
 - `waiting_states` is proposed from active-category state names (review, QA, test, accept, wait, blocked, verify, UAT). `init` prints every state so the operator can correct the list.
+- `hold_states` is proposed from state names of any category that contain hold, blocked or impeded. It only feeds the On Hold column.
 - `not_delivered_reasons` match the closure reason in any case.
 - `staff` and `vacations` are the input files; `report` reads the calendar again on every run.
 - `name_aliases` maps a calendar name to a `team.csv` name; `init` fills it from the operator's answers.
+- `squad_teams` maps a calendar `Squad` code to a team name, for calendars that use short codes.
+- A trailing tag in parentheses, such as `(external)`, is dropped from staff names. A `team.csv` row with a blank email keeps the person, with no email, so they never match unassigned items.
 - `history_days` sets the history window (section 4).
 - `onboarding_sprints`: delivery is expected from the third sprint after a person's join date. In their first two sprints a person is shown as "onboarding" and never triggers a "nothing delivered" or "no item assigned" flag.
 - Unknown keys are ignored with a warning that names them.
@@ -111,31 +117,32 @@ Per-sprint notes, written by the DM or by the agent from the DM's answers: `.del
 ```
 #48211 agreed: QA environment down 3-5 Nov, PO moved acceptance to S30
 #48277 unknown: dependency on payments API team
-Alfa summary: The team finished document upload and validation for claims intake ...
+Alfa summary: Delivered document upload and validation for claims intake
+Alfa summary: In progress: retry handling
 Alfa note: private remark, DM file only
 Alfa exec note: remark for both files
 Alfa status: AMBER - reason for a manual colour
 ```
 
-Lines that match no form are ignored with a warning. So are lines for a team that is not in the report and `#id` lines for an id that is not a carry-over of any reported team.
+Several `summary:` lines for a team are joined in order (a leading "- " is dropped) and appear as bullets; `note` and `exec note` keep the last line. Lines that match no form are ignored with a warning. So are lines for a team that is not in the report and `#id` lines for an id that is not a carry-over of any reported team.
 
 ## 4. Data source
 
-Azure DevOps **Analytics OData** (`WorkItems`, `WorkItemRevisions`, `Iterations`) and the WIQL and process-configuration REST APIs, read with the DM's own `az login` token (`az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798`, fetched once per run, with a 60-second timeout). This needs the Reader role ("View analytics"). Nothing is installed in the organisation; on the DM's machine the `az` CLI is needed, and its `azure-devops` extension only for the default organisation and project.
+The Azure DevOps **REST APIs** (api-version 7.1), read with the DM's own `az login` token (`az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798`, fetched once per run, with a 60-second timeout): WIQL (the query, child items, assignee history), `workitems/{id}/revisions` (pages of 200, 8 in parallel), `workitemtypes/{type}/states` (state categories), `classificationnodes/Iterations` (sprint dates), `workitemsbatch` (parent titles) and `processconfiguration` (levels). An earlier version used Analytics OData; on a real board it stalled for more than 5 minutes, where the REST APIs took about 90 seconds. This needs read access to the project. Nothing is installed in the organisation; on the DM's machine the `az` CLI is needed, and its `azure-devops` extension only for the default organisation and project.
 
 - Scope of one run, with `since` = today minus `history_days`:
   - the ids the setup query returns (for an area path: items under it changed since `since`);
   - their child items;
   - items with a revision assigned to a `team.csv` email changed since `since`;
   - the full revision history of all of those, plus the titles of their parents.
-- Fields: `WorkItemId, Revision, ChangedDate, WorkItemType, State, StateCategory, Reason, ParentWorkItemId, Title, TagNames`, with `$expand=AssignedTo($select=UserEmail),Area($select=AreaPath),Iteration($select=IterationPath)` (area and iteration paths are navigation properties). Date literals in filters are written `YYYY-MM-DDT00:00:00Z`.
-- Sprint dates come from `Iterations` (the calendar date of `StartDate`/`EndDate`). The stories and tasks levels come from the project's process configuration (requirement and task backlogs).
+- Fields per revision: `System.ChangedDate, WorkItemType, State, Reason, IterationPath, AreaPath, AssignedTo` (its `uniqueName`, lower-cased), `Parent, Title, Tags`; the state category comes from the type's states. Child items come from `[System.Parent] IN (...)` (200 ids per WIQL); assignee history from `[System.AssignedTo] EVER '...'` (20 emails per WIQL) changed since `since`.
+- Sprint dates come from the iteration classification nodes that have a start and finish date; the node path loses its `Iteration` segment to match work item iteration paths. The stories and tasks levels come from the project's process configuration (requirement and task backlogs).
 - Each run also fetches again every item already in `.delivery-skills/cache/revisions.json`, then merges: an item the run asked for takes its full history from the new fetch, so an item that left the query scope gets its real latest state, and an item that returns no rows (deleted or no longer readable) is dropped with one warning (count and first ids). Cached iterations that no revision uses any more (renamed or moved) are dropped; parent titles are merged by id; levels and the fetch time are replaced. A later run therefore still has the history of older sprints. An unreadable cache is replaced with a warning. `--offline` reports from the cache.
-- Errors: a fetch that returns no revisions is an error ("the query returned no work items") and leaves the cache untouched. Query ids that return no revisions are a warning with their count (possible area-path permission gaps). HTTP errors show the first 300 characters of the response body. A response that is not JSON (often a sign-in page), a missing, unreadable or invalid cache (missing keys or fields, unknown state category) are errors with a next step.
+- Errors: a connection error (for example a dropped connection) is retried twice, 2 and 4 seconds apart, then stops with "could not reach Azure DevOps". HTTP errors are not retried. An item whose revisions return HTTP 403 or 404 has no history. A fetch that returns no revisions is an error ("the query returned no work items") and leaves the cache untouched. Query ids that return no revisions are a warning with their count (possible area-path permission gaps). HTTP errors show the first 300 characters of the response body. A response that is not JSON (often a sign-in page), a missing, unreadable or invalid cache (missing keys or fields, unknown state category) are errors with a next step.
 
 The figures are computed by replaying revisions to fixed points in time (sprint start, end of day 1, sprint end), never from current values. That makes them idempotent: Azure DevOps's own velocity chart re-reads current data, which is why its past sprints can change.
 
-Assumption to verify on the first real board: the field and navigation-property names and the `StateCategory` values on `WorkItemRevisions`. `init` checks every row before it writes anything.
+`init` checks every row (fields and state categories) before it writes anything.
 
 ## 5. Counting rules
 
@@ -144,47 +151,48 @@ Times: t0 = 24:00 local on the sprint's first day; t1 = 24:00 local on its last 
 | Rule | Decision |
 |---|---|
 | Sprint | A dated iteration no longer than 42 days (longer ones are releases or PIs). A team's sprints are those that held one of its counted, ours items in the history up to the sprint end. |
-| What counts | One counting level per team (`count`): **stories**, the requirement backlog level (User Story, PBI, Issue, Requirement, plus any custom type the process puts there), or **tasks**, the task backlog level. The process configuration says which types sit at which level, so custom types need no mapping. A Bug the process does not list counts at the tasks level when its parent is a stories-level item, otherwise at the stories level. The level is taken at the sprint end, so later re-typing or re-parenting does not change an old sprint. Only that level counts for the team. Each item counts once. No roll-up between levels. |
-| Ours | A counted item belongs to team T when a person with `team` = T in `team.csv` was its assignee while it was active (In Progress or Resolved) up to the sprint end. An item not yet active by the sprint end counts by its assignee at t0 or t1, so planned but not started work is in Y. At the stories level, the same test on one of its child items also counts. An item that is ours for two of our teams (at the same level) counts for both, and each team's DM list has a grey entry "#id is counted for teams A and B." |
+| What counts | One counting level per team (`count`): **stories**, the requirement backlog level (User Story, PBI, Issue, Requirement, plus any custom type the process puts there), **tasks**, the task backlog level, or an explicit **list of work item types** (for a team whose bugs sit on neither level). With a list, a child item that is counted itself is not used to make its parent ours. The process configuration says which types sit at which level, so custom types need no mapping. A Bug the process does not list counts at the tasks level when its parent is a stories-level item, otherwise at the stories level. The level is taken at the sprint end, so later re-typing or re-parenting does not change an old sprint. Only that level counts for the team. Each item counts once. No roll-up between levels. |
+| Ours | A counted item belongs to team T when a person with `team` = T in `team.csv` was its assignee while it was active (In Progress or Resolved) up to the sprint end. An item not yet active by the sprint end counts by its assignee at t1 only. At the stories level, the same test on one of its child items also counts. An item that is ours for two of our teams (at the same level) counts for both, and each team's DM list has a grey entry "#id is counted for teams A and B." |
 | Wording | Reports always say **work items** ("11 of 14 work items delivered"), whatever the team counts. The counting level appears once per team, in small print beside its name ("counts tasks"), and in the method footnote. Teams are never added up or compared with each other. The trend uses the team's current level for all 6 sprints, so changing `count` rewrites the trend instead of breaking it. |
 | Working | First entry into the InProgress or Resolved category. |
 | Waiting | Time in a `waiting_states` state, or tagged `Blocked`. Reports call it "waiting (in a waiting state or blocked)" and never say who was waited on. |
 | Done | First entry into the Completed category, unless the reason is in `not_delivered_reasons` (any case). Removed is never done. A reopened item keeps its first completion. |
-| Planned (Y) | On the sprint's iteration at t0, not closed and not already done. |
-| Delivered of planned (X) | Planned items done before t1. Headline: "X of Y". |
-| Added | Entered the iteration after t0 and before t1, not planned. Counts only; who made the change is not reported. |
+| Planned (Y) | On the sprint's iteration at t0 **and** assigned (it or one of its children at the stories level) to one of the team at t0, not closed and not already done. Ours at t0 is the commitment snapshot. |
+| Delivered of planned (X) | Planned items delivered in this sprint (see Delivered in total). Headline: "X of Y". |
+| Added | Entered the iteration after t0 and before t1, or on it at t0 but not yet ours there; it counts if it is ours by t1. Work that becomes ours later is added even if it is delivered. Counts only; who made the change is not reported. |
 | Removed | Planned, not done by t1, and at t1 either on a path that is not a later sprint (backlog, area root, release) or closed with a not-delivered reason or in category Removed. Removed items leave the status denominator. |
-| Carry-over | Planned, not done by t1, open, and at t1 still on the sprint's iteration or on a later sprint. For each: age (calendar days from first active to the sprint's last day), sprints carried (sprints up to and including this one where it was planned and not done), current state, and the reason and "agreed with PO" from notes. An item closed after the sprint end stays a carry-over of that sprint and is also listed as completed late. |
-| Delivered in total | Every counted, ours item done within the sprint dates, planned or not. **A sprint gets credit for the items closed within its dates.** This is Azure DevOps's own rule ("the completion date determines which sprint gets velocity credit"). Planned items closed after the sprint end are "completed late" in the sprint they were planned in. |
+| Carry-over | Planned, not done by t1, open, and at t1 still on the sprint's iteration or on a later sprint. For each: age (calendar days from first active to the sprint's last day), sprints carried (sprints up to and including this one where it was planned and not done), current state, and the reason and "agreed with PO" from notes. An item closed after the sprint end while still on the sprint's iteration is delivered (and late), not a carry-over. On Hold days are shown for each. |
+| Delivered in total | Every counted, ours item whose first completion happened while it was on the sprint's iteration, planned or not. **A sprint gets credit for the items closed while on its iteration, even after its end date.** An earlier version credited by close date, so items on Sprint 17 closed on Sprint 18's first day counted in Sprint 18; the trial showed that misleads. Planned items closed after the sprint end are "completed late". |
+| On Hold | Mon-Fri local dates in the sprint on which the item was in a `hold_states` state or tagged `Blocked` at any moment. Shown per carry-over and per person, for context only; never used in a figure, the status or a flag. |
 | Cycle time | Done date minus first active date, plus 1, in calendar days. Median and 85th percentile (P85), nearest rank (`sorted(v)[ceil(p*n)-1]`), with n. When n < 10, also show the figure over the last 6 sprints. Ages and the status rule use the team's P85 over the last 6 sprints. |
 | Waiting share | Of the delivered items' cycle time, the share spent waiting. |
 | Reopened | Done, then active again within the sprint: listed, never counted twice. |
 | Capacity | Working days (Mon-Fri) in the sprint from `joined` to before `left`, minus days off in `vacations.xlsx`, multiplied by allocation. Shown as context, never used to adjust figures. |
 | Onboarding | A person is onboarding in the sprint containing their join date (or the next one) and the next `onboarding_sprints − 1` sprints. Their work counts; they are excluded from "nothing delivered" and "no item assigned" flags. |
-| Rest of squad | The same figures for counted items under team T's members' main area paths (exact path) that are not ours, with the number of other engineers (on the children at the stories level). Not shown when there are none. |
+| Rest of squad | The same figures for counted items under team T's members' main area paths (exact path), closed while on the sprint's iteration, that are not ours, with the number of other engineers (on the children at the stories level). Not shown when there are none. |
 
 ## 6. Outputs
 
 `.delivery-skills/<sprint>/manager_<YYYY-MM-DD>.html` and `dm_<YYYY-MM-DD>.html` (the run date), one pair per sprint with every squad in it. A rerun on the same day overwrites the pair. Each file is self-contained HTML (inline CSS, no scripts), so it can be emailed or printed. The header shows the sprint dates, the number of teams, "Board data as of <fetch time, in the configured zone>" and the generation time. `report --sprint S` for a sprint that has not ended by `--today` marks the title "(sprint still running)" and prints a warning.
 
-**manager_ (executives, no people tables, no per-person figures)**, per squad:
-- a status line, GREEN, AMBER or RED, with the reason in words:
-  - GREEN: delivered at least 80% of planned (floored), not counting removed items, and no carry-over is both older than the squad's P85 and not agreed with the PO;
-  - AMBER: one of the two conditions is missed;
-  - RED: both are missed, or a work item has been waiting (in a waiting state or blocked) for more than 10 working days.
-  When the window P85 is unknown (no finished items in the last 6 sprints), the second condition checks agreement only, for every carry-over, and the reason says "too few finished work items in the last 6 sprints to judge age".
-  The rule is printed in the footnote as the operator's own convention, not an industry standard. The operator can override the colour with a reason in `notes.txt` (`ALFA status: AMBER - ...`), and the report shows that it was set by hand.
-- what the team worked on, as the parent items with item counts, plus the summary and exec note from notes;
-- delivered X of Y planned, delivered in total, added / removed, completed late;
-- cycle time median and P85, and the waiting share;
-- capacity line;
-- carry-over table: ticket, title, age, sprints carried, now in, reason, agreed with PO;
-- 6-sprint trend: X of Y, delivered in total, P85;
-- footnote with the method.
+Sprint selection: with `--sprint S`, each team gets its last sprint named S (an error when no team has one). Without it, each team gets its own last sprint that ended before today, so teams with differently named sprints are reported together. The report and its folder are named after the single common sprint name, or "Sprints ended by <latest end date>" when the names differ. A team with no sprint gets a card that says why: "No sprint named S.", "No ended sprint: none of the team's counted work items is on a sprint." (when a member appears as an assignee in the cache) or "No work assigned: none of the team's N engineer(s) has a work item assigned in the board history (last <history_days> days)." Every `#ID` in both files links to `<org>/<project>/_workitems/edit/<ID>`. The card header shows the sprint name and dates, the engineers (and how many are onboarding) with their PD capacity (person-days available after leave), and, on the DM card only, "Counts: <level or types>".
+
+**manager_ (executives, no RAG status, no people tables, no per-person figures)**, one card per squad:
+1. header: team name, sprint name and dates, engineers and PD capacity;
+2. **Delivery highlights**: the summary lines from notes (one line as a paragraph, several as bullets) and the exec note; left out when both are empty;
+3. **Delivery stats**: planned work items delivered (X of Y), delivered in total, carried over, added / removed mid-sprint, completed after the sprint ended, cycle time median and P85, waiting share;
+4. **Delivered items (N)**, a folded panel: work item, title, planned or added; "No work items delivered." when there are none;
+5. **Carried over items (N)** (with "(K On Hold)" when some have hold days), a folded panel: work item, title, sprints carried, now in, On Hold, reason, agreed with PO. When nothing was carried over, a visible, non-folding panel says "No work items carried over.";
+6. the 6-sprint trend in a folded panel: X of Y, delivered in total, P85;
+7. footnote with the method, including "PD = person-days available after leave" and the On Hold definition.
 
 Ticket titles and the DM's own text appear as written. After writing manager_, `report` scans it (ignoring case) for every roster full name as a whole word and every email and prints `warning: manager file mentions <name>` for each one found; the DM decides.
 
-**dm_ (private)**: everything in manager_, plus:
+**dm_ (private)**: one card per squad with the GREEN / AMBER / RED status line, what the team worked on (parent items with item counts), the summary and exec note, the stats (without the carried-over tile), the carry-over table with age and On Hold (heading "Carried over (N On Hold)"), and the trend. The status rule:
+- GREEN: delivered at least 80% of planned (floored), not counting removed items, and no carry-over is both older than the squad's P85 and not agreed with the PO;
+- AMBER: one of the two conditions is missed;
+- RED: both are missed, or a work item has been waiting (in a waiting state or blocked) for more than 10 working days.
+When the window P85 is unknown (no finished items in the last 6 sprints), the second condition checks agreement only, for every carry-over, and the reason says "too few finished work items in the last 6 sprints to judge age". The rule is printed in the DM footnote as the operator's own convention. The operator can override the colour with a reason in `notes.txt` (`ALFA status: AMBER - ...`), and the report shows that it was set by hand. The DM file also has:
 - **Needs attention**, first on the page, after the DM's notes. Evaluated at the sprint end. Each entry names the item or person, the reason and the next question:
   - open item older than the squad's P85 cycle time (red when also carried 2 or more sprints);
   - carried 2 or more sprints;
@@ -194,19 +202,19 @@ Ticket titles and the DM's own text appear as written. After writing manager_, `
   - an engineer with available days and **no item assigned** during the sprint (red);
   - an engineer with available days, past onboarding, and nothing delivered;
   - more than 3 items in progress for one engineer;
-  - grey: closed without ever being active, reopened, an assignee email in a roster domain but not on the roster, an item counted for two of our teams.
+  - grey: closed without ever being active, reopened, an item counted for two of our teams.
 - **Ours vs rest of squad:** engineers, delivered, cycle time median and P85, waiting share.
-- **People:** available days, delivered, in progress, oldest open item and its age, median cycle time, items worked on.
+- **People:** available days, delivered, in progress, oldest open item and its age, On Hold ("#id N days, ..."), median cycle time, items worked on.
 
 Thresholds (P85, 2 sprints, 3 days, 10 days, 5 days, 3 items, 80%, 6 sprints, 42-day sprints) are fixed constants in `metrics.py`. The footnote states them as local conventions, not industry standards.
 
-`report` prints every warning (config, calendar, notes, cache, names, running sprint), the written paths, `sprint: NAME`, `notes: PATH`, and per team the carry-overs without a note and the delivered items with their titles, for the agent.
+`report` prints every warning (config, calendar, notes, cache, names, running sprint), the written paths, `sprint: NAME`, `notes: PATH`, and per team the carry-overs without a note and `TEAM worked on: #ID TITLE (delivered|in progress)` lines, for the agent. It warns for each team with a sprint and no summary ("the manager card shows no highlights") and prints `TEAM: why` for a team with no sprint.
 
 ## 7. Commands and skill
 
 ```
 ledger init --query Q --staff staff.txt --vacations vacations.xlsx [--yes] [--org URL --project NAME --timezone ZONE]
-ledger report [--sprint S] [--offline] [--today YYYY-MM-DD]   # default: the last ended sprint
+ledger report [--sprint S] [--offline] [--today YYYY-MM-DD]   # default: each team's last ended sprint
 ledger person EMAIL [--offline] [--today YYYY-MM-DD]          # one engineer over the team's last 6 sprints
 ```
 
@@ -215,7 +223,7 @@ One agent skill, `delivery-report`, runs the flow:
 2. `report`. Show every warning.
 3. Ask, for each team: "Anything to add for team T this sprint?" The answers go to `notes.txt` and appear in the dm_ report, and in manager_ only if the operator says so.
 4. Ask the DM about each carry-over without a note and write the answers to `notes.txt`.
-5. Write the per-squad summary from the delivered items' titles and have the DM confirm it.
+5. Write 2-4 short `T summary:` lines per squad (no names) from the worked-on titles, for example `Alfa summary: Delivered ...` and `Alfa summary: In progress: ...`; they become the Delivery highlights on the manager card. Have the DM confirm them.
 6. `report` again. It reads the board again, so figures can change if the board changed; the DM's answers change the status and the flags.
 7. Give the DM the paths.
 
@@ -223,13 +231,13 @@ The agent reads ticket titles to write the summary. The wording may differ betwe
 
 ## 8. Build
 
-- Python 3.9+ standard library only. Modules: `ado.py` (token, WIQL, OData paging, cache), `replay.py` (item state at a point in time), `metrics.py` (counting rules, flags, status), `render.py` (HTML pages and the `report` and `person` commands), `setup.py` (`init`), `xlsx.py` (team calendar), `config.py` (config.json, team.csv, staff.txt, notes.txt), `cli.py`. At most 2,400 lines under `ledger/`, enforced by a test.
+- Python 3.9+ standard library only. Modules: `ado.py` (token, WIQL and work item REST APIs with retries, cache), `replay.py` (item state at a point in time), `metrics.py` (counting rules, flags, status), `render.py` (HTML pages and the `report` and `person` commands), `setup.py` (`init`), `xlsx.py` (team calendar), `config.py` (config.json, team.csv, staff.txt, notes.txt), `cli.py`. At most 2,500 lines under `ledger/`, enforced by a test.
 - Tests run against an invented fixture of revision rows covering both squad styles, carry-overs, moves to the next sprint, reopen, late close, mid-sprint add and remove, and leave. No test touches the network or `az`.
 - The v2 code is removed from `main` and stays in git history.
 
 ## 9. Known limits
 
-- Every figure depends on the board being kept up to date. The hygiene triggers show where it isn't.
+- Every figure depends on the board being kept up to date. The grey flags (closed without being active, reopened) show where it isn't.
 - "Ours" depends on assignee history. Pair work without an assignee change is invisible.
 - Waiting time is only as good as the waiting states and the `Blocked` tag the squads actually use.
 - The rest-of-squad comparison mixes different kinds of work. The DM report says so next to the table.
@@ -239,3 +247,5 @@ The agent reads ticket titles to write the summary. The wording may differ betwe
 ## 10. Decisions
 
 Decided on 2026-11-13: the squad-vs-rest comparison stays in dm_ only; manager_ has a RAG status line; `vacations.xlsx` is the team calendar layout (months side by side under merged title cells, day numbers in one header row, `Name` and `Squad` columns), with letter codes and public holidays marked per person. The final review added: carry-over versus removed by where the item is at the sprint end; teams from `team.csv`; a cache that keeps older items and refetches them; a names warning for manager_; a code cap of about 2,400 lines.
+
+Changed on 2026-11-15 after a trial on a real board (see `docs/2026-11-15-trial-findings.md`): the REST APIs replace Analytics OData; delivery is credited to the iteration at close; planned means ours on day one; each team gets its own last ended sprint; `count` may be a list of types; `squad_teams`, `hold_states` and On Hold days; a dedicated executive card on manager_ with no RAG status (the status moves to dm_ only); linked `#ID`s; the roster-hygiene flag is removed; the code cap is about 2,500 lines. On 2026-11-16 an empty carry-over on the manager card became a visible panel.

@@ -232,7 +232,13 @@ class RenderTest(unittest.TestCase):
             page = render("Sprint 29", teams(NOTES), GEN)
             self.assertNotIn("<script", page.lower())
             self.assertNotIn("http", page)
-            self.assertIn("prefers-color-scheme: dark", page)
+        self.assertIn("prefers-color-scheme: dark", render_dm("Sprint 29", teams(NOTES), GEN))
+
+    def test_manager_page_is_light_only(self):
+        page = render_manager("Sprint 29", teams(NOTES), GEN)
+        self.assertNotIn("prefers-color-scheme", page)
+        self.assertNotIn("color-scheme:dark", page)
+        self.assertIn("--paper:#FFF", page)
 
     def test_person_page(self):
         rows = [{"sprint": "Sprint 28", "available": None},

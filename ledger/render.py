@@ -100,11 +100,14 @@ def _dates(sprint: dict) -> str:
     return "%s – %s" % (_day(a, a.year != b.year), _day(b))
 
 
-def _page(title: str, body: str) -> str:
+def _page(title: str, body: str, light: bool = False) -> str:
+    """`light` drops the dark theme, for pages sent to readers whatever their system setting."""
+    css = re.sub(r"@media \(prefers-color-scheme: dark\)\{.*?\}\}\n", "", CSS, flags=re.S) \
+        if light else CSS
     return ('<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n'
             '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
             '<title>%s</title>\n<style>\n%s\n</style></head>\n<body><div class="wrap">\n%s\n'
-            '</div></body></html>\n' % (escape(title), CSS, body))
+            '</div></body></html>\n' % (escape(title), css, body))
 
 
 def _head(title: str, teams: List[dict], generated: datetime, private: bool, board: str) -> str:
@@ -307,7 +310,7 @@ def render_manager(sprint_name: str, teams: List[dict], generated: datetime, run
     """`board` is the board data time; `running` marks a sprint that has not ended."""
     title = _title(sprint_name, "summary", running)
     body = [_head(title, teams, generated, False, board)]
-    return _page(title, "\n".join(body + _teams(teams, False) + [_footnote(False)]))
+    return _page(title, "\n".join(body + _teams(teams, False) + [_footnote(False)]), light=True)
 
 
 def link_ids(page: str, organization: str, project: str) -> str:

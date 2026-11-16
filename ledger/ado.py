@@ -1,11 +1,14 @@
-"""Azure DevOps access: WIQL, Analytics OData and the revisions cache."""
+"""Azure DevOps access: WIQL, the work item REST APIs and the revisions cache."""
+import http.client
 import json
 import os
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -13,10 +16,7 @@ ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 BATCH = 200
 CACHE_FILE = os.path.join("cache", "revisions.json")
 GUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-REVISION_FIELDS = ("WorkItemId,Revision,ChangedDate,WorkItemType,State,StateCategory,Reason,"
-                   "ParentWorkItemId,Title,TagNames")
-REVISION_EXPAND = ("AssignedTo($select=UserEmail),Area($select=AreaPath),"
-                   "Iteration($select=IterationPath)")
+WORKERS = 8
 ROW_KEYS = ["id", "rev", "changed", "type", "state", "category", "reason", "iteration",
             "area", "assigned", "parent", "title", "tags"]
 CACHE_KEYS = ("fetched", "levels", "iterations", "revisions", "parents")
@@ -27,9 +27,10 @@ QUERY_FORMS = ("a saved query URL (.../_queries/query/<id>), a query id, a WIQL 
 
 
 class AdoError(Exception):
-    def __init__(self, message: str, next_step: str = ""):
+    def __init__(self, message: str, next_step: str = "", code: int = 0):
         super().__init__(message)
         self.next_step = next_step
+        self.code = code
 
 
 def az_token(run=subprocess.run) -> str:
@@ -63,6 +64,22 @@ def az_defaults(run=subprocess.run) -> Tuple[Optional[str], Optional[str]]:
     return found.get("organization") or None, found.get("project") or None
 
 
+def _open(req: urllib.request.Request) -> str:
+    """The decoded body; an HTTP error status raises AdoError with its code."""
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        detail = " ".join(e.read().decode("utf-8", "replace")[:300].split())
+        e.close()
+        if e.code in (401, 403):
+            raise AdoError("Azure DevOps refused the request (HTTP %d): %s" % (e.code, detail),
+                           "check that your account can read this project", e.code)
+        raise AdoError("Azure DevOps returned HTTP %d for %s: %s" % (e.code, req.full_url, detail),
+                       "check the query, organisation and project; for HTTP 429 or 5xx run again later",
+                       e.code)
+
+
 def _request(method: str, url: str, body: Optional[dict], token: str) -> dict:
     headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
     data = None
@@ -70,19 +87,15 @@ def _request(method: str, url: str, body: Optional[dict], token: str) -> dict:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            text = resp.read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as e:
-        detail = " ".join(e.read().decode("utf-8", "replace")[:300].split())
-        e.close()
-        if e.code in (401, 403):
-            raise AdoError("Azure DevOps refused the request (HTTP %d): %s" % (e.code, detail),
-                           "check that your account can read this project and Analytics (View analytics)")
-        raise AdoError("Azure DevOps returned HTTP %d for %s: %s" % (e.code, url, detail),
-                       "check the query, organisation and project; for HTTP 429 or 5xx run again later")
-    except urllib.error.URLError as e:
-        raise AdoError("could not reach Azure DevOps: %s" % e.reason, "check your network connection: %s" % url)
+    for attempt in range(3):
+        try:
+            text = _open(req)
+            break
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as e:
+            if attempt == 2:
+                raise AdoError("could not reach Azure DevOps: %s" % getattr(e, "reason", e),
+                               "check your network connection: %s" % url)
+            time.sleep(2 * (attempt + 1))
     try:
         return json.loads(text or "{}")
     except ValueError:
@@ -99,17 +112,6 @@ def az_http(run=subprocess.run) -> Callable:
             token.append(az_token(run))
         return _request(method, url, body, token[0])
     return http
-
-
-def org_name(org: str) -> str:
-    parsed = urllib.parse.urlparse(org.strip())
-    host = parsed.netloc or parsed.path
-    if host.endswith(".visualstudio.com"):
-        return host.split(".")[0]
-    parts = [p for p in parsed.path.split("/") if p]
-    if parts:
-        return parts[0]
-    return host
 
 
 def lit(text: str) -> str:
@@ -155,16 +157,61 @@ class Client:
                 ids.append(rel["target"]["id"])
         return sorted(set(ids))
 
-    def odata(self, entity: str, params: Dict[str, str]) -> List[dict]:
-        url = "https://analytics.dev.azure.com/%s/%s/_odata/v4.0-preview/%s?%s" % (
-            org_name(self.org), urllib.parse.quote(self.project), entity,
-            "&".join("%s=%s" % (_quote(k), _quote(v)) for k, v in params.items()))
-        rows = []  # type: List[dict]
-        while url:
-            res = self.http("GET", url, None)
-            rows.extend(res.get("value") or [])
-            url = res.get("@odata.nextLink")
-        return rows
+    def _api(self, path: str) -> str:
+        return "%s/_apis/%s%sapi-version=7.1" % (self._base(), path, "&" if "?" in path else "?")
+
+    def wiql(self, text: str) -> List[int]:
+        res = self.http("POST", self._api("wit/wiql"), {"query": text})
+        return [w["id"] for w in res.get("workItems") or []]
+
+    def _revision_page(self, wid: int, skip: int) -> List[dict]:
+        res = self.http("GET", self._api("wit/workitems/%d/revisions?$top=%d&$skip=%d"
+                                         % (wid, BATCH, skip)), None)
+        return res.get("value") or []
+
+    def revisions(self, wid: int) -> List[dict]:
+        """Every revision of `wid`; none when the item is gone or unreadable (HTTP 403/404)."""
+        out = []  # type: List[dict]
+        try:
+            while True:
+                page = self._revision_page(wid, len(out))
+                out.extend(page)
+                if len(page) < BATCH:
+                    return out
+        except AdoError as e:
+            if e.code in (403, 404):
+                return []
+            raise
+
+    def categories(self, wtype: str) -> Dict[str, str]:
+        res = self.http("GET", self._api("wit/workitemtypes/%s/states" % _quote(wtype)), None)
+        return {s["name"]: s.get("category") for s in res.get("value") or []}
+
+    def iterations(self) -> List[dict]:
+        """Dated iterations, with paths in the form work items use (no "Iteration" segment)."""
+        root = self.http("GET", self._api("wit/classificationnodes/Iterations?$depth=20"), None)
+        out = []  # type: List[dict]
+
+        def walk(node: dict) -> None:
+            attrs = node.get("attributes") or {}
+            if attrs.get("startDate") and attrs.get("finishDate"):
+                parts = (node.get("path") or "").strip("\\").split("\\")
+                out.append({"path": "\\".join(parts[:1] + parts[2:]), "name": node.get("name"),
+                            "start": attrs["startDate"][:10], "end": attrs["finishDate"][:10]})
+            for child in node.get("children") or []:
+                walk(child)
+        walk(root)
+        return out
+
+    def titles(self, ids: List[int]) -> Dict[str, str]:
+        out = {}  # type: Dict[str, str]
+        for chunk in _chunks(ids):
+            res = self.http("POST", self._api("wit/workitemsbatch"),
+                            {"ids": chunk, "fields": ["System.Title"], "errorPolicy": "omit"})
+            for item in res.get("value") or []:
+                if item:
+                    out[str(item["id"])] = (item.get("fields") or {}).get("System.Title")
+        return out
 
     def levels(self) -> Dict[str, List[str]]:
         res = self.http("GET", "%s/_apis/work/processconfiguration?api-version=7.1" % self._base(), None)
@@ -178,16 +225,18 @@ def _id_list(ids: List[int]) -> str:
     return "(%s)" % ",".join(str(i) for i in ids)
 
 
-def _flatten(raw: dict) -> dict:
-    assigned = (raw.get("AssignedTo") or {}).get("UserEmail")
-    tags = raw.get("TagNames")
+def _flatten(raw: dict, categories: Dict[Tuple[str, str], str]) -> dict:
+    f = raw.get("fields") or {}
+    assigned = (f.get("System.AssignedTo") or {}).get("uniqueName")
+    tags = f.get("System.Tags")
+    wtype, state = f.get("System.WorkItemType"), f.get("System.State")
     return {
-        "id": raw["WorkItemId"], "rev": raw["Revision"], "changed": raw.get("ChangedDate"),
-        "type": raw.get("WorkItemType"), "state": raw.get("State"), "category": raw.get("StateCategory"),
-        "reason": raw.get("Reason"), "iteration": (raw.get("Iteration") or {}).get("IterationPath"),
-        "area": (raw.get("Area") or {}).get("AreaPath"),
-        "assigned": assigned.lower() if assigned else None, "parent": raw.get("ParentWorkItemId"),
-        "title": raw.get("Title"),
+        "id": raw["id"], "rev": raw["rev"], "changed": f.get("System.ChangedDate"),
+        "type": wtype, "state": state, "category": categories.get((wtype, state)),
+        "reason": f.get("System.Reason"), "iteration": f.get("System.IterationPath"),
+        "area": f.get("System.AreaPath"),
+        "assigned": assigned.lower() if assigned else None, "parent": f.get("System.Parent"),
+        "title": f.get("System.Title"),
         "tags": [t.strip() for t in tags.split(";") if t.strip()] if tags else [],
     }
 
@@ -198,7 +247,7 @@ def check_rows(data: dict) -> None:
         for key in ROW_KEYS:
             if key not in r:
                 raise AdoError("the revisions lack the field '%s' (work item %s)" % (key, r.get("id")),
-                               "check that the Analytics view returns every field and run init again")
+                               "check that the revisions return every field and run init again")
         if r["category"] not in CATEGORIES:
             raise AdoError("unknown state category '%s' (work item %s)" % (r["category"], r["id"]),
                            "expected one of: %s" % ", ".join(CATEGORIES))
@@ -210,27 +259,21 @@ def fetch(client: Client, query: str, emails: List[str], today: date, history_da
     `history_days` before `today` and the `known` (cached) items; raises AdoError when nothing
     comes back. "requested" lists every id asked for, for save_cache."""
     since = date.fromordinal(today.toordinal() - history_days)
-    stamp = since.isoformat() + "T00:00:00Z"
     query_ids = set(client.query_ids(query, since))
     ids = set(query_ids)
+    scope = "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND "
     for chunk in _chunks(sorted(ids)):
-        for r in client.odata("WorkItems", {"$filter": "ParentWorkItemId in " + _id_list(chunk),
-                                            "$select": "WorkItemId"}):
-            ids.add(r["WorkItemId"])
-    if emails:
-        mails = ",".join("'%s'" % lit(e) for e in emails)
-        for r in client.odata("WorkItems", {
-                "$filter": "Revisions/any(r: r/AssignedTo/UserEmail in (%s) and r/ChangedDate ge %s)"
-                           % (mails, stamp),
-                "$select": "WorkItemId"}):
-            ids.add(r["WorkItemId"])
+        ids.update(client.wiql(scope + "[System.Parent] IN " + _id_list(chunk)))
+    for chunk in _chunks(sorted(emails), 20):
+        ever = " OR ".join("[System.AssignedTo] EVER '%s'" % lit(e) for e in chunk)
+        ids.update(client.wiql(scope + "[System.ChangedDate] >= '%s' AND (%s)"
+                               % (since.isoformat(), ever)))
     ids |= set(known)
-    rows = []  # type: List[dict]
-    for chunk in _chunks(sorted(ids)):
-        for raw in client.odata("WorkItemRevisions", {
-                "$filter": "WorkItemId in " + _id_list(chunk), "$select": REVISION_FIELDS,
-                "$expand": REVISION_EXPAND}):
-            rows.append(_flatten(raw))
+    with ThreadPoolExecutor(WORKERS) as pool:
+        raws = [r for revs in pool.map(client.revisions, sorted(ids)) for r in revs]
+    types = sorted({(r.get("fields") or {}).get("System.WorkItemType") for r in raws} - {None})
+    categories = {(t, state): cat for t in types for state, cat in client.categories(t).items()}
+    rows = [_flatten(raw, categories) for raw in raws]
     if not rows:
         raise AdoError("the query returned no work items",
                        "check the query and your access to its area paths")
@@ -245,18 +288,9 @@ def fetch(client: Client, query: str, emails: List[str], today: date, history_da
         warn("%d saved work items returned no history and were dropped (deleted or no longer "
              "readable): %s" % (len(gone), ", ".join("#%d" % i for i in gone[:5])
                                 + (", ..." if len(gone) > 5 else "")))
-    iterations = [{"path": r["IterationPath"], "name": r["IterationName"],
-                   "start": (r.get("StartDate") or "")[:10], "end": (r.get("EndDate") or "")[:10]}
-                  for r in client.odata("Iterations", {
-                      "$select": "IterationPath,IterationName,StartDate,EndDate",
-                      "$filter": "StartDate ne null and EndDate ne null"})]
+    iterations = client.iterations()
     iterations.sort(key=lambda i: (i["start"], i["path"]))
-    parent_ids = sorted({r["parent"] for r in rows if r["parent"] is not None})
-    parents = {}  # type: Dict[str, str]
-    for chunk in _chunks(parent_ids):
-        for r in client.odata("WorkItems", {"$filter": "WorkItemId in " + _id_list(chunk),
-                                            "$select": "WorkItemId,Title"}):
-            parents[str(r["WorkItemId"])] = r.get("Title")
+    parents = client.titles(sorted({r["parent"] for r in rows if r["parent"] is not None}))
     data = {"fetched": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "levels": client.levels(), "iterations": iterations, "revisions": rows, "parents": parents,
             "requested": sorted(ids)}

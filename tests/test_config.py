@@ -72,6 +72,40 @@ class ConfigTest(unittest.TestCase):
                 f.write("name,email,team,joined,left,allocation\nAnn,Ann@vendor.example, alfa ,,,1\n")
             self.assertEqual(read_team(path), [Person("Ann", ["ann@vendor.example"], "ALFA", None, None)])
 
+    def test_blank_email_cell_yields_no_email(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "team.csv")
+            with open(path, "w") as f:
+                f.write("name,email,team,joined,left,allocation\nAnn,,ALFA,,,1\n")
+            self.assertEqual(read_team(path), [Person("Ann", [], "ALFA", None, None)])
+
+    def test_write_team_round_trip_for_person_with_no_email(self):
+        people = [Person("Ann", [], "ALFA", None, None)]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "team.csv")
+            write_team(path, people)
+            with open(path) as f:
+                self.assertEqual(f.read().splitlines()[1], "Ann,,ALFA,,,1")
+            self.assertEqual(read_team(path), people)
+
+    def test_parse_notes_multiple_summary_lines_join_and_strip_dash(self):
+        n = parse_notes("ALFA summary: - Delivered upload\nALFA summary: In progress: retries\n"
+                        "ALFA note: first\nALFA note: second")
+        self.assertEqual(n.summary["ALFA"], "Delivered upload\nIn progress: retries")
+        self.assertEqual(n.note["ALFA"], "second")
+
+    def test_parse_staff_drops_trailing_tag_in_parentheses(self):
+        pairs = parse_staff('Maya Rao (external) <maya@vendor.example>; "Doe, John (ext)" <jd@vendor.example>')
+        self.assertEqual(pairs, [("Maya Rao", "maya@vendor.example"), ("John Doe", "jd@vendor.example")])
+
+    def test_count_accepts_a_type_list(self):
+        cfg, _ = self.load({"teams": {"ALFA": {"count": ["User Story", "Bug"]}}})
+        self.assertEqual(cfg.teams["ALFA"]["count"], ["User Story", "Bug"])
+        for bad in ([], [""], ["Bug", 3]):
+            with self.assertRaises(ValueError) as e:
+                self.load({"teams": {"ALFA": {"count": bad}}})
+            self.assertIn("list of work item types", str(e.exception))
+
     def load(self, raw):
         warnings = []
         with tempfile.TemporaryDirectory() as d:

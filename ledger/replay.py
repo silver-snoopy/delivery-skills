@@ -37,6 +37,11 @@ def is_waiting(row: dict, waiting_states: Sequence[str]) -> bool:
     return row["state"] in waiting_states or any(str(t).lower() == "blocked" for t in row["tags"] or [])
 
 
+def is_held(row: dict, hold_states: Sequence[str]) -> bool:
+    """On Hold: in a hold state or tagged Blocked."""
+    return row["state"] in hold_states or any(str(t).lower() == "blocked" for t in row["tags"] or [])
+
+
 def day_start(d: date, tz: tzinfo) -> datetime:
     """UTC instant of 00:00 local on `d`."""
     return datetime(d.year, d.month, d.day, tzinfo=tz).astimezone(timezone.utc)

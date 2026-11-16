@@ -72,6 +72,14 @@ class SuggestTest(unittest.TestCase):
         self.assertEqual(s["waiting"], ["In Review", "Ready for QA"])
         self.assertIn({"name": "Active", "category": "InProgress"}, s["states"])
 
+    def test_hold_state_suggestion(self):
+        b = board()
+        b.item(903).at("2026-10-06 09:00", state="On Hold", assigned=MAYA)
+        b.item(904).at("2026-10-06 09:00", state="Impeded", assigned=MAYA)
+        b.item(905).at("2026-10-06 09:00", state="Ready for QA", assigned=MAYA)
+        s = setup.suggest(b.cache(), STAFF, [])
+        self.assertEqual(s["hold"], ["Impeded", "On Hold"])
+
 
 class InitTest(unittest.TestCase):
     def setUp(self):
@@ -131,6 +139,21 @@ class InitTest(unittest.TestCase):
         self.assertEqual(cfg.waiting_states, ["Custom"])
         self.assertEqual(cfg.name_aliases, {"Nobody X": "John Doe"})
         self.assertIn("left", text)
+
+    def test_hold_state_proposed_and_saved(self):
+        b = board()
+        b.item(903).at("2026-10-06 09:00", state="On Hold", assigned=MAYA)
+        _, text = self.run_init(b.cache())
+        self.assertIn("Proposed hold states: On Hold", text)
+        self.assertEqual(load_config(self.d).hold_states, ["On Hold"])
+        self.assertLess(text.index("Proposed waiting states"), text.index("Proposed hold states"))
+
+    def test_squad_teams_maps_calendar_squad_to_team(self):
+        from ledger.config import Config, save_config
+        save_config(self.d, Config(timezone="Europe/Zurich", squad_teams={"Alfa": "CLAIMS"}))
+        self.run_init()
+        teams = {p.name: p.team for p in read_team(os.path.join(self.d, "team.csv"))}
+        self.assertEqual(teams["Maya R."], "CLAIMS")
 
     def test_unseen_email_typed_team_and_timezone(self):
         self.write_staff("Maya R. <%s>; John Doe <%s>; Ana K. <%s>; nobody" % (MAYA, JOHN, ANA))

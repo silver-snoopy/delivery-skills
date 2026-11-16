@@ -5,13 +5,14 @@ import re
 import tempfile
 import unittest
 from datetime import datetime
+from html import unescape
 from unittest import mock
 
 from ledger import cli
 from ledger.ado import CACHE_FILE
 from ledger.config import Config, Notes, Person, save_config, write_team
 from ledger.metrics import team_sprint
-from ledger.render import folder_name, render_dm, render_manager, render_person
+from ledger.render import folder_name, link_ids, render_dm, render_manager, render_person
 from tests.fixture import Board
 from tests.test_xlsx import build_workbook, calendar_rows
 
@@ -84,22 +85,25 @@ class RenderTest(unittest.TestCase):
         page = text(render_manager("Sprint 29", teams(), GEN))
         self.assertEqual(page.count("2 of 3 planned work items delivered"), 2)
         self.assertNotRegex(page, r"(?i)(stories|tasks) delivered")
-        self.assertIn("ALFA counts stories", page)
-        self.assertIn("BETA counts tasks", page)
-        self.assertIn("Claims intake (2 work items)", page)
-        self.assertIn("our convention, not an industry standard", page)
-        for render in (render_manager, render_dm):
-            page = text(render("Sprint 29", teams(), GEN))
+        self.assertNotRegex(page, r"(?i)\b(story|stories|task|tasks)\b")
+        dm = text(render_dm("Sprint 29", teams(), GEN))
+        self.assertIn("Counts: stories", dm)
+        self.assertIn("Counts: tasks", dm)
+        self.assertIn("Claims intake (2 work items)", dm)
+        self.assertIn("our convention, not an industry standard", dm)
+        self.assertIn("waiting (in a waiting state or blocked)", dm)
+        for page in (page, dm):
             self.assertNotIn("on the customer", page)
-            self.assertIn("waiting (in a waiting state or blocked)", page)
+        stripped = dm.replace("Counts: stories", "").replace("Counts: tasks", "")
+        stripped = re.sub(r"Method\..*", "", stripped)
         for word in ("story", "task"):
-            stripped = page.replace("counts stories", "").replace("counts tasks", "")
-            stripped = re.sub(r"Method\..*", "", stripped)
             self.assertNotRegex(stripped, r"(?i)\b%ss?\b" % word)
 
     def test_manual_status_and_small_sample(self):
-        page = text(render_manager("Sprint 29", teams(NOTES), GEN))
+        page = text(render_dm("Sprint 29", teams(NOTES), GEN))
         self.assertIn("AMBER PO asked to hold the release (set by hand)", page)
+        page = text(render_manager("Sprint 29", teams(NOTES), GEN))
+        self.assertNotIn("AMBER", page)
         self.assertIn("cycle time median / P85 over the last 2 sprints", page)
         self.assertIn("Last 2 sprints Sprint 28 Sprint 29", page)
 
@@ -115,9 +119,104 @@ class RenderTest(unittest.TestCase):
         self.assertIn("2 of 3 planned work items delivered", body)  # repeats the manager report
 
     def test_missing_sprint_is_listed(self):
-        missing = [{"team": "GAMMA", "missing": True}]
+        missing = [{"team": "GAMMA", "missing": "No sprint named Sprint 29."}]
         for render in (render_manager, render_dm):
-            self.assertIn("No sprint named Sprint 29 for team GAMMA", render("Sprint 29", missing, GEN))
+            self.assertIn('<article class="squad"><div class="top"><h2>GAMMA</h2></div>'
+                          '<p class="note">No sprint named Sprint 29.</p></article>',
+                          render("Sprint 29", missing, GEN))
+
+    def card(self, page, team):
+        """The article for `team` in `page`."""
+        return next(a for a in re.findall(r'(?s)<article class="squad">.*?</article>', page)
+                    if "<h2>%s</h2>" % team in a)
+
+    def test_manager_card_layout(self):
+        card = self.card(render_manager("Sprint 29", teams(NOTES), GEN), "ALFA")
+        order = ["<h2>ALFA</h2>", "Sprint 29 (27 Oct – 7 Nov 2026)", "<h3>Delivery highlights</h3>",
+                 "Upload is live.", "QA environment was down.", "<h3>Delivery stats</h3>",
+                 "work items carried over", "<summary>Delivered items (2)</summary>",
+                 "<summary>Carried over items (1)</summary>", "<summary>Last 2 sprints</summary>"]
+        self.assertEqual([card.index(o) for o in order], sorted(card.index(o) for o in order))
+        self.assertIn('<span class="cap">Sprint 29 (27 Oct – 7 Nov 2026)<br>2 engineers (18 PD '
+                      'capacity)</span>', card)
+        for absent in ("Counts:", "GREEN", "AMBER", "RED", "Worked on", "worked on", "Age"):
+            self.assertNotIn(absent, card)
+        self.assertIn("<td>Planned</td>", card)
+        dm = self.card(render_dm("Sprint 29", teams(NOTES), GEN).split("<h2>Team figures</h2>")[1],
+                       "ALFA")
+        self.assertIn("<br>Counts: stories</span>", dm)
+
+    def test_manager_card_without_summary_has_no_highlights(self):
+        self.assertNotIn("Delivery highlights", render_manager("Sprint 29", teams(), GEN))
+
+    def test_manager_card_exec_note_without_summary_keeps_highlights(self):
+        card = self.card(render_manager("Sprint 29", teams(Notes(exec_note={"ALFA": "Pilot live"})),
+                                        GEN), "ALFA")
+        self.assertIn("<h3>Delivery highlights</h3><p>Pilot live</p>", card)
+
+    def test_manager_card_multiline_summary_renders_as_bullets(self):
+        notes = Notes(summary={"ALFA": "Delivered upload\nIn progress: retries"})
+        card = self.card(render_manager("Sprint 29", teams(notes), GEN), "ALFA")
+        self.assertIn("<ul><li>Delivered upload</li><li>In progress: retries</li></ul>", card)
+
+    def test_manager_card_single_line_summary_unchanged(self):
+        card = self.card(render_manager("Sprint 29", teams(NOTES), GEN), "ALFA")
+        self.assertIn("<h3>Delivery highlights</h3><p>Upload is live.</p>", card)
+
+    def test_dm_card_unchanged(self):
+        page = render_dm("Sprint 29", teams(NOTES), GEN).split("<h2>Team figures</h2>")[1]
+        card = self.card(page, "ALFA")
+        order = ['<span class="chip ', "The team worked on", "Upload is live.",
+                 '<div class="figs">', "<h3>Carried over</h3>", "<h3>Last 2 sprints</h3>"]
+        self.assertEqual([card.index(o) for o in order], sorted(card.index(o) for o in order))
+        self.assertNotIn("work items carried over", card)
+        self.assertNotIn("<details>", card)
+        self.assertIn("<th>Age</th>", card)
+
+    def test_dm_card_multiline_summary_renders_as_bullets(self):
+        notes = Notes(summary={"ALFA": "Delivered upload\nIn progress: retries"})
+        page = render_dm("Sprint 29", teams(notes), GEN).split("<h2>Team figures</h2>")[1]
+        self.assertIn("<ul><li>Delivered upload</li><li>In progress: retries</li></ul>",
+                      self.card(page, "ALFA"))
+
+    def test_carry_and_person_show_days_on_hold(self):
+        t = teams()
+        t[0]["carry"][0]["held"] = 3
+        t[0]["people"][0]["held"] = [[103, 3], [7, 1]]
+        dm = render_dm("Sprint 29", t, GEN)
+        self.assertIn("<h3>Carried over (1 On Hold)</h3>", dm)
+        self.assertIn("<td>3 d</td>", dm)
+        self.assertIn("<th>On Hold</th>", dm)
+        self.assertIn("<td>#103 3 days, #7 1 day</td>", dm)
+        self.assertIn("<summary>Carried over items (1) (1 On Hold)</summary>",
+                      render_manager("Sprint 29", t, GEN))
+        for render in (render_manager, render_dm):
+            self.assertIn("On Hold = days the work item spent in a hold state or tagged Blocked",
+                          render("Sprint 29", t, GEN))
+
+    def test_manager_empty_carryover_has_visible_panel(self):
+        t = teams()
+        t[1]["carry"] = []
+        page = render_manager("Sprint 29", t, GEN)
+        self.assertIn(".carry-empty{", page)
+        card = self.card(page, "BETA")
+        self.assertIn('<div class="carry-empty"><h3>Carried over items (0)</h3><p class="note">No '
+                      'work items carried over.</p></div>', card)
+        self.assertNotIn("<summary>Carried over", card)
+        dm = self.card(render_dm("Sprint 29", t, GEN).split("<h2>Team figures</h2>")[1], "BETA")
+        self.assertIn('<div><h3>Carried over</h3><p class="note">No work items carried over.</p></div>',
+                      dm)
+        self.assertNotIn("carry-empty", dm)
+
+    def test_work_items_link_to_azure_devops(self):
+        page = link_ids(render_manager("Sprint 29", teams(NOTES), GEN),
+                        "https://dev.azure.com/acme/", "My Project")
+        self.assertIn('<a href="https://dev.azure.com/acme/My%20Project/_workitems/edit/101">#101</a>',
+                      page)
+        self.assertNotIn("<a ", page[:page.index("</style>")])
+        self.assertEqual(link_ids("<style>x</style><p>#1</p>", "", "P"), "<style>x</style><p>#1</p>")
+        self.assertEqual(link_ids("<style></style><p>&#39;#2</p>", "https://o", "P"),
+                         '<style></style><p>&#39;<a href="https://o/P/_workitems/edit/2">#2</a></p>')
 
     def test_titles_are_escaped(self):
         for render in (render_manager, render_dm):
@@ -194,8 +293,8 @@ class RunReportTest(unittest.TestCase):
             contents.append(pages)
         self.assertEqual(contents[0], contents[1])
         self.assertTrue(os.path.exists(os.path.join(self.d, "Sprint 29", "notes.txt")))
-        self.assertIn("16 of 18 engineer-days available", text(contents[0][0]))  # Maya: 2 days off
-        self.assertIn("8 of 9 engineer-days available", text(contents[0][0]))  # alias for Lena
+        self.assertIn("2 engineers (16 PD capacity)", text(contents[0][0]))  # Maya: 2 days off
+        self.assertIn("1 engineer (8 PD capacity)", text(contents[0][0]))  # alias for Lena
 
     def test_report_prints_sprint_notes_carryovers_and_delivered(self):
         code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
@@ -203,7 +302,9 @@ class RunReportTest(unittest.TestCase):
         lines = out.splitlines()
         self.assertIn("sprint: Sprint 29", lines)
         self.assertIn("notes: " + os.path.join(self.d, "Sprint 29", "notes.txt"), lines)
-        self.assertTrue([l for l in lines if re.match(r"ALFA delivered: #\d+ \S", l)], out)
+        self.assertIn("ALFA worked on: #101 Upload <b>x</b> (delivered)", lines)
+        self.assertIn("ALFA worked on: #103 Retry & reconcile (in progress)", lines)
+        self.assertFalse([l for l in lines if " delivered: #" in l])
         carry = [l for l in lines if l.startswith("ALFA carry-over without note: #")]
         self.assertTrue(carry, out)
         cid = re.match(r"ALFA carry-over without note: #(\d+)", carry[0]).group(1)
@@ -223,12 +324,73 @@ class RunReportTest(unittest.TestCase):
         with open(os.path.join(self.d, "Sprint 28", "manager_2026-11-13.html")) as f:
             page = f.read()
         self.assertIn("Retries done.", page)
-        self.assertIn("No sprint named Sprint 28 for team BETA", page)
+        self.assertIn("No sprint named Sprint 28.", page)
+        self.assertIn("BETA: No sprint named Sprint 28.", out)
 
     def test_default_sprint_is_last_ended(self):
         code, out = self.run_cli("report", "--offline", "--today", "2026-11-07")
         self.assertEqual(code, 0, out)
         self.assertIn(os.path.join("Sprint 28", "manager_2026-11-07.html"), out)
+
+    def test_default_takes_each_teams_last_ended_sprint_when_names_differ(self):
+        def rename(t):
+            data = json.loads(t)
+            for it in data["iterations"]:
+                if it["path"] == S29:
+                    it["path"], it["name"], it["end"] = "Proj\\Pricing 29", "Pricing 29", "2026-11-06"
+            for r in data["revisions"]:
+                if r["area"] == "Proj\\Pricing" and r["iteration"] == S29:
+                    r["iteration"] = "Proj\\Pricing 29"
+            data["iterations"].append({"path": S29, "name": "Sprint 29", "start": "2026-10-27",
+                                       "end": "2026-11-07"})
+            return json.dumps(data)
+        self.edit(CACHE_FILE, rename)
+        code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertEqual(code, 0, out)
+        self.assertIn("sprint: Sprints ended by 2026-11-07", out)
+        folder = os.path.join(self.d, "Sprints ended by 2026-11-07")
+        with open(os.path.join(folder, "manager_2026-11-13.html"), encoding="utf-8") as f:
+            page = text(f.read())
+        self.assertIn("Sprint 29 (27 Oct – 7 Nov 2026)", page)
+        self.assertIn("Pricing 29 (27 Oct – 6 Nov 2026)", page)
+
+    def test_team_without_any_sprint_says_so(self):
+        self.edit("team.csv", lambda t: t + "Nadia Kern,nadia@vendor.example,GAMMA,,,1\n")
+        code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertEqual(code, 0, out)
+        why = ("No work assigned: none of the team's 1 engineer has a work item assigned in the "
+               "board history (last 200 days).")
+        self.assertIn("GAMMA: " + why, out)
+        with open(os.path.join(self.d, "Sprint 29", "manager_2026-11-13.html"), encoding="utf-8") as f:
+            self.assertIn(why, unescape(f.read()))
+        def backlog_item(t):
+            data = json.loads(t)
+            row = dict(data["revisions"][0], id=999, rev=1, iteration="Proj",
+                       assigned="nadia@vendor.example")
+            data["revisions"].append(row)
+            return json.dumps(data)
+        self.edit(CACHE_FILE, backlog_item)
+        _, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertIn("GAMMA: No ended sprint: none of the team's counted work items is on a sprint.",
+                      out)
+
+    def test_team_without_summary_is_a_warning(self):
+        os.makedirs(os.path.join(self.d, "Sprint 29"))
+        with open(os.path.join(self.d, "Sprint 29", "notes.txt"), "w") as f:
+            f.write("ALFA summary: Upload is live.\n")
+        _, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertIn("warning: BETA has no summary in notes.txt; the manager card shows no "
+                      "highlights", out)
+        self.assertNotIn("warning: ALFA has no summary", out)
+
+    def test_report_links_ids_when_board_is_known(self):
+        self.edit("config.json", lambda t: t.replace('"organization": ""',
+                                                     '"organization": "https://dev.azure.com/acme"')
+                  .replace('"project": ""', '"project": "Proj"'))
+        self.run_cli("report", "--offline", "--today", "2026-11-13")
+        for prefix in ("manager", "dm"):
+            with open(os.path.join(self.d, "Sprint 29", "%s_2026-11-13.html" % prefix)) as f:
+                self.assertIn('href="https://dev.azure.com/acme/Proj/_workitems/edit/101"', f.read())
 
     def test_offline_without_cache(self):
         os.remove(os.path.join(self.d, CACHE_FILE))
@@ -270,9 +432,10 @@ class RunReportTest(unittest.TestCase):
                       "it counts stories", out)
         self.assertIn("warning: team BETA in config.json has no one in team.csv; it is not reported", out)
         self.assertNotIn("No sprint named", out)
-        with open(os.path.join(self.d, "Sprint 29", "manager_2026-11-13.html"), encoding="utf-8") as f:
+        with open(os.path.join(self.d, "Sprint 29", "dm_2026-11-13.html"), encoding="utf-8") as f:
             page = text(f.read())
-        self.assertIn("GAMMA counts stories", page)
+        self.assertIn("GAMMA", page)
+        self.assertIn("Counts: stories", page)
         self.assertNotIn("BETA", page)
 
     def test_notes_bom_and_unused_lines_are_warnings(self):
@@ -305,7 +468,7 @@ class RunReportTest(unittest.TestCase):
         code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
         self.assertEqual(code, 0, out)
         with open(os.path.join(self.d, "Sprint 29", "manager_2026-11-13.html"), encoding="utf-8") as f:
-            self.assertIn("15 of 18 engineer-days available", text(f.read()))  # 2 + 1 days off
+            self.assertIn("2 engineers (15 PD capacity)", text(f.read()))  # 2 + 1 days off
 
     def test_manager_file_names_are_warnings(self):
         self.edit(CACHE_FILE, lambda t: t.replace("Retry & reconcile", "Maya Brook: retry"))

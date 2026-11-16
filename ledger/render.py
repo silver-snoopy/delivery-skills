@@ -4,10 +4,11 @@ import re
 from datetime import date, datetime
 from html import escape, unescape
 from typing import Dict, List, Optional
+from urllib.parse import quote
 
 from ledger.ado import Client, cached_ids, fetch, load_cache, save_cache
 from ledger.config import Notes, Person, email_index, load_config, parse_notes, read_team
-from ledger.metrics import (histories, CARRIED_FLAG, GREEN_SHARE, STALE_DAYS, TREND, WAIT_FLAG_DAYS,
+from ledger.metrics import (CARRIED_FLAG, GREEN_SHARE, STALE_DAYS, TREND, WAIT_FLAG_DAYS,
                             WAIT_RED_DAYS, WIP_FLAG, team_sprint, team_sprints)
 from ledger.replay import local_tz, parse_ts
 from ledger.xlsx import read_vacations, resolve_name
@@ -24,7 +25,7 @@ Roboto,sans-serif;margin:0;padding:24px 16px 56px}
 .wrap{max-width:980px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
 h1,h2,h3,p{margin:0}h1{font-size:26px}h2{font-size:20px}
 h3{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:4px}
-.meta,.cap,.note,.ask{color:var(--muted);font-size:13px}
+.meta,.cap,.note,.ask{color:var(--muted);font-size:13px}.cap{text-align:right}a{color:inherit}
 .squad{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:22px;
 display:flex;flex-direction:column;gap:18px}
 .top{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
@@ -50,7 +51,9 @@ display:flex;flex-direction:column;gap:6px}
 .row{border-left:6px solid var(--warn);border-bottom:1px solid var(--line);padding:12px 16px}
 .row.red{border-left-color:var(--bad)}.row.grey{border-left-color:var(--line)}
 .private{background:var(--bad-soft);color:var(--bad);font-size:12px;padding:6px 10px;
-border-radius:6px;align-self:flex-start}"""
+border-radius:6px;align-self:flex-start}
+details{border:1px solid var(--line);border-radius:6px;padding:8px 12px}summary{cursor:pointer;font-weight:600}
+.carry-empty{background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:12px 14px}"""
 
 
 def _tag(name: str, inner: str, cls: str = "") -> str:
@@ -120,17 +123,21 @@ def _title(sprint_name: str, kind: str, running: bool) -> str:
     return "%s delivery %s%s" % (sprint_name, kind, " (sprint still running)" if running else "")
 
 
-def _missing(sprint_name: str, t: dict) -> str:
-    return _tag("p", escape("No sprint named %s for team %s." % (sprint_name, t["team"])), "note")
+def _missing(t: dict) -> str:
+    return _tag("article", _tag("div", _tag("h2", escape(t["team"])), "top")
+                + _tag("p", escape(t["missing"]), "note"), "squad")
 
 
-def _capacity(t: dict) -> str:
+def _capacity(t: dict, dm: bool) -> str:
     c = t["capacity"]
     eng = "%d engineer%s" % (c["engineers"], "" if c["engineers"] == 1 else "s")
     if c["onboarding"]:
-        eng += " (%d onboarding)" % c["onboarding"]
-    return "counts %s · %s · %s of %s engineer-days available" % (
-        t["count"], eng, _num(c["available"]), _num(c["nominal"]))
+        eng += ", %d onboarding" % c["onboarding"]
+    lines = ["%s (%s)" % (t["sprint"]["name"], _dates(t["sprint"])),
+             "%s (%s PD capacity)" % (eng, _num(c["available"]))]
+    if dm:
+        lines.append("Counts: %s" % t["count"])
+    return _tag("span", "<br>".join(escape(line) for line in lines), "cap")
 
 
 def _fig(n: str, label: str, key: bool = False) -> str:
@@ -152,85 +159,147 @@ def _cycle(t: dict) -> str:
                        % (_last(len(t["trend"])), _items(w["n"])))
 
 
-def _carry(t: dict) -> str:
+def _figs(t: dict, carried: bool = False) -> str:
+    figs = [_fig("%d <small>of %d</small>" % (len(t["delivered_planned"]), len(t["planned"])),
+                 "planned work items delivered", True),
+            _fig(str(len(t["delivered"])), "work items delivered in total")]
+    if carried:
+        figs.append(_fig(str(len(t["carry"])), "work items carried over"))
+    figs += [_fig("+%d / −%d" % (len(t["added"]), len(t["removed"])),
+                  "work items added / removed mid-sprint"),
+             _fig(str(len(t["late"])), "planned work items completed after the sprint ended"),
+             _cycle(t), _fig(_pct(t["waiting_share"]), "of cycle time spent in waiting states")]
+    return _tag("div", "".join(figs), "figs")
+
+
+def _fold(summary: str, inner: str) -> str:
+    return _tag("details", _tag("summary", escape(summary)) + inner)
+
+
+def _summary(text: str) -> str:
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) == 1:
+        return _tag("p", escape(lines[0]))
+    return _tag("ul", "".join(_tag("li", escape(line)) for line in lines))
+
+
+def _carry(t: dict, age: bool = True) -> str:
     p85 = t["cycle_window"]["p85"]
     agreed = {"agreed": ("Yes", "yes"), "not agreed": ("No", "no")}
     rows = []
     for c in t["carry"]:
         old = p85 is not None and c["age"] is not None and c["age"] > p85
         word, cls = agreed.get(c["agreed"], ("Unknown", "unk"))
-        rows.append([_tag("span", "#%d" % c["id"], "id"), escape(c["title"] or ""),
-                     _tag("span", _days(c["age"]), "hot" if old else ""),
-                     _tag("span", str(c["sprints"]), "hot" if c["sprints"] >= CARRIED_FLAG else ""),
-                     _tag("span", escape(c["state"]), "chip wait") if c["waiting"]
-                     else escape(c["state"]),
-                     escape(c["reason"]) or "–", _tag("span", word, "chip " + cls)])
-    if not rows:
+        rows.append([_tag("span", "#%d" % c["id"], "id"), escape(c["title"] or "")]
+                    + ([_tag("span", _days(c["age"]), "hot" if old else "")] if age else [])
+                    + [_tag("span", str(c["sprints"]), "hot" if c["sprints"] >= CARRIED_FLAG else ""),
+                       _tag("span", escape(c["state"]), "chip wait") if c["waiting"]
+                       else escape(c["state"]),
+                       _days(c["held"]) if c["held"] else "–",
+                       escape(c["reason"]) or "–", _tag("span", word, "chip " + cls)])
+    held = sum(1 for c in t["carry"] if c["held"])
+    if age and not rows:
         return _tag("div", _tag("h3", "Carried over") + _tag("p", "No work items carried over.", "note"))
-    return _tag("div", _tag("h3", "Carried over") + _table(
-        ["Work item", "Title", "Age", "Sprints carried", "Now in", "Reason", "Agreed with PO"], rows))
+    if not rows:
+        return _tag("div", _tag("h3", "Carried over items (0)")
+                    + _tag("p", "No work items carried over.", "note"), "carry-empty")
+    table = _table(["Work item", "Title"] + (["Age"] if age else [])
+                   + ["Sprints carried", "Now in", "On Hold", "Reason", "Agreed with PO"], rows)
+    if age:
+        heading = "Carried over (%d On Hold)" % held if held else "Carried over"
+        return _tag("div", _tag("h3", heading) + table)
+    return _fold("Carried over items (%d)%s" % (len(rows), " (%d On Hold)" % held if held else ""),
+                 table)
 
 
-def _trend(t: dict) -> str:
+def _delivered(t: dict) -> str:
+    items = t["delivered_items"]
+    if not items:
+        return _tag("p", "No work items delivered.", "note")
+    return _fold("Delivered items (%d)" % len(items), _table(
+        ["Work item", "Title", "Planned or added"],
+        [[_tag("span", "#%d" % d["id"], "id"), escape(d["title"] or ""),
+          "Planned" if d["planned"] else "Added"] for d in items]))
+
+
+def _trend_table(t: dict) -> str:
     tr = t["trend"]
     rows = [["Planned work items delivered"] + ["%d/%d" % (s["delivered_planned"], s["planned"])
                                                 for s in tr],
             ["Work items delivered in total"] + [str(s["delivered"]) for s in tr],
             ["Cycle time P85 (days)"] + [_num(s["p85"]) for s in tr]]
-    return _tag("div", _tag("h3", _last(len(tr)).capitalize()) + _table(
-        [""] + [s["sprint"] for s in tr], [[r[0]] + [escape(c) for c in r[1:]] for r in rows]))
+    return _table([""] + [s["sprint"] for s in tr], [[r[0]] + [escape(c) for c in r[1:]] for r in rows])
 
 
-def _team(t: dict) -> str:
+def _trend(t: dict) -> str:
+    return _tag("div", _tag("h3", _last(len(t["trend"])).capitalize()) + _trend_table(t))
+
+
+def _exec_team(t: dict) -> str:
+    """The manager_ card: highlights, stats, delivered and carried-over panels, trend; no RAG
+    status and no per-person data."""
+    parts = [_tag("div", _tag("h2", escape(t["team"])) + _capacity(t, False), "top")]
+    summary, exec_note = t["notes"]["summary"], t["notes"]["exec_note"]
+    if summary or exec_note:
+        parts.append(_tag("div", _tag("h3", "Delivery highlights")
+                          + (_summary(summary) if summary else "")
+                          + (_tag("p", escape(exec_note)) if exec_note else "")))
+    parts += [_tag("div", _tag("h3", "Delivery stats") + _figs(t, carried=True)), _delivered(t),
+              _carry(t, age=False), _fold(_last(len(t["trend"])).capitalize(), _trend_table(t))]
+    return _tag("article", "\n".join(parts), "squad")
+
+
+def _team(t: dict, dm: bool) -> str:
     st = t["status"]
     reason = st["reason"] + (" (set by hand)" if st["manual"] else "")
-    parts = [_tag("div", _tag("h2", escape(t["team"])) + _tag("span", escape(_capacity(t)), "cap"),
-                  "top"),
+    parts = [_tag("div", _tag("h2", escape(t["team"])) + _capacity(t, dm), "top"),
              _tag("p", _tag("span", escape(st["colour"]), "chip " + st["colour"]) + " "
                   + escape(reason.strip()))]
     if t["worked_on"]:
         parts.append(_tag("div", _tag("h3", "The team worked on") + _tag("ul", "".join(
             _tag("li", escape("%s (%s)" % (title, _items(n)))) for title, n in t["worked_on"]))))
-    parts += [_tag("p", escape(t["notes"][k])) for k in ("summary", "exec_note") if t["notes"][k]]
-    figs = [_fig("%d <small>of %d</small>" % (len(t["delivered_planned"]), len(t["planned"])),
-                 "planned work items delivered", True),
-            _fig(str(len(t["delivered"])), "work items delivered in total"),
-            _fig("+%d / −%d" % (len(t["added"]), len(t["removed"])),
-                 "work items added / removed mid-sprint"),
-            _fig(str(len(t["late"])), "planned work items completed after the sprint ended"),
-            _cycle(t), _fig(_pct(t["waiting_share"]), "of cycle time spent in waiting states")]
-    parts += [_tag("div", "".join(figs), "figs"), _carry(t), _trend(t)]
+    parts += [_summary(t["notes"][k]) for k in ("summary", "exec_note") if t["notes"][k]]
+    parts += [_figs(t), _carry(t), _trend(t)]
     return _tag("article", "\n".join(parts), "squad")
 
 
 def _footnote(dm: bool) -> str:
+    first = ("<b>Method.</b> Each team counts the work items of one level, shown on its card as "
+             "“Counts: stories” (backlog items), “Counts: tasks”, or a list of work item types. "
+             if dm else
+             "<b>Method.</b> Each team counts its own agreed work item types, so figures are not "
+             "comparable between teams. PD = person-days available after leave. ")
     lines = [
-        "<b>Method.</b> Each team counts work items at one level, shown beside its name: "
-        "“counts stories” (backlog items) or “counts tasks”, never both. Planned = in "
-        "the sprint at the end of its first day. Scope is set by the customer's product owner. A sprint "
-        "gets credit for the work items completed within its dates, as in Azure DevOps velocity. Cycle "
-        "time = calendar days from first active to done, inclusive; we show the median and the 85th "
-        "percentile (P85), not averages, so figures can differ from Azure DevOps widgets. Ages and the "
-        "status rule use the team's P85 over its last %d sprints." % TREND,
-        "<b>Status rule</b> (our convention, not an industry standard): GREEN = at least %d%% of planned "
-        "work items delivered, not counting removed ones, and no carry-over older than the team's P85 "
-        "without PO agreement; AMBER = one condition missed; RED = both missed, or a work item waiting "
-        "(in a waiting state or blocked) for more than %d working days."
-        % (round(GREEN_SHARE * 100), WAIT_RED_DAYS)]
+        first + "Planned = in the sprint and assigned to one of the team's engineers at the end of "
+        "its first day; work that becomes theirs later counts as added. Scope is set by the "
+        "customer's product owner. A sprint gets credit for the work items closed while on its "
+        "iteration, even after its end date. Cycle time = calendar days from first active to done, "
+        "inclusive; we show the median and the 85th percentile (P85), not averages, so figures can "
+        "differ from Azure DevOps widgets. Ages and the status rule use the team's P85 over its "
+        "last %d sprints." % TREND]
     if dm:
+        lines.append(
+            "<b>Status rule</b> (our convention, not an industry standard): GREEN = at least %d%% of "
+            "planned work items delivered, not counting removed ones, and no carry-over older than the "
+            "team's P85 without PO agreement; AMBER = one condition missed; RED = both missed, or a "
+            "work item waiting (in a waiting state or blocked) for more than %d working days."
+            % (round(GREEN_SHARE * 100), WAIT_RED_DAYS))
         lines.append(
             "<b>Needs attention</b> thresholds (our convention, not an industry standard), evaluated "
             "at the sprint end: open longer than the team's P85; carried over %d or more sprints; "
             "waiting (in a waiting state or blocked) more than %d working days; no board change for "
             "%d working days; more than %d work items in progress for one engineer."
             % (CARRIED_FLAG, WAIT_FLAG_DAYS, STALE_DAYS, WIP_FLAG))
+    lines.append("On Hold = days the work item spent in a hold state or tagged Blocked during the "
+                 "sprint; shown for context and not counted against the team.")
     lines.append("Figures are recomputed from the board history on every run and do not change for "
                  "a closed sprint unless the history changes.")
     return _tag("div", "".join(_tag("p", line) for line in lines), "foot")
 
 
-def _teams(sprint_name: str, teams: List[dict]) -> List[str]:
-    return [_missing(sprint_name, t) if t.get("missing") else _team(t) for t in teams]
+def _teams(teams: List[dict], dm: bool) -> List[str]:
+    return [_missing(t) if t.get("missing") else (_team(t, True) if dm else _exec_team(t))
+            for t in teams]
 
 
 def render_manager(sprint_name: str, teams: List[dict], generated: datetime, running: bool = False,
@@ -238,15 +307,30 @@ def render_manager(sprint_name: str, teams: List[dict], generated: datetime, run
     """`board` is the board data time; `running` marks a sprint that has not ended."""
     title = _title(sprint_name, "summary", running)
     body = [_head(title, teams, generated, False, board)]
-    return _page(title, "\n".join(body + _teams(sprint_name, teams) + [_footnote(False)]))
+    return _page(title, "\n".join(body + _teams(teams, False) + [_footnote(False)]))
+
+
+def link_ids(page: str, organization: str, project: str) -> str:
+    """Turn every #123 in the text after </style> into a link to the Azure DevOps work item."""
+    head, sep, body = page.partition("</style>")
+    if not (organization and project and sep):
+        return page
+    base = escape("%s/%s/_workitems/edit/" % (organization.rstrip("/"), quote(project)))
+
+    def link(m):
+        return ">" + re.sub(r"(?<![\w&])#(\d+)\b",
+                            lambda n: '<a href="%s%s">#%s</a>' % (base, n.group(1), n.group(1)),
+                            m.group(1)) + "<"
+    return head + sep + re.sub(r">([^<]+)<", link, body)
 
 
 def _person_row(p: dict) -> List[str]:
     name = escape(p["name"]) + (" " + _tag("span", "onboarding", "chip wait") if p["onboarding"] else "")
     oldest = "%s %s" % (_ids([p["oldest"][0]]), _days(p["oldest"][1])) if p["oldest"] else "–"
     worked = _tag("span", "no item assigned", "hot") if p["no_assignment"] else _ids(p["items"])
+    held = ", ".join("#%d %d day%s" % (i, d, "" if d == 1 else "s") for i, d in p["held"]) or "–"
     return [name, "%s / %s" % (_num(p["available"]), _num(p["nominal"])), str(len(p["delivered"])),
-            str(len(p["in_progress"])), oldest, _days(p["median"]), worked]
+            str(len(p["in_progress"])), oldest, held, _days(p["median"]), worked]
 
 
 def _dm_team(t: dict) -> str:
@@ -266,7 +350,7 @@ def _dm_team(t: dict) -> str:
                             "Use this as context, not as a ranking.", "note")]
     parts.append(_tag("div", _tag("h3", "People") + _table(
         ["Engineer", "Days available", "Work items delivered", "In progress at end", "Oldest open",
-         "Median cycle", "Worked on"], [_person_row(p) for p in t["people"]])))
+         "On Hold", "Median cycle", "Worked on"], [_person_row(p) for p in t["people"]])))
     return _tag("article", "\n".join(parts), "squad")
 
 
@@ -288,9 +372,8 @@ def render_dm(sprint_name: str, teams: List[dict], generated: datetime, running:
         body.append(_tag("div", _tag("h3", escape(t["team"])) + (
             _tag("div", "".join(rows), "attn") if rows
             else _tag("p", "Nothing needs attention.", "note"))))
-    body += [_missing(sprint_name, t) for t in teams if t.get("missing")]
     body += [_dm_team(t) for t in present]
-    body += [_tag("h2", "Team figures (as in the manager report)")] + _teams(sprint_name, teams)
+    body += [_tag("h2", "Team figures")] + _teams(teams, True)
     return _page(title, "\n".join(body + [_footnote(True)]))
 
 
@@ -390,17 +473,38 @@ def _check_notes(notes: Notes, teams: List[dict], name: str, out) -> None:
         _warn(out, "notes.txt #%d is not a carry-over of any team in %s" % (i, name))
 
 
+def _no_sprint(data: dict, cfg, people: List[Person], team: str) -> str:
+    """Why a team has no ended sprint."""
+    emails = {e.lower() for p in people if p.team.lower() == team.lower() for e in p.emails}
+    if any((r["assigned"] or "").lower() in emails for r in data["revisions"]):
+        return "No ended sprint: none of the team's counted work items is on a sprint."
+    n = sum(1 for p in people if p.team.lower() == team.lower() and not p.left)
+    return ("No work assigned: none of the team's %d engineer%s has a work item assigned in the "
+            "board history (last %d days)." % (n, "" if n == 1 else "s", cfg.history_days))
+
+
+def _pick(data, cfg, people, team_names, today, wanted) -> tuple:
+    """(report name, {team: sprint or None}); without `wanted` each team gets its last ended
+    sprint."""
+    by_team = {t: team_sprints(data, cfg, people, t) for t in team_names}
+    if wanted:
+        if not any(s["name"] == wanted for ss in by_team.values() for s in ss):
+            raise ValueError("no team has a sprint named '%s'" % wanted)
+        return wanted, {t: next((s for s in reversed(ss) if s["name"] == wanted), None)
+                        for t, ss in by_team.items()}
+    picked = {t: next((s for s in reversed(ss) if date.fromisoformat(s["end"]) < today), None)
+              for t, ss in by_team.items()}
+    found = [s for s in picked.values() if s]
+    if not found:
+        raise ValueError("no sprint ended before %s" % today.isoformat())
+    names = {s["name"] for s in found}
+    name = names.pop() if len(names) == 1 else "Sprints ended by %s" % max(s["end"] for s in found)
+    return name, picked
+
+
 def run_report(args, client: Optional[Client], out) -> int:
     cfg, people, data, vac, today, team_names = _load(args, client, out)
-    by_team = {t: team_sprints(data, cfg, people, t) for t in team_names}
-    name = args.sprint
-    if not name:
-        ended = [s for t in team_names for s in _ended(data, cfg, people, t, today)]
-        if not ended:
-            raise ValueError("no sprint ended before %s" % today.isoformat())
-        name = max(ended, key=lambda s: (s["end"], s["start"], s["name"]))["name"]
-    if not any(s["name"] == name for ss in by_team.values() for s in ss):
-        raise ValueError("no team has a sprint named '%s'" % name)
+    name, picked = _pick(data, cfg, people, team_names, today, args.sprint)
     folder = os.path.join(args.dir, folder_name(name))
     os.makedirs(folder, exist_ok=True)
     notes_path = os.path.join(folder, "notes.txt")
@@ -409,13 +513,17 @@ def run_report(args, client: Optional[Client], out) -> int:
     with open(notes_path, encoding="utf-8-sig") as f:
         notes = parse_notes(f.read())
     teams = []
-    for team, sprints in by_team.items():
-        sprint = next((s for s in reversed(sprints) if s["name"] == name), None)
-        teams.append({"team": team, "missing": True} if sprint is None else
-                     team_sprint(data, cfg, people, team, sprint, notes, vac.days_off))
-    for s in {(t["sprint"]["start"], t["sprint"]["end"]) for t in teams if not t.get("missing")}:
-        if not any(date.fromisoformat(s[0]) <= d <= date.fromisoformat(s[1]) for d in vac.days):
-            _warn(out, "the calendar does not cover %s (%s to %s); leave is not counted" % (name, *s))
+    for team, sprint in picked.items():
+        if sprint is not None:
+            teams.append(team_sprint(data, cfg, people, team, sprint, notes, vac.days_off))
+        else:
+            why = ("No sprint named %s." % name if args.sprint
+                   else _no_sprint(data, cfg, people, team))
+            teams.append({"team": team, "missing": why})
+    for s in {(t["sprint"]["name"], t["sprint"]["start"], t["sprint"]["end"])
+              for t in teams if not t.get("missing")}:
+        if not any(date.fromisoformat(s[1]) <= d <= date.fromisoformat(s[2]) for d in vac.days):
+            _warn(out, "the calendar does not cover %s (%s to %s); leave is not counted" % s)
     running = any(date.fromisoformat(t["sprint"]["end"]) >= today
                   for t in teams if not t.get("missing"))
     if running:
@@ -426,7 +534,8 @@ def run_report(args, client: Optional[Client], out) -> int:
     paths, pages = [], []
     for prefix, render in (("manager", render_manager), ("dm", render_dm)):
         paths.append(os.path.join(folder, "%s_%s.html" % (prefix, today.isoformat())))
-        pages.append(render(name, teams, generated, running, board))
+        pages.append(link_ids(render(name, teams, generated, running, board),
+                              cfg.organization, cfg.project))
         with open(paths[-1], "w", encoding="utf-8") as f:
             f.write(pages[-1])
     manager = unescape(pages[0]).lower()
@@ -438,15 +547,20 @@ def run_report(args, client: Optional[Client], out) -> int:
         _warn(out, line)
     _check_notes(notes, teams, name, out)
     for t in teams:
+        if not t.get("missing") and not t["notes"]["summary"]:
+            _warn(out, "%s has no summary in notes.txt; the manager card shows no highlights"
+                  % t["team"])
+    for t in teams:
         if t.get("missing"):
-            print("No sprint named %s for team %s." % (name, t["team"]), file=out)
+            print("%s: %s" % (t["team"], t["missing"]), file=out)
     print("Written:\n  %s\n  %s\n  %s (notes)" % (paths[0], paths[1], notes_path), file=out)
     print("sprint: %s\nnotes: %s" % (name, notes_path), file=out)
-    hist = histories(data, cfg.not_delivered_reasons)
     for t in sorted((t for t in teams if not t.get("missing")), key=lambda t: t["team"]):
         lines = ["carry-over without note: #%d %s" % (c["id"], c["title"] or "")
                  for c in t["carry"] if c["id"] not in notes.items]
-        lines += ["delivered: #%d %s" % (i, hist[i].title or "") for i in sorted(t["delivered"])]
+        lines += ["worked on: #%d %s (%s)" % (w["id"], w["title"],
+                                             "delivered" if w["delivered"] else "in progress")
+                  for w in t["worked_items"]]
         for line in lines:
             print("%s %s" % (t["team"], " ".join(line.split())), file=out)
     return 0

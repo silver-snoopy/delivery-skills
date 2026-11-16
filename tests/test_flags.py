@@ -64,7 +64,7 @@ class PeopleFlagTests(unittest.TestCase):
         t = run(b, "ALFA", "S29", people=[PEOPLE[0], nadia])
         self.assertEqual(person(t, "Nadia Kern"), {
             "name": "Nadia Kern", "available": 9.0, "nominal": 9.0, "delivered": [],
-            "in_progress": [3], "oldest": [3, 6], "median": None, "items": [3],
+            "in_progress": [3], "oldest": [3, 6], "median": None, "items": [3], "held": [],
             "onboarding": False, "no_assignment": False})
         self.assertEqual(person(t, "Maya Brook")["delivered"], [1])
         self.assertEqual(person(t, "Maya Brook")["median"], 8)
@@ -128,26 +128,13 @@ class ItemFlagTests(unittest.TestCase):
         self.assertEqual([a["text"] for a in flags(run(b, "ALFA", "S29"), ask=ask)],
                          ["#3 is Active with no board change for 8 working days."])
 
-    def test_unknown_assignee_only_in_the_team_that_counts_the_item(self):
-        b = board()  # ALFA and BETA share the iteration path Proj\S29
-        b.item(1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active")
-        b.item(2, "Task").at("2026-10-27 09:00", iteration=S29, assigned=LENA, state="Active")
-        b.item(3, "Task").at("2026-10-27 09:00", iteration=S29, assigned=TOM, state="Active")
-        texts = lambda team: [a["text"] for a in flags(run(b, team, "S29"), "grey")]
-        self.assertEqual(texts("ALFA"), [])
-        self.assertEqual(texts("BETA"), ["#3 is assigned to tom.h2@vendor.example, which is not "
-                                         "in team.csv."])
-
-    def test_unknown_roster_domain_assignee_is_grey(self):
+    def test_same_domain_non_member_gets_no_attention_entry(self):
         b = board()
         closed(b, 1)
         b.item(2).at("2026-10-27 09:00", iteration=S29, assigned=TOM, state="Active")
-        b.item(3).at("2026-10-27 09:00", iteration=S29, assigned=JANE, state="Active")
-        t = run(b, "ALFA", "S29")
-        self.assertEqual(flags(t, "grey"), [
-            {"level": "grey", "text": "#2 is assigned to tom.h2@vendor.example, which is not "
-                                      "in team.csv.",
-             "ask": "Fix the board or add the email to team.csv."}])
+        b.item(3, "Task").at("2026-10-27 09:00", iteration=S29, assigned=TOM, state="Active")
+        for team in ("ALFA", "BETA"):
+            self.assertFalse([a for a in run(b, team, "S29")["attention"] if TOM in a["text"]])
 
     def test_done_without_active_and_reopened_are_grey(self):
         b = board()
@@ -207,7 +194,8 @@ class RestOfSquadTests(unittest.TestCase):
         b.item(3).at("2026-10-28 09:00", iteration=S29, assigned=JANE, state="Active") \
             .at("2026-10-29 09:00", state="Ready for QA").at("2026-11-01 09:00", state="Closed")
         closed(b, 4, who=JANE, area="Proj\\Billing")
-        closed(b, 5, who=JANE, start="2026-10-13 09:00", end="2026-10-20 09:00")
+        b.item(5).at("2026-10-13 09:00", iteration=S28, assigned=JANE, state="Active") \
+            .at("2026-10-20 09:00", state="Closed")  # closed on S28: not this sprint
         t = run(b, "ALFA", "S29")
         self.assertEqual(t["delivered"], [1])
         self.assertEqual(t["rest"], {"assignees": 1, "delivered": 2, "median": 2, "p85": 5,

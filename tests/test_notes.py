@@ -1,0 +1,694 @@
+"""Invented notes fixtures; never read or open report HTML."""
+import json
+import os
+import tempfile
+import unittest
+from datetime import date
+from unittest.mock import patch
+
+from ledger.config import (parse_notes, load_report_notes, reconcile_notes,
+                           write_report_notes, notes_for_team)
+
+OLD = {"path": "Project/One", "name": "One", "start": "2026-10-19", "end": "2026-10-30"}
+NEW = {"path": "Project/Two", "name": "Two", "start": "2026-11-02", "end": "2026-11-13"}
+RUN = "Project/Three"
+TODAY = date(2026, 11, 16)
+HEADER = '| Person | Work item | Problem | Answer | Answered |\n|---|---|---|---|---|\n'
+
+
+def row(item=81, person="Ada Example", **kw):
+    value = dict(id=item, person=person, title="Invented task", sprint="Now", sprint_path=RUN,
+                 level="amber", badge="Waiting", kinds=["old", "waiting"], problem="Waiting for a slot",
+                 ask="Ask for a slot", age=12, open=True, carry=True)
+    value.update(kw)
+    return value
+
+
+def actions(*rows):
+    return {"ALFA": {"people": [], "rows": list(rows), "current": None}}
+
+
+def markdown(answer="", answered="", item="#81 Invented task", person="Ada Example",
+             problem="Waiting for a slot", team="ALFA", marker=NEW["path"]):
+    return ("<!-- ledger notes: %s=%s -->\n# %s\n## Summary\n- Delivered a fixture.\n"
+            "## Exec note\nExternal text\n## Note\nPrivate text\n## Status\n\n## Actions\n" %
+            (team, marker, team) + HEADER + "| %s | %s | %s | %s | %s |\n" %
+            (person, item, problem, answer, answered) + "## Resolved\n" + HEADER)
+
+
+class NotesTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = self.tmp.name
+        self.folder = os.path.join(self.root, "report")
+        self.selected = {"ALFA": NEW}
+        self.warnings = []
+
+    def load(self, folder=None, selected=None):
+        return load_report_notes(self.root, folder or self.folder,
+                                 self.selected if selected is None else selected,
+                                 [OLD, NEW], self.warnings.append)
+
+    def save_text(self, text, folder=None):
+        folder = folder or self.folder
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "notes.md"), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def read(self, name="notes.md", folder=None):
+        with open(os.path.join(folder or self.folder, name), encoding="utf-8") as f:
+            return f.read()
+
+    def cycle(self, notes, rows=None, today=TODAY):
+        result = reconcile_notes(notes, actions(*(rows if rows is not None else [row()])),
+                                 self.selected, today)
+        write_report_notes(self.folder, notes)
+        return result["ALFA"]["rows"]
+
+    def test_lossless_sections_cells_and_raw_lines_twice(self):
+        text = '\ufeff' + markdown(r'chased: A\|B at C:\\temp\\file')
+        text = text.replace('- Delivered a fixture.', '  - Delivered a fixture.  \n\nPlain bullet')
+        text = text.replace('External text', 'First line  \nsecond | line\\tail')
+        text = text.replace('## Actions', '## Unknown heading\nkeep | this\\line\n## Actions')
+        text = text.replace('## Resolved', '| malformed | preserve |\n## Resolved')
+        text += '# UNLISTED\n## Note\nkeep this unknown team\n'
+        self.save_text(text)
+        n = self.load()
+        self.assertEqual(n.summary['ALFA'], 'Delivered a fixture.\nPlain bullet')
+        self.assertEqual(n.exec_note['ALFA'], 'First line  \nsecond | line\\tail')
+        self.assertTrue(any('UNLISTED' in w for w in self.warnings))
+        for _ in range(2):
+            result = self.cycle(n)
+            self.assertEqual(result[0]['answer'], 'chased: A|B at C:\\temp\\file')
+            n = self.load()
+        out = self.read()
+        for raw in ('  - Delivered a fixture.  ', 'keep | this\\line', '| malformed | preserve |',
+                    'keep this unknown team'):
+            self.assertEqual(out.count(raw), 1)
+        offsets = [out.index('## ' + s) for s in
+                   ('Summary', 'Exec note', 'Note', 'Status', 'Actions', 'Resolved')]
+        self.assertEqual(offsets, sorted(offsets))
+        self.assertTrue(n.warnings)
+
+    def test_new_notes_have_fixed_sections_and_blank_status(self):
+        n = self.load()
+        self.cycle(n)
+        self.assertFalse(n.status)
+        self.assertTrue(self.read().startswith('<!-- ledger notes: ALFA=Project/Two -->'))
+        self.assertEqual(self.read().count('## '), 6)
+        self.assertEqual(self.load().teams['ALFA']['Actions'][0]['answer'], '')
+
+    def test_baseline_lifecycle_and_tool_owned_edits(self):
+        self.save_text(markdown('chased: promised Friday'))
+        n = self.load()
+        first = self.cycle(n)[0]
+        self.assertTrue(first['handled'])
+        self.assertEqual(first['answered'], '2026-11-16 amber Chase, Waiting')
+        text = self.read().replace('2026-11-16 amber Chase, Waiting', '2099-01-01 red On Hold')
+        text = text.replace('Waiting for a slot', 'DM edited tool cell')
+        self.save_text(text)
+        second = self.cycle(self.load(), [row(age=90)], date(2026, 11, 17))[0]
+        self.assertEqual(second['answered'], first['answered'])
+        self.assertTrue(second['handled'])
+        self.save_text(self.read().replace('chased: promised Friday', 'chased: revised promise'))
+        third = self.cycle(self.load(), [row(level='red', kinds=['held'])], date(2026, 11, 18))[0]
+        self.assertEqual(third['answered'], '2026-11-18 red On Hold')
+        self.assertTrue(third['handled'])
+        self.save_text(self.read().replace('chased: revised promise', ''))
+        fourth = self.cycle(self.load())[0]
+        self.assertFalse(fourth['handled'])
+        self.assertEqual(fourth['answered'], '')
+
+    def test_all_worse_rules_and_secondary_kind_age_non_rules(self):
+        for change, expected in [({}, False), ({'kinds': ['waiting']}, False),
+                                 ({'age': 400}, False), ({'level': 'red'}, True),
+                                 ({'kinds': ['old', 'waiting', 'held']}, True),
+                                 ({'sprint_path': 'Project/Four'}, True),
+                                 ({'sprint_path': 'Project/Four', 'open': False}, False)]:
+            with self.subTest(change=change):
+                self.save_text(markdown('chased: promised Friday'))
+                state = os.path.join(self.folder, '.notes-state.json')
+                if os.path.exists(state):
+                    os.unlink(state)
+                self.cycle(self.load())
+                out = self.cycle(self.load(), [row(**change)])[0]
+                self.assertEqual(out['worse'], expected)
+                self.assertEqual(out['handled'], not expected)
+
+    def test_resolved_grey_green_restore_and_reassignment(self):
+        self.save_text(markdown('agreed: split next sprint'))
+        self.cycle(self.load())
+        for level in ('green', 'grey'):
+            out = self.cycle(self.load(), [row(level=level, kinds=[], badge='OK')])[0]
+            self.assertTrue(out['handled'])
+            n = self.load()
+            self.assertFalse(n.teams['ALFA']['Actions'])
+            self.assertEqual(len(n.teams['ALFA']['Resolved']), 1)
+            self.assertEqual(notes_for_team(n, 'ALFA').items.get(81, ('unknown', '')), ('agreed', 'split next sprint'))
+        self.cycle(self.load(), [])
+        out = self.cycle(self.load(), [row(person='Ben Example')])[0]
+        self.assertEqual(out['answer'], 'agreed: split next sprint')
+        self.assertTrue(out['handled'])
+        self.assertFalse(self.load().teams['ALFA']['Resolved'])
+
+    def test_agreement_prefixes_and_team_isolation(self):
+        for answer, expected in [('agreed: split', ('agreed', 'split')),
+                                 ('not agreed: late', ('not agreed', 'late')),
+                                 ('unknown: ask', ('unknown', 'ask')),
+                                 ('chased: ask', ('unknown', ''))]:
+            with self.subTest(answer=answer):
+                n = parse_notes(markdown(answer) + markdown('unknown: other', team='BETA'))
+                selected = {'ALFA': NEW, 'BETA': NEW}
+                result = reconcile_notes(n, dict(actions(row()), BETA=actions(row())['ALFA']), selected, TODAY)
+                self.assertEqual(notes_for_team(n, 'ALFA').items.get(81, ('unknown', '')), expected)
+                self.assertEqual(notes_for_team(n, 'BETA').items[81], ('unknown', 'other'))
+                self.assertTrue(result['ALFA']['rows'][0]['handled'])
+
+    def test_person_identity_includes_badge(self):
+        n = self.load()
+        rows = [row(None, badge='No work', kinds=['none'], problem='No work, 9 days available'),
+                row(None, badge='Too much WIP', kinds=['wip'], problem='Too much WIP: finish one')]
+        self.cycle(n, rows)
+        self.save_text(self.read().replace('| No work: No work, 9 days available |  |',
+                                           '| No work: No work, 9 days available | lent to spike |'))
+        out = self.cycle(self.load(), rows)
+        self.assertEqual([r['answer'] for r in out], ['lent to spike', ''])
+        self.assertEqual([r['handled'] for r in out], [True, False])
+
+    def test_valid_import_and_invalid_metadata_preserve_answer(self):
+        for meta, handled in [('2026-11-10 amber Chase, Waiting', True),
+                              ('2026-13-40 amber Waiting', False), ('nonsense', False)]:
+            with self.subTest(meta=meta):
+                n = parse_notes(markdown('chased: promise', meta))
+                out = self.cycle(n, [row(sprint_path=NEW['path'])])[0]
+                self.assertEqual(out['handled'], handled)
+                self.assertEqual(out['answer'], 'chased: promise')
+                if not handled:
+                    self.assertTrue(n.warnings)
+
+    def test_predecessor_per_team_and_no_future_import(self):
+        for name, sprint, answer in [('older', OLD, 'old answer'), ('newer', NEW, 'future answer')]:
+            self.save_text(markdown(answer, marker=sprint['path']), os.path.join(self.root, name))
+        self.selected = {'ALFA': OLD}
+        n = self.load()
+        out = self.cycle(n, [row(sprint_path=OLD['path'])])[0]
+        self.assertEqual(out['answer'], 'old answer')
+        self.assertEqual(n.summary['ALFA'], 'Delivered a fixture.')
+
+    def test_changed_sprint_only_open_action_answers_no_renewal_until_edit(self):
+        old_folder = os.path.join(self.root, 'old')
+        self.save_text(markdown('agreed: split', marker=OLD['path']), old_folder)
+        old = load_report_notes(self.root, old_folder, {'ALFA': OLD}, [OLD, NEW], self.warnings.append)
+        reconcile_notes(old, actions(row(sprint_path=OLD['path'])), {'ALFA': OLD}, date(2026, 11, 2))
+        write_report_notes(old_folder, old)
+        n = self.load()
+        out = self.cycle(n)[0]
+        self.assertEqual(out['answer'], 'agreed: split')
+        self.assertTrue(out['worse'])
+        self.assertFalse(out['handled'])
+        self.assertFalse(n.summary.get('ALFA'))
+        self.assertEqual(notes_for_team(n, 'ALFA').items.get(81, ('unknown', ''))[0], 'unknown')
+        out = self.cycle(self.load())[0]
+        self.assertFalse(out['handled'])
+        self.assertEqual(notes_for_team(self.load(), 'ALFA').items.get(81, ('unknown', ''))[0], 'unknown')
+        self.save_text(self.read().replace('agreed: split', 'agreed: renewed split'))
+        n = self.load()
+        self.assertTrue(self.cycle(n)[0]['handled'])
+        self.assertEqual(notes_for_team(n, 'ALFA').items.get(81, ('unknown', ''))[0], 'agreed')
+
+    def test_changed_sprint_copies_open_resolved_but_drops_closed_and_empty_rows(self):
+        source = parse_notes(markdown('closed answer', marker=OLD['path']))
+        reconcile_notes(source, actions(row()), {'ALFA': OLD}, TODAY)
+        source.teams['ALFA']['Actions'].extend([
+            dict(id=None, person='Ada Example', badge='No work', work='–', problem='No work',
+                 answer='person answer', answered='2026-11-16 red No work'),
+            dict(id=82, person='Ada Example', work='#82 Empty', problem='Waiting', answer='', answered='')])
+        source.teams['ALFA']['Resolved'].append(dict(id=83, person='Ada Example', work='#83 Resolved',
+            problem='Waiting', answer='resolved answer', answered='2026-11-16 amber Waiting'))
+        write_report_notes(os.path.join(self.root, 'old'), source)
+        n = self.load()
+        self.cycle(n, [row(open=False), row(None, badge='No work', kinds=['none'], problem='No work'),
+                       row(82), row(83)])
+        for text in ('closed answer',):
+            self.assertNotIn(text, self.read())
+        saved = self.load().teams['ALFA']['Actions']
+        self.assertEqual([r['answer'] for r in saved if r['id'] is None], ['person answer'])
+        self.assertEqual(next(r['answer'] for r in saved if r['id'] == 83), 'resolved answer')
+        self.assertTrue(all(not r['answer'] for r in saved if r['id'] in (81, 82)))
+
+    def test_mixed_calendars_missing_sprint_and_unknown_marker(self):
+        self.save_text(markdown('agreed: old', marker=OLD['path']) +
+                       markdown('beta answer', team='BETA', marker=NEW['path']),
+                       os.path.join(self.root, 'prior'))
+        self.selected = {'ALFA': NEW, 'BETA': NEW, 'GAMMA': None}
+        n = self.load()
+        self.assertFalse(n.summary.get('ALFA'))
+        self.assertEqual(n.summary['BETA'], 'Delivered a fixture.')
+        # Existing missing-sprint sections and unknown teams survive.
+        self.save_text(markdown(team='GAMMA') + markdown(team='UNKNOWN', marker='bad/path'))
+        n = self.load()
+        reconcile_notes(n, {}, self.selected, TODAY)
+        write_report_notes(self.folder, n)
+        self.assertIn('# GAMMA\n', self.read())
+        self.assertIn('# UNKNOWN\n', self.read())
+        self.assertTrue(self.warnings)
+
+    def test_malformed_state_and_interrupted_pair_recover_without_answer_loss(self):
+        self.save_text(markdown('chased: first'))
+        self.cycle(self.load())
+        self.save_text(self.read().replace('chased: first', 'chased: second'))
+        original = os.replace
+        def fail_state(src, dst):
+            if dst.endswith('.notes-state.json'):
+                raise OSError('invented interruption')
+            return original(src, dst)
+        with patch('ledger.config.os.replace', side_effect=fail_state):
+            with self.assertRaises(OSError):
+                self.cycle(self.load(), [row(level='red')], date(2026, 11, 17))
+        out = self.cycle(self.load(), [row(level='red')], date(2026, 11, 17))[0]
+        self.assertEqual(out['answer'], 'chased: second')
+        self.assertEqual(out['answered'], '2026-11-17 red Chase, Waiting')
+        with open(os.path.join(self.folder, '.notes-state.json'), 'w') as f:
+            f.write('{bad')
+        self.assertEqual(self.cycle(self.load(), [row(level='red')])[0]['answer'], 'chased: second')
+        self.assertTrue(self.warnings)
+
+    def test_same_closed_sprint_copies_all_sections_state_and_resolved(self):
+        prior = os.path.join(self.root, 'prior')
+        self.save_text(markdown('chased: baseline'), prior)
+        n = load_report_notes(self.root, prior, self.selected, [OLD, NEW], self.warnings.append)
+        reconcile_notes(n, actions(row()), self.selected, date(2026, 11, 15))
+        reconcile_notes(n, actions(), self.selected, TODAY)
+        write_report_notes(prior, n)
+        n = self.load()
+        self.assertEqual(n.summary['ALFA'], 'Delivered a fixture.')
+        self.assertEqual(n.note['ALFA'], 'Private text')
+        self.assertEqual(n.exec_note['ALFA'], 'External text')
+        out = self.cycle(n)[0]
+        self.assertTrue(out['handled'])
+        self.assertEqual(out['answered'], '2026-11-15 amber Chase, Waiting')
+
+    def test_predecessors_choose_per_team_with_tie_break_and_skip_unknown_paths(self):
+        self.save_text(markdown('earlier alpha', marker=OLD['path']) +
+                       markdown('current beta', team='BETA'), os.path.join(self.root, 'a'))
+        self.save_text(markdown('current alpha') +
+                       markdown('earlier beta', team='BETA', marker=OLD['path']), os.path.join(self.root, 'b'))
+        self.save_text(markdown('tie winner'), os.path.join(self.root, 'z'))
+        self.save_text(markdown('unresolvable', marker='unknown/path'), os.path.join(self.root, 'zz'))
+        self.selected = {'ALFA': NEW, 'BETA': NEW}
+        n = self.load()
+        self.assertEqual(n.teams['ALFA']['Actions'][0]['answer'], 'tie winner')
+        self.assertEqual(n.teams['BETA']['Actions'][0]['answer'], 'current beta')
+        self.assertTrue(any('unknown/path' in w and 'skipped' in w for w in self.warnings))
+
+    def test_clearing_a_disappeared_row_records_clear_before_same_answer_reentry(self):
+        self.save_text(markdown('agreed: split'))
+        self.cycle(self.load())
+        self.cycle(self.load(), [])
+        self.save_text(self.read().replace('agreed: split', ''))
+        self.cycle(self.load(), [])
+        state = json.loads(self.read('.notes-state.json'))
+        self.assertEqual(state['teams']['ALFA']['i:81']['answer'], '')
+        self.cycle(self.load(), [row(level='red')])
+        self.save_text(self.read().replace('| Waiting for a slot |  |',
+                                           '| Waiting for a slot | agreed: split |'))
+        out = self.cycle(self.load(), [row(level='red')], date(2026, 11, 17))[0]
+        self.assertTrue(out['handled'])
+        self.assertEqual(out['answered'], '2026-11-17 red Chase, Waiting')
+
+    def test_edit_or_import_answer_when_row_is_absent_keeps_scoped_agreement(self):
+        self.save_text(markdown('agreed: split'))
+        self.cycle(self.load(), [row(kinds=['carry'])])
+        self.cycle(self.load(), [])
+        self.save_text(self.read().replace('agreed: split', 'not agreed: revised'))
+        n = self.load()
+        self.cycle(n, [])
+        self.assertEqual(notes_for_team(n, 'ALFA').items.get(81, ('unknown', '')), ('not agreed', 'revised'))
+        # Loss of the sidecar still imports a valid visible baseline for a resolved carry.
+        os.unlink(os.path.join(self.folder, '.notes-state.json'))
+        n = self.load()
+        self.cycle(n, [])
+        self.assertEqual(notes_for_team(n, 'ALFA').items.get(81, ('unknown', '')), ('not agreed', ''))
+
+    def test_unknown_team_is_preserved_but_cannot_contribute_agreement(self):
+        self.save_text(markdown('agreed: unknown team', team='UNLISTED'))
+        n = load_report_notes(self.root, self.folder, {'UNLISTED': NEW}, [OLD, NEW], self.warnings.append)
+        reconcile_notes(n, {'UNLISTED': actions(row())['ALFA']}, {'UNLISTED': NEW}, TODAY)
+        write_report_notes(self.folder, n)
+        n = self.load()
+        self.assertFalse(n.items)
+        self.assertFalse(notes_for_team(n, 'UNLISTED').items)
+        self.assertIn('agreed: unknown team', self.read())
+
+    def test_person_answer_survives_tool_owned_problem_edits(self):
+        rows = [row(None, badge='No work', kinds=['none'], problem='No work')]
+        self.cycle(self.load(), rows)
+        self.save_text(self.read().replace('| No work: No work |  |', '| No work: No work | lent to spike |'))
+        self.cycle(self.load(), rows)
+        self.save_text(self.read().replace('No work |', 'Edited problem |'))
+        self.assertTrue(self.cycle(self.load(), rows)[0]['handled'])
+
+    def test_second_reconcile_keeps_structured_badge_with_unrecognizable_prose(self):
+        for answer, answered in [('', ''), ('keep this answer', 'invalid metadata')]:
+            with self.subTest(answer=answer):
+                n = parse_notes(markdown(answer, answered, item='–', problem='No work: previous wording'))
+                original = actions(row(None, badge='No work', kinds=['none'], problem='Awaiting allocation'))
+                observed = reconcile_notes(n, original, self.selected, TODAY)
+                saved = n.teams['ALFA']['Actions'][0]
+                self.assertEqual(saved['answered'], '')
+                refreshed = actions(row(None, badge='No work', kinds=['none'], problem='Awaiting allocation'))
+                out = reconcile_notes(n, refreshed, self.selected, TODAY, observed=observed)
+                self.assertEqual(saved['badge'], 'No work')
+                self.assertEqual(out['ALFA']['rows'][0]['answer'], answer)
+                self.assertFalse(n.teams['ALFA']['Resolved'])
+                self.assertEqual(set(n.state['ALFA']), {'["Ada Example", "No work"]'})
+
+    def test_person_binding_uses_badge_metadata_before_misleading_problem(self):
+        for badge, kind, misleading in [('No work', 'none', 'Too much WIP: 4 items in progress'),
+                                        ('Too much WIP', 'wip', 'No work: no open item')]:
+            with self.subTest(badge=badge):
+                n = parse_notes(markdown('same answer', '2026-11-16 amber ' + badge,
+                                         item='–', problem=misleading))
+                out = self.cycle(n, [row(None, badge=badge, kinds=[kind],
+                    problem='Reworded by the tool', sprint_path=NEW['path'])])[0]
+                self.assertEqual(out['answer'], 'same answer')
+                self.assertTrue(out['handled'])
+                self.assertFalse(n.teams['ALFA']['Resolved'])
+
+    def test_pending_person_badges_survive_reorder_deleted_item_and_missing_sidecar(self):
+        for change in ('reorder', 'delete item', 'missing sidecar'):
+            with self.subTest(change=change):
+                folder = os.path.join(self.root, change)
+                self.folder = folder
+                rows = [row(), row(None, badge='Nothing delivered', kinds=['nothing'],
+                                  problem='delivered nothing, 8 available days'),
+                        row(None, badge='Too much WIP', kinds=['wip'],
+                            problem='4 items in progress: #81, #82, #83, #84')]
+                self.cycle(parse_notes(''), rows)
+                lines = self.read().splitlines()
+                item_at = next(i for i, line in enumerate(lines) if '| #81 ' in line)
+                person_at = [i for i, line in enumerate(lines) if '| – |' in line]
+                if change == 'reorder':
+                    a, b = person_at
+                    lines[a], lines[b] = lines[b], lines[a]
+                elif change == 'delete item':
+                    del lines[item_at]
+                else:
+                    os.unlink(os.path.join(folder, '.notes-state.json'))
+                wip_at = next(i for i, line in enumerate(lines) if '4 items in progress' in line)
+                lines[wip_at] = lines[wip_at].replace(' |  |  |', ' | wip answer |  |')
+                self.save_text('\n'.join(lines) + '\n')
+                out = self.cycle(self.load(), rows)
+                self.assertEqual({r['badge']: r['answer'] for r in out if r['id'] is None},
+                                 {'Nothing delivered': '', 'Too much WIP': 'wip answer'})
+                self.assertEqual([r['handled'] for r in out], [False, False, True])
+                state = json.loads(self.read('.notes-state.json'))['teams']['ALFA']
+                self.assertEqual(set(state), {'i:81', '["Ada Example", "Nothing delivered"]',
+                                              '["Ada Example", "Too much WIP"]'})
+                self.assertTrue(all('position' not in m and 'section' not in m for m in state.values()))
+                self.assertFalse(self.load().teams['ALFA']['Resolved'])
+
+    def test_person_prefix_is_written_only_in_notes_actions_and_resolved(self):
+        rows = [row(None, badge='No work', kinds=['none'], problem='no open item, 4 available days left')]
+        out = self.cycle(self.load(), rows)
+        self.assertEqual(out[0]['problem'], 'no open item, 4 available days left')
+        self.assertIn('| No work: no open item, 4 available days left |', self.read())
+        self.save_text(self.read().replace(' |  |  |', ' | lent to spike |  |'))
+        self.cycle(self.load(), rows)
+        self.cycle(self.load(), [])
+        saved = self.load().teams['ALFA']['Resolved'][0]
+        self.assertEqual(saved['problem'], 'No work: no open item, 4 available days left')
+        self.assertNotIn('No work: No work:', self.read())
+        self.assertEqual(saved['answer'], 'lent to spike')
+
+    def test_person_prefix_wins_over_prose_without_item_state_binding(self):
+        n = parse_notes(markdown('person answer', item='–',
+                                problem='Too much WIP: delivered nothing, no open item'))
+        n.state['ALFA'] = {'i:81': dict(person='Ada Example', badge='Waiting', answer='person answer',
+                                       section='Actions', position=0)}
+        out = self.cycle(n, [row(None, badge='Too much WIP', kinds=['wip'],
+                                 problem='4 items in progress: #81, #82, #83, #84')])[0]
+        self.assertEqual(out['answer'], 'person answer')
+        self.assertEqual(set(n.state['ALFA']), {'i:81', '["Ada Example", "Too much WIP"]'})
+
+    def test_old_position_hints_are_removed_on_load(self):
+        self.save_text(markdown('legacy answer', item='–', problem='No work: no open item'))
+        with open(os.path.join(self.folder, '.notes-state.json'), 'w') as f:
+            json.dump({'version': 1, 'teams': {'ALFA': {
+                'i:81': dict(person='Ada Example', badge='Waiting', answer='legacy answer',
+                             section='Actions', position=0)}}}, f)
+        n = self.load()
+        self.cycle(n, [row(None, badge='No work', kinds=['none'], problem='no open item')])
+        state = json.loads(self.read('.notes-state.json'))['teams']['ALFA']
+        self.assertTrue(all('position' not in m and 'section' not in m for m in state.values()))
+        self.assertEqual(set(state), {'i:81', '["Ada Example", "No work"]'})
+
+    def test_reordered_person_rows_bind_by_badge_in_answered_metadata(self):
+        rows = [row(None, badge='No work', kinds=['none'], problem='No work', answer='first answer'),
+                row(None, badge='Too much WIP', kinds=['wip'], problem='Too much WIP', answer='second answer')]
+        n = self.load()
+        n.teams['ALFA']['Actions'] = [dict(r, work='–', answered='2026-11-16 amber ' + r['badge']) for r in rows]
+        self.cycle(n, rows)
+        lines = self.read().splitlines()
+        positions = [i for i, line in enumerate(lines) if '| first answer |' in line or '| second answer |' in line]
+        lines[positions[0]], lines[positions[1]] = lines[positions[1]], lines[positions[0]]
+        self.save_text('\n'.join(lines) + '\n')
+        out = self.cycle(self.load(), rows)
+        self.assertEqual([r['answer'] for r in out], ['first answer', 'second answer'])
+
+    def test_old_person_wording_answers_bind_to_new_wording_without_state(self):
+        cases = [('No work', ['none'],
+                  'Ada Example had 8 available days but no item assigned during the sprint.',
+                  'no item assigned during the sprint, 8 available days'),
+                 ('Nothing delivered', ['nothing'],
+                  'Ada Example had 8 available days and delivered nothing.',
+                  'delivered nothing, 8 available days'),
+                 ('Too much WIP', ['wip'],
+                  'Ada Example has 4 items in progress: #81, #82, #83, #84.',
+                  '4 items in progress: #81, #82, #83, #84')]
+        for badge, kinds, old, new in cases:
+            with self.subTest(badge=badge):
+                n = parse_notes(markdown('legacy answer', item='–', problem=old))
+                out = self.cycle(n, [row(None, badge=badge, kinds=kinds, problem=new)])[0]
+                self.assertEqual(out['answer'], 'legacy answer')
+                self.assertTrue(out['handled'])
+                self.assertEqual(n.teams['ALFA']['Actions'][0]['problem'], new)
+
+    def test_malformed_state_shapes_do_not_crash_or_lose_text(self):
+        self.save_text(markdown('chased: promise', '2026-11-10 amber Waiting'))
+        for state in ([], {'version': 1, 'teams': []},
+                      {'version': 1, 'teams': {'ALFA': {'i:81': {'answer': 'chased: promise',
+                       'date': '2026-11-10', 'level': 'amber', 'kinds': 5}}}}):
+            with self.subTest(state=state):
+                with open(os.path.join(self.folder, '.notes-state.json'), 'w') as f:
+                    json.dump(state, f)
+                self.assertEqual(self.cycle(self.load())[0]['answer'], 'chased: promise')
+        self.assertTrue(self.warnings)
+
+    def test_task_one_person_wording_without_state(self):
+        cases = [('No work', ['none'], 'Ada Example had 8 available days but no item assigned during the sprint.'),
+                 ('Nothing delivered', ['nothing'], 'Ada Example had 8 available days and delivered nothing.'),
+                 ('Too much WIP', ['wip'], 'Ada Example has 4 items in progress: #81, #82, #83, #84.')]
+        for badge, kinds, problem in cases:
+            with self.subTest(badge=badge):
+                n = parse_notes(markdown('lent to spike', item='–', problem=problem))
+                result = reconcile_notes(n, actions(row(None, badge=badge, kinds=kinds, problem=problem)),
+                                         self.selected, TODAY)
+                self.assertEqual(result['ALFA']['rows'][0]['answer'], 'lent to spike')
+                self.assertTrue(result['ALFA']['rows'][0]['handled'])
+
+    def test_current_unresolvable_marker_warns_preserves_text_and_does_not_grant_agreement(self):
+        self.save_text(markdown('agreed: imported', marker='unknown/path'))
+        n = self.load()
+        self.assertTrue(any('unknown/path' in w for w in self.warnings))
+        self.assertEqual(n.note['ALFA'], 'Private text')
+        self.cycle(n)
+        self.assertEqual(notes_for_team(n, 'ALFA').items.get(81, ('unknown', ''))[0], 'unknown')
+
+    def test_unknown_and_malformed_content_roundtrip_without_reconciliation(self):
+        text = '# ALFA\n## Note\ntext  \n\nnext\n## Mystery\nline | raw\\x\n## Actions\n' + HEADER
+        text += '| malformed |\n| Ada Example | invalid reference | raw | keep | data |\n'
+        n = parse_notes(text)
+        write_report_notes(self.folder, n)
+        first = self.read()
+        write_report_notes(self.folder, parse_notes(first))
+        self.assertEqual(first, self.read())
+        self.assertEqual(n.note['ALFA'], 'text  \n\nnext')
+        self.assertIn('| Ada Example | invalid reference | raw | keep | data |', first)
+
+    def test_clear_then_reenter_same_copied_answer_renews_agreement(self):
+        self.save_text(markdown('agreed: split', marker=OLD['path']), os.path.join(self.root, 'old'))
+        n = self.load()
+        self.assertTrue(self.cycle(n)[0]['worse'])
+        self.save_text(self.read().replace('agreed: split', ''))
+        self.assertFalse(self.cycle(self.load())[0]['handled'])
+        self.save_text(self.read().replace('| Waiting for a slot |  |',
+                                           '| Waiting for a slot | agreed: split |'))
+        n = self.load()
+        self.assertTrue(self.cycle(n)[0]['handled'])
+        self.assertEqual(notes_for_team(n, 'ALFA').items.get(81, ('unknown', '')), ('agreed', 'split'))
+
+    def test_unmatched_prior_state_is_retained(self):
+        self.save_text(markdown('answer'))
+        self.cycle(self.load())
+        n = self.load()
+        n.state['ALFA']['i:999'] = {'answer': 'unmatched preserved'}
+        self.cycle(n, [])
+        self.assertEqual(self.load().state['ALFA']['i:999']['answer'], 'unmatched preserved')
+
+    def test_malformed_separator_is_preserved_and_padded_empty_answer_is_unanswered(self):
+        text = markdown().replace('## Resolved', '|---|---|\n## Resolved')
+        text = text.replace('| Waiting for a slot |  |', '| Waiting for a slot |        |')
+        self.save_text(text)
+        out = self.cycle(self.load())[0]
+        with self.subTest('blank answer'):
+            self.assertEqual(out['answer'], '')
+            self.assertFalse(out['handled'])
+        with self.subTest('malformed separator'):
+            self.assertIn('|---|---|', self.read().splitlines())
+            self.assertTrue(any('|---|---|' in warning for warning in self.warnings))
+
+    def test_interrupted_write_keeps_baseline_when_retrying_on_a_later_day(self):
+        self.save_text(markdown('chased: first'))
+        self.cycle(self.load())
+        self.save_text(self.read().replace('chased: first', 'chased: revised'))
+        original = os.replace
+        def fail_notes(src, dst):
+            if dst.endswith('notes.md'):
+                raise OSError('invented notes interruption')
+            return original(src, dst)
+        with patch('ledger.config.os.replace', side_effect=fail_notes):
+            with self.assertRaises(OSError):
+                self.cycle(self.load(), [row()], date(2026, 11, 17))
+        out = self.cycle(self.load(), [row(level='red')], date(2026, 11, 18))[0]
+        self.assertEqual(out['answered'], '2026-11-17 amber Chase, Waiting')
+        self.assertTrue(out['worse'])
+        self.assertFalse(out['handled'])
+
+    def test_import_without_state_uses_marker_scope_conservatively(self):
+        n = parse_notes(markdown('chased: old promise', '2026-11-10 amber Chase, Waiting'))
+        out = self.cycle(n)[0]
+        self.assertEqual(out['answered'], '2026-11-10 amber Chase, Waiting')
+        self.assertTrue(out['worse'])
+        self.assertFalse(out['handled'])
+
+    def test_missing_closed_sprint_does_not_import_later_report_into_history(self):
+        future_folder = os.path.join(self.root, 'future')
+        future = parse_notes(markdown('future answer'))
+        reconcile_notes(future, actions(row()), self.selected, TODAY)
+        write_report_notes(future_folder, future)
+        self.save_text(markdown('historical beta', team='BETA', marker=OLD['path']),
+                       os.path.join(self.root, 'older'))
+        historical = self.load(selected={'ALFA': None, 'BETA': OLD})
+        self.assertEqual(historical.summary['BETA'], 'Delivered a fixture.')
+        with self.subTest('sections'):
+            for heading in ('Summary', 'Exec note', 'Note', 'Status', 'Actions', 'Resolved'):
+                self.assertFalse(historical.teams['ALFA'][heading])
+        with self.subTest('state'):
+            self.assertFalse(historical.state.get('ALFA'))
+        with self.subTest('marker'):
+            self.assertNotIn('ALFA', historical.markers)
+        write_report_notes(self.folder, historical)
+        self.assertNotIn('future answer', self.read())
+        self.assertNotIn('ALFA=Project/Two', self.read())
+
+    def test_answered_display_labels_roundtrip_all_distinct_signal_kinds(self):
+        labels = {'old': 'Chase', 'agreed': 'PO agreement', 'waiting': 'Waiting',
+                  'stale': 'No movement', 'none': 'No work', 'nothing': 'Nothing delivered',
+                  'wip': 'Too much WIP', 'never_active': 'Never active', 'reopened': 'Reopened',
+                  'shared': 'Shared', 'carry': 'Carry-over', 'held': 'On Hold', 'not_started': 'Not started'}
+        self.save_text(markdown('chased: promise'))
+        out = self.cycle(self.load(), [row(kinds=sorted(labels))])[0]
+        self.assertEqual(out['answered'], '2026-11-16 amber ' + ', '.join(labels[k] for k in sorted(labels)))
+        self.assertEqual(len(set(labels.values())), len(labels))
+        os.unlink(os.path.join(self.folder, '.notes-state.json'))
+        n = self.load()
+        out = self.cycle(n, [row(kinds=sorted(labels), sprint_path=NEW['path'])])[0]
+        self.assertTrue(out['handled'])
+        self.assertEqual(n.state['ALFA']['i:81']['kinds'], sorted(labels))
+        self.assertEqual(out['kinds'], sorted(labels))
+        self.assertEqual(self.load().state['ALFA']['i:81']['kinds'], sorted(labels))
+        # The example's label order parses to the same complete token set.
+        n = parse_notes(markdown('answer', '2026-11-23 amber Waiting, Chase'))
+        out = self.cycle(n, [row(sprint_path=NEW['path'])])[0]
+        self.assertTrue(out['handled'])
+        self.assertEqual(n.state['ALFA']['i:81']['kinds'], ['old', 'waiting'])
+
+    def test_changed_sprint_keeps_person_answer_when_same_badge_is_present(self):
+        prior_folder = os.path.join(self.root, 'old')
+        old = parse_notes(markdown('lent to spike', item='–', problem='No work', marker=OLD['path']))
+        person_row = row(None, badge='No work', kinds=['none'], problem='No work', open=False,
+                         sprint_path=OLD['path'])
+        reconcile_notes(old, actions(person_row), {'ALFA': OLD}, date(2026, 11, 2))
+        write_report_notes(prior_folder, old)
+        rows = self.cycle(self.load(), [dict(person_row, sprint_path=RUN),
+                         row(None, badge='Too much WIP', kinds=['wip'], open=False)])
+        self.assertEqual(rows[1]['answer'], '')
+        out = rows[0]
+        self.assertEqual(out['answer'], 'lent to spike')
+        self.assertTrue(out['worse'])
+        self.assertFalse(out['handled'])
+        out = self.cycle(self.load(), [dict(person_row, sprint_path=RUN)])[0]
+        self.assertEqual(out['answer'], 'lent to spike')
+        self.assertFalse(out['handled'])
+
+    def test_reused_folder_changed_marker_keeps_all_dm_text_and_old_answers(self):
+        for with_state in (False, True):
+            with self.subTest(with_state=with_state):
+                folder = os.path.join(self.root, 'reuse-' + str(with_state))
+                text = markdown('agreed: keep old agreement', marker=OLD['path'])
+                text = text.replace('## Status\n\n', '## Status\nAMBER - keep reason\n')
+                text = text.replace('## Resolved',
+                    '| Ada Example | – | No work | keep person answer | 2026-11-02 red No work |\n'
+                    '| Ada Example | #83 Old action | Waiting | keep unmatched answer | 2026-11-02 amber Waiting |\n'
+                    '## Resolved')
+                text += '| Ada Example | #82 Resolved task | Gone | agreed: keep resolved | 2026-11-02 amber Carry-over |\n'
+                self.save_text(text, folder)
+                if with_state:
+                    old = self.load(folder, {'ALFA': OLD})
+                    reconcile_notes(old, actions(row()), {'ALFA': OLD}, date(2026, 11, 2))
+                    write_report_notes(folder, old)
+                n = self.load(folder)
+                expected = {'Summary': '- Delivered a fixture.\n', 'Exec note': 'External text\n',
+                            'Note': 'Private text\n', 'Status': 'AMBER - keep reason\n'}
+                for heading, value in expected.items():
+                    self.assertEqual(n.teams['ALFA'][heading], value)
+                result = reconcile_notes(n, actions(row()), self.selected, TODAY)
+                write_report_notes(folder, n)
+                self.assertEqual(result['ALFA']['rows'][0]['answer'], 'agreed: keep old agreement')
+                self.assertFalse(result['ALFA']['rows'][0]['handled'])
+                self.assertEqual(notes_for_team(n, 'ALFA').items.get(81, ('unknown', ''))[0], 'unknown')
+                self.assertEqual(notes_for_team(n, 'ALFA').items.get(82, ('unknown', ''))[0], 'unknown')
+                self.assertEqual({r['answer'] for r in n.teams['ALFA']['Resolved']},
+                                 {'agreed: keep resolved', 'keep person answer', 'keep unmatched answer'})
+                again = self.load(folder)
+                reconcile_notes(again, actions(), self.selected, TODAY)
+                write_report_notes(folder, again)
+                for heading, value in expected.items():
+                    self.assertEqual(again.teams['ALFA'][heading], value)
+                self.assertEqual({r['answer'] for r in again.teams['ALFA']['Resolved']},
+                                 {'agreed: keep old agreement', 'agreed: keep resolved',
+                                  'keep person answer', 'keep unmatched answer'})
+
+    def test_single_backslash_before_plain_character_stays_single_in_markdown(self):
+        self.save_text(markdown(r'chased: C:\temp'))
+        self.cycle(self.load())
+        self.assertIn(r'| chased: C:\temp |', self.read())
+        first = self.read()
+        self.cycle(self.load())
+        self.assertEqual(self.read(), first)
+
+    def test_serialization_failure_leaves_both_files_untouched(self):
+        self.save_text(markdown('answer'))
+        n = self.load()
+        self.cycle(n)
+        before = self.read(), self.read('.notes-state.json')
+        with patch('ledger.config.json.dumps', side_effect=TypeError('invented invalid state')):
+            with self.assertRaises(TypeError):
+                write_report_notes(self.folder, n)
+        self.assertEqual((self.read(), self.read('.notes-state.json')), before)
+
+
+if __name__ == '__main__':
+    unittest.main()

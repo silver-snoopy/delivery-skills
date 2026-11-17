@@ -1,10 +1,11 @@
 """Sprint figures per team, replayed from the revision cache at fixed instants."""
 import math
+import re
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Sequence
 
 from ledger.config import Config, Notes, Person
-from ledger.replay import ACTIVE, History, day_end, day_start, is_held, is_waiting, local_tz
+from ledger.replay import ACTIVE, History, day_end, day_start, is_held, is_waiting, local_tz, parse_ts
 
 P85 = 0.85
 CARRIED_FLAG = 2
@@ -12,6 +13,7 @@ WAIT_FLAG_DAYS = 3
 WAIT_RED_DAYS = 10
 STALE_DAYS = 5
 WIP_FLAG = 3
+NOT_STARTED_DAY = 3
 GREEN_SHARE = 0.8
 TREND = 6
 MAX_SPRINT_DAYS = 42  # longer dated iterations are releases or PIs, not sprints
@@ -136,6 +138,8 @@ class _Team:
                 self.children.setdefault(r["parent"], set()).add(r["id"])
         self.count = count_of(cfg, team)
         self.emails = _emails(people, team)
+        self.names = {e.lower(): p.name for p in people if p.team.lower() == team.lower()
+                      for e in p.emails if e}
         self.sprint_at = {s["path"]: s for s in data["iterations"] if is_sprint(s)}
 
     def is_counted(self, h: History, t: Optional[datetime]) -> bool:
@@ -223,9 +227,28 @@ class _Team:
             return None
         return (self.local(done) - self.local(fa)).days + 1
 
-    def figures(self, sprint: dict) -> Dict[str, list]:
+    def owner(self, h: History, at: datetime) -> str:
+        """Current assignee, newest open child's assignee, then last ours assignee."""
+        row = h.at(at)
+        direct = self.names.get((row["assigned"] or "").lower()) if row else None
+        if direct:
+            return direct
+        kids = self.kids(h, at)
+        current = [(k.last_change(at), -k.id, self.names[(r["assigned"] or "").lower()])
+                   for k in kids for r in [k.at(at)] if r["category"] not in CLOSED
+                   and (r["assigned"] or "").lower() in self.names]
+        if current:
+            return max(current)[-1]
+        past = [(ts, -x.id, self.names[(r["assigned"] or "").lower()])
+                for x in [h] + kids for r, ts in zip(x.rows, x.times)
+                if ts <= at and (r["assigned"] or "").lower() in self.names]
+        return max(past)[-1] if past else ""
+
+    def figures(self, sprint: dict, until: Optional[datetime] = None) -> Dict[str, list]:
         path = sprint["path"]
         s0, t0, t1 = self.instants(sprint)
+        if until is not None:
+            t0, t1 = min(t0, until), until
         f = {k: [] for k in ("planned", "delivered_planned", "added", "removed", "delivered",
                              "late", "reopened", "carry", "open")}
         for h in self.counted(t1):
@@ -392,16 +415,22 @@ class _Team:
 
 
 ASK = {"old": "Ask what is blocking it.",
-       "agreed": "Confirm with the PO and record it in notes.txt.",
+       "held": "Ask what is blocking it.",
+       "not_started": "Ask what is blocking it.",
+       "agreed": "Confirm with the PO and record it in notes.md.",
        "waiting": "Raise it with the PO.",
        "stale": "Ask whether it is moving and the board is behind, or it is stuck.",
-       "none": "Find out what they worked on; if it was off-board work, add it to notes.txt.",
+       "none": "Find out what they worked on; if it was off-board work, add it to notes.md.",
        "nothing": "Ask what is blocking them.",
        "wip": "Ask which item to finish first.",
        "reopened": "Ask why it was reopened.",
        "never_active": "Ask them to move items through Active on the board.",
        "shared": "Check that both teams should count it."}
-_LEVELS = ("red", "amber", "grey")
+_LEVELS = ("red", "amber", "grey", "green")
+_BADGES = {"old": "Chase", "carry": "Carry-over", "agreed": "Carry-over",
+           "waiting": "Waiting", "held": "On Hold", "stale": "No movement",
+           "not_started": "Not started", "none": "No work", "nothing": "Nothing delivered",
+           "wip": "Too much WIP", "never_active": "Check", "reopened": "Check", "shared": "Check"}
 
 
 def _plural(n: int, word: str) -> str:
@@ -414,13 +443,15 @@ def _ids(ids) -> str:
 
 def _attention(t: _Team, f: dict, carry: List[dict], people: List[dict], waits: Dict[int, tuple],
                stale: Dict[int, tuple], p85: Optional[int],
-               open_ages: Dict[int, int], shared: Dict[int, List[str]]) -> List[dict]:
+               open_ages: Dict[int, int], shared: Dict[int, List[str]], at: datetime) -> List[dict]:
     """DM flags at sprint end, ordered red, amber, grey; then by item id, person name, text."""
     found = []
 
-    def add(level, ask, text, item=None, name=""):
+    def add(level, ask, text, item=None, name="", kind=None, badge=None):
         found.append((_LEVELS.index(level), item is None, item or 0, name, text,
-                      {"level": level, "text": text, "ask": ASK[ask]}))
+                      {"level": level, "text": text, "ask": ASK[ask],
+                       "id": item, "person": t.owner(t.hist[item], at) if item is not None else name,
+                       "kind": kind or ask, "badge": badge or _BADGES[kind or ask]}))
 
     def old(age):
         return p85 is not None and age is not None and age > p85
@@ -430,16 +461,17 @@ def _attention(t: _Team, f: dict, carry: List[dict], people: List[dict], waits: 
         if old(c["age"]) and c["sprints"] >= CARRIED_FLAG:
             red_carry.add(c["id"])
             add("red", "old", "#%d has been carried over for %d sprints and is %d days old, older "
-                "than the squad's P85 of %d days." % (c["id"], c["sprints"], c["age"], p85), c["id"])
+                "than the squad's P85 of %d days." % (c["id"], c["sprints"], c["age"], p85),
+                c["id"], kind="carry")
         elif c["sprints"] >= CARRIED_FLAG:
             add("amber", "old", "#%d has been carried over for %d sprints."
-                % (c["id"], c["sprints"]), c["id"])
+                % (c["id"], c["sprints"]), c["id"], kind="carry")
         if c["agreed"] != "agreed":
             if c["agreed"] == "not agreed":
                 why = "and was not agreed with the PO"
             else:
                 why = "and whether the PO agreed is unknown" if c["reason"] \
-                    else "with no note in notes.txt"
+                    else "with no note in notes.md"
             add("amber", "agreed", "#%d was carried over %s." % (c["id"], why), c["id"])
     for i, age in sorted(open_ages.items()):
         if old(age) and i not in red_carry:
@@ -575,7 +607,7 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
             what = "in %s" % row["state"] if row["state"] in cfg.waiting_states \
                 else "with the Blocked tag"
             waits[h.id] = (what, _workdays_after(t.since(h, t1, True), end))
-        elif row["category"] in ACTIVE:
+        elif row["state"] not in cfg.hold_states and row["category"] in ACTIVE:
             stale[h.id] = (row["state"], _workdays_after(t.since(h, t1, False), end))
     def title_at(i):
         return (t.hist[i].at(t1) or {}).get("title") or t.hist[i].title or ""
@@ -606,9 +638,231 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
         "people": persons,
         "rest": t.rest(members, counted, sprint),
         "attention": _attention(t, f, carry, persons, waits, stale, cycle_window["p85"], open_ages,
-                                shared),
+                                shared, t1),
         "status": _status(f, carry, cycle_window["p85"], waits,
                           _by_team(notes.status, team, None)),
         "notes": {"summary": _by_team(notes.summary, team, ""), "note": _by_team(notes.note, team, ""),
                   "exec_note": _by_team(notes.exec_note, team, "")},
     }
+
+
+def _running(t: _Team, sprint: dict, now: datetime, members: List[dict],
+             days_off: dict, p85: Optional[int]) -> tuple:
+    """Current figures and raw signals; `t` contains no revisions later than `now`."""
+    start, end = date.fromisoformat(sprint["start"]), date.fromisoformat(sprint["end"])
+    yesterday = t.local(now - timedelta(microseconds=1))
+    day = _workdays_after(start - timedelta(days=1), yesterday)
+    f = t.figures(sprint, now)
+    current = {"sprint": dict(sprint), "day": day,
+               "days": _workdays_after(start - timedelta(days=1), end),
+               **{k: f[k] for k in ("planned", "delivered_planned", "added", "removed")},
+               "held": [], "waiting": []}
+    ages, waits, stale, opened = {}, {}, {}, []
+    for h in t.counted(now):
+        row = h.at(now)
+        if row["category"] in CLOSED or not t.ours(h, now, now):
+            continue
+        opened.append(h)
+        age = t.open_age(h, now, yesterday)
+        if age is not None:
+            ages[h.id] = age
+        if is_waiting(row, t.cfg.waiting_states):
+            current["waiting"].append(h.id)
+            what = "in %s" % row["state"] if row["state"] in t.cfg.waiting_states \
+                else "with the Blocked tag"
+            waits[h.id] = (what, _workdays_after(t.since(h, now, True), yesterday))
+        elif row["state"] not in t.cfg.hold_states and any(
+                x.at(now)["category"] in ACTIVE for x in [h] + t.kids(h, now)):
+            stale[h.id] = (row["state"], _workdays_after(t.since(h, now, False), yesterday))
+        if row["state"] in t.cfg.hold_states:
+            current["held"].append(h.id)
+    signals = _attention(t, f, [], [], waits, stale, p85, ages, {}, now)
+    # Added work can also cross a sprint boundary; the closed commitment's carry list
+    # deliberately contains planned work only, so it cannot identify every carried-in item.
+    carried = set()
+    for previous in t.sprints(now):
+        if previous["end"] >= sprint["start"]:
+            continue
+        _, planned_at, boundary = t.instants(previous)
+        for h in opened:
+            row = h.at(boundary)
+            onward = t.sprint_at.get(row["iteration"]) if row else None
+            if row and row["category"] not in CLOSED and onward and \
+                    onward["start"] >= previous["start"] and t.ours(h, planned_at, boundary) and any(
+                        ts <= boundary and r["iteration"] == previous["path"]
+                        for r, ts in zip(h.rows, h.times)):
+                carried.add(h.id)
+    for signal in signals:
+        if (signal["kind"] == "old" and signal["id"] in carried) or (
+                signal["kind"] == "waiting" and waits[signal["id"]][1] > WAIT_RED_DAYS):
+            signal.update(level="red", badge="Stuck")
+
+    def add(kind, text, h=None, name="", level="amber", badge=None):
+        signals.append({"id": h.id if h else None, "person": t.owner(h, now) if h else name,
+                        "kind": kind, "badge": badge or _BADGES[kind], "level": level,
+                        "text": text, "ask": ASK[kind]})
+
+    for h in opened:
+        row = h.at(now)
+        if h.id in current["held"]:
+            since = None
+            for r, ts in reversed(list(zip(h.rows, h.times))):
+                if r["state"] not in t.cfg.hold_states:
+                    break
+                since = ts
+            days = _workdays_after(t.local(since), yesterday)
+            stuck = days > WAIT_RED_DAYS
+            add("held", "#%d is On Hold for %d working days." % (h.id, days), h,
+                level="red" if stuck else "amber", badge="Stuck" if stuck else None)
+        if h.id in f["planned"] and day >= NOT_STARTED_DAY and all(
+                x.at(now)["category"] == "Proposed" for x in [h] + t.kids(h, now)):
+            add("not_started", "#%d is still Proposed after working day %d." % (h.id, day), h)
+    for m in members:
+        p = m["person"]
+        emails = {e.lower() for e in p.emails if e}
+        remaining = _working_days(p, max(start, t.local(now)), end)
+        available = sum(1 - days_off.get(p.name, {}).get(d, 0) for d in remaining) * p.allocation
+        assigned = any(r["category"] not in CLOSED and (r["assigned"] or "").lower() in emails
+                       for h in t.hist.values() for r in [h.at(now)] if r is not None)
+        if not m["onboarding"] and available > 0 and not assigned:
+            add("none", "%s has %g available days left but no open item assigned." % (
+                p.name, available), name=p.name, level="red")
+        wip = [h.id for h in opened if t.owner(h, now) == p.name and any(
+            x.at(now)["category"] in ACTIVE for x in [h] + t.kids(h, now))]
+        if len(wip) > WIP_FLAG:
+            add("wip", "%s has %s in progress: %s." % (
+                p.name, _plural(len(wip), "item"), _ids(wip)), name=p.name)
+    return current, signals, opened
+
+
+def _action_problem(row: dict) -> str:
+    """Compact the action view only; shared attention sentences stay unchanged."""
+    fragments = []
+    subject = '#%d ' % row['id'] if row['id'] is not None else row['person'] + ' '
+    for sentence in row['problem'].split('; '):
+        text = sentence.removeprefix(subject).removesuffix('.')
+        if text.startswith('was carried over '):
+            agreement = {'with no note in notes.md': 'no PO agreement recorded',
+                         'and whether the PO agreed is unknown': 'PO agreement unknown',
+                         'and was not agreed with the PO': 'not agreed with the PO'}
+            detail = text.removeprefix('was carried over ')
+            text = agreement.get(detail, detail)
+            if 'carry' not in row['kinds']:
+                text = 'carried over, ' + text
+            fragments.append((3, text))
+            continue
+        if row['id'] is None and row['kinds'] in (['none'], ['nothing']):
+            available = text.split(' available days', 1)[0].split(' ', 1)[1]
+            if row['kinds'] == ['nothing']:
+                text = 'delivered nothing, %s available days' % available
+            elif ' available days left ' in text:
+                text = 'no open item, %s available days left' % available
+            else:
+                text = 'no item assigned during the sprint, %s available days' % available
+        text = text.replace('has been carried over for ', 'carried over ').replace(
+            ' sprints and is ', ' sprints; ').replace(
+            ", older than the squad's P85 of ", ', squad P85 ')
+        text = re.sub(r'^(?:has |is |was )', '', text)
+        text = re.sub(r' for (\d+) working days$', r' \1 working days', text)
+        text = re.sub(r'(?<![\d.])1 ((?:working |available )?days|sprints|items)\b',
+                      lambda m: '1 ' + m[1][:-1], text)
+        for fragment in filter(None, text.split('; ')):
+            rank = 1 if fragment.startswith('carried over ') else 2 if re.match(
+                r'\d+ days? old,', fragment) else 0
+            if (rank, fragment) not in fragments:
+                fragments.append((rank, fragment))
+    return '; '.join(text for _, text in sorted(fragments, key=lambda f: f[0]))
+
+
+def team_actions(data: dict, cfg: Config, people: List[Person], team: str,
+                 closed: Optional[dict], running: Optional[dict], today: date,
+                 days_off: dict) -> dict:
+    """Raw DM actions, separate from closed figures and from answer reconciliation."""
+    now = day_start(today, local_tz(cfg.timezone))
+    snapshot = data
+    if running:
+        snapshot = dict(data, revisions=[r for r in data["revisions"]
+                                        if parse_ts(r["changed"]) <= now])
+    t = _Team(snapshot, cfg, people, team)
+    current, signals, opened = None, [], []
+    sprint = running or (closed["sprint"] if closed else None)
+    if sprint is None:
+        return {"people": [], "rows": [], "current": None}
+    at = now if running else t.instants(sprint)[-1]
+    p85 = closed["cycle_window"]["p85"] if closed else None
+    if running:
+        members = t.members(people, team, t.sprints(now), sprint, days_off)
+        persons = [{"name": m["person"].name, "available": m["available"],
+                    "nominal": m["nominal"], "onboarding": m["onboarding"]} for m in members]
+        current, signals, opened = _running(t, sprint, now, members, days_off, p85)
+    else:
+        persons = [dict(p) for p in closed["people"]]
+    carry = {c["id"]: c for c in closed["carry"]} if closed else {}
+    rows = {}
+
+    def row_for(i, name, source):
+        key = i if i is not None else (name, source["kind"])
+        if key not in rows:
+            h = t.hist.get(i)
+            row = h.at(at) if h else None
+            is_open = bool(row and row["category"] not in CLOSED)
+            rows[key] = {"id": i, "person": name, "title": (row["title"] or "") if row else "",
+                         "sprint": "Now" if running else sprint["name"],
+                         "sprint_path": sprint["path"], "level": "green", "badge": "OK",
+                         "kinds": [], "problem": "", "ask": "",
+                         "age": t.open_age(h, at, t.local(at - timedelta(microseconds=1)))
+                         if is_open else None, "open": is_open, "carry": i in carry}
+        return rows[key]
+
+    def merge(signal):
+        i = signal["id"]
+        name = t.owner(t.hist[i], at) if i in t.hist and t.hist[i].at(at) else signal["person"]
+        row = row_for(i, name, signal)
+        if _LEVELS.index(signal["level"]) < _LEVELS.index(row["level"]):
+            row.update(level=signal["level"], badge=signal["badge"])
+        row["kinds"] = sorted(set(row["kinds"] + [signal["kind"]]))
+        for key, value in (("problem", signal["text"]), ("ask", signal["ask"])):
+            separator = "; " if key == "problem" else "\n"
+            if value and value not in row[key].split(separator):
+                row[key] = separator.join(filter(None, [row[key], value]))
+        return row
+
+    # Severity ties use a fixed badge order, with item ids providing the final row order.
+    priority = ("Stuck", "Carry-over", "Waiting", "On Hold", "Chase", "No movement",
+                "Not started", "No work", "Nothing delivered", "Too much WIP", "Check")
+    open_ids = {h.id for h in opened}
+    if closed:
+        eligible = {i for i, c in carry.items() if c["agreed"] != "agreed" or (
+            p85 is not None and c["age"] is not None and c["age"] > p85)}
+        for signal in closed["attention"]:
+            if not running or (signal["id"] in eligible and
+                               signal["kind"] in ("carry", "agreed", "old")):
+                value = dict(signal)
+                if running and signal["id"] in open_ids and signal["kind"] in ("old", "carry"):
+                    i = signal["id"]
+                    age = t.open_age(t.hist[i], at, t.local(at - timedelta(microseconds=1)))
+                    previous = carry[i]["age"]
+                    if previous is not None and age is not None:
+                        value["text"] = value["text"].replace("%d days old" % previous, "%d days old" % age)
+                signals.append(value)
+    signals.sort(key=lambda s: (_LEVELS.index(s["level"]), priority.index(s["badge"])))
+    for signal in signals:
+        row = merge(signal)
+        if running and signal["id"] in carry and signal["id"] not in open_ids:
+            row.update(sprint=closed["sprint"]["name"], sprint_path=closed["sprint"]["path"])
+    for h in opened:
+        row_for(h.id, t.owner(h, at), {})
+    for row in rows.values():
+        row["problem"] = _action_problem(row)
+        row["ask"] = row["ask"].replace("\n", " ")
+    # History-only ownership can refer to a roster member who left before this sprint.
+    known = {p["name"] for p in persons}
+    for name in sorted({r["person"] for r in rows.values()} - known):
+        persons.append({"name": name, "available": 0, "nominal": 0, "onboarding": False})
+    worst = {p["name"]: min((_LEVELS.index(r["level"]) for r in rows.values()
+                            if r["person"] == p["name"]), default=_LEVELS.index("green")) for p in persons}
+    persons.sort(key=lambda p: (worst[p["name"]], p["name"]))
+    order = {p["name"]: n for n, p in enumerate(persons)}
+    ordered = sorted(rows.values(), key=lambda r: (order[r["person"]], _LEVELS.index(r["level"]),
+                                                  r["id"] is None, r["id"] or 0, r["kinds"]))
+    return {"people": persons, "rows": ordered, "current": current}

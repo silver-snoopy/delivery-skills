@@ -30,19 +30,22 @@ class ConfigTest(unittest.TestCase):
             idx = email_index(read_team(path))
         self.assertEqual(idx["TOM.H2@VENDOR.EXAMPLE".lower()].name, "Tom H.")
 
-    def test_parse_notes(self):
-        n = parse_notes("#48211 agreed: QA env down\n#48277 Unknown: API dependency\nALFA summary: Done upload.\n"
-                        "ALFA status: amber - QA slot lost\nBETA exec note: Pilot live\nnonsense line")
-        self.assertEqual(n.items[48211], ("agreed", "QA env down"))
-        self.assertEqual(n.items[48277], ("unknown", "API dependency"))
-        self.assertEqual(n.summary["ALFA"], "Done upload.")
+    def test_markdown_notes_and_legacy_rejection(self):
+        n = parse_notes("\ufeff# ALFA\n## Summary\n- Delivered upload\nIn progress: retries\n"
+                        "## Exec note\nPilot live\n## Note\nfirst\nsecond\n"
+                        "## Status\namber - QA slot lost\n")
+        self.assertEqual(n.summary["ALFA"], "Delivered upload\nIn progress: retries")
+        self.assertEqual(n.exec_note["ALFA"], "Pilot live")
+        self.assertEqual(n.note["ALFA"], "first\nsecond")
         self.assertEqual(n.status["ALFA"], ("AMBER", "QA slot lost"))
-        self.assertEqual(n.exec_note["BETA"], "Pilot live")
-        self.assertEqual(len(n.warnings), 1)
+        old = parse_notes("#1 agreed: late\nALFA summary: old")
+        self.assertFalse(old.items)
+        self.assertFalse(old.summary)
+        self.assertTrue(old.warnings)
 
-    def test_parse_notes_not_agreed_and_bad_status(self):
-        n = parse_notes("#1 not agreed: late\nALFA status: purple - x")
-        self.assertEqual(n.items[1], ("not agreed", "late"))
+    def test_markdown_blank_and_invalid_status(self):
+        n = parse_notes("# ALFA\n## Status\n\n# BETA\n## Status\npurple - x\n")
+        self.assertFalse(n.status)
         self.assertEqual(len(n.warnings), 1)
 
     def test_config_round_trip_defaults(self):
@@ -87,12 +90,6 @@ class ConfigTest(unittest.TestCase):
             with open(path) as f:
                 self.assertEqual(f.read().splitlines()[1], "Ann,,ALFA,,,1")
             self.assertEqual(read_team(path), people)
-
-    def test_parse_notes_multiple_summary_lines_join_and_strip_dash(self):
-        n = parse_notes("ALFA summary: - Delivered upload\nALFA summary: In progress: retries\n"
-                        "ALFA note: first\nALFA note: second")
-        self.assertEqual(n.summary["ALFA"], "Delivered upload\nIn progress: retries")
-        self.assertEqual(n.note["ALFA"], "second")
 
     def test_parse_staff_drops_trailing_tag_in_parentheses(self):
         pairs = parse_staff('Maya Rao (external) <maya@vendor.example>; "Doe, John (ext)" <jd@vendor.example>')

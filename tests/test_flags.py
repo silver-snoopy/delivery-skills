@@ -31,6 +31,19 @@ def closed(b, i, who=MAYA, area="Proj\\Claims", start="2026-10-27 09:00",
 
 
 class PeopleFlagTests(unittest.TestCase):
+    def test_attention_has_identity_kind_and_badge_without_parsing_text(self):
+        b = board()
+        closed(b, 1)
+        b.item(2).at("2026-10-27 09:00", iteration=S29, assigned=MAYA,
+                     state="Ready for QA")
+        rows = run(b, "ALFA", "S29")["attention"]
+        waiting = next(a for a in rows if a["ask"] == "Raise it with the PO.")
+        self.assertEqual({k: waiting.get(k) for k in ("id", "person", "kind", "badge")},
+                         {"id": 2, "person": "Maya Brook", "kind": "waiting", "badge": "Waiting"})
+        no_work = next(a for a in rows if a["level"] == "red")
+        self.assertEqual({k: no_work.get(k) for k in ("id", "person", "kind", "badge")},
+                         {"id": None, "person": "Ivan Holt", "kind": "none", "badge": "No work"})
+
     def test_no_assignment_is_red_unless_onboarding(self):
         b = board()
         closed(b, 1)
@@ -42,9 +55,10 @@ class PeopleFlagTests(unittest.TestCase):
         self.assertEqual([(p["no_assignment"], p["onboarding"]) for p in t["people"]],
                          [(True, False), (False, False), (True, True)])
         self.assertEqual(flags(t, "red"), [
-            {"level": "red", "text": "Ivan Holt had 9 available days but no item assigned "
+            {"id": None, "person": "Ivan Holt", "kind": "none", "badge": "No work",
+             "level": "red", "text": "Ivan Holt had 9 available days but no item assigned "
                                      "during the sprint.",
-             "ask": "Find out what they worked on; if it was off-board work, add it to notes.txt."}])
+             "ask": "Find out what they worked on; if it was off-board work, add it to notes.md."}])
         # assigned at the sprint start, with no change during the sprint, counts as assigned
         b.item(3).at("2026-10-23 09:00", iteration=S29, assigned=IVAN)
         t = run(b, "ALFA", "S29", people=people)
@@ -69,7 +83,8 @@ class PeopleFlagTests(unittest.TestCase):
         self.assertEqual(person(t, "Maya Brook")["delivered"], [1])
         self.assertEqual(person(t, "Maya Brook")["median"], 8)
         self.assertEqual([a for a in flags(t) if a["ask"] == ask], [
-            {"level": "amber", "text": "Nadia Kern had 9 available days and delivered nothing.",
+            {"id": None, "person": "Nadia Kern", "kind": "nothing", "badge": "Nothing delivered",
+             "level": "amber", "text": "Nadia Kern had 9 available days and delivered nothing.",
              "ask": ask}])
         nadia.joined = date(2026, 10, 28)
         t = run(b, "ALFA", "S29", people=[PEOPLE[0], nadia])
@@ -85,7 +100,8 @@ class PeopleFlagTests(unittest.TestCase):
         t = run(b, "ALFA", "S29")
         self.assertEqual(person(t, "Maya Brook")["in_progress"], [1, 2, 3, 4])
         self.assertEqual(flags(t, ask="Ask which item to finish first."), [
-            {"level": "amber", "text": "Maya Brook has 4 items in progress: #1, #2, #3, #4.",
+            {"id": None, "person": "Maya Brook", "kind": "wip", "badge": "Too much WIP",
+             "level": "amber", "text": "Maya Brook has 4 items in progress: #1, #2, #3, #4.",
              "ask": "Ask which item to finish first."}])
 
 
@@ -100,9 +116,11 @@ class ItemFlagTests(unittest.TestCase):
             .at("2026-11-02 09:00", tags=["Blocked"])
         t = run(b, "ALFA", "S29")
         self.assertEqual(flags(t, ask="Raise it with the PO."), [
-            {"level": "amber", "text": "#1 has waited in Ready for QA for 4 working days.",
+            {"id": 1, "person": "Maya Brook", "kind": "waiting", "badge": "Waiting",
+             "level": "amber", "text": "#1 has waited in Ready for QA for 4 working days.",
              "ask": "Raise it with the PO."},
-            {"level": "amber", "text": "#3 has waited with the Blocked tag for 4 working days.",
+            {"id": 3, "person": "Ivan Holt", "kind": "waiting", "badge": "Waiting",
+             "level": "amber", "text": "#3 has waited with the Blocked tag for 4 working days.",
              "ask": "Raise it with the PO."}])
 
     def test_stale_active_item(self):
@@ -114,7 +132,8 @@ class ItemFlagTests(unittest.TestCase):
             .at("2026-11-02 09:00")
         t = run(b, "ALFA", "S29")
         self.assertEqual(flags(t, ask=ask), [
-            {"level": "amber", "text": "#1 is Active with no board change for 5 working days.",
+            {"id": 1, "person": "Maya Brook", "kind": "stale", "badge": "No movement",
+             "level": "amber", "text": "#1 is Active with no board change for 5 working days.",
              "ask": ask}])
 
     def test_stale_counts_child_changes_at_stories_level(self):
@@ -162,13 +181,16 @@ class ItemFlagTests(unittest.TestCase):
         t = run(b, "ALFA", "S29", people=GONE, notes=notes)
         self.assertEqual(t["cycle_window"]["p85"], 3)
         self.assertEqual(item_flags(t), [
-            {"level": "red", "text": "#1 has been carried over for 2 sprints and is 26 days "
+            {"id": 1, "person": "Maya Brook", "kind": "carry", "badge": "Carry-over",
+             "level": "red", "text": "#1 has been carried over for 2 sprints and is 26 days "
                                      "old, older than the squad's P85 of 3 days.",
              "ask": "Ask what is blocking it."},
-            {"level": "amber", "text": "#2 is 12 days old, older than the squad's P85 of 3 days.",
+            {"id": 2, "person": "Maya Brook", "kind": "old", "badge": "Chase",
+             "level": "amber", "text": "#2 is 12 days old, older than the squad's P85 of 3 days.",
              "ask": "Ask what is blocking it."},
-            {"level": "amber", "text": "#2 was carried over with no note in notes.txt.",
-             "ask": "Confirm with the PO and record it in notes.txt."}])
+            {"id": 2, "person": "Maya Brook", "kind": "agreed", "badge": "Carry-over",
+             "level": "amber", "text": "#2 was carried over with no note in notes.md.",
+             "ask": "Confirm with the PO and record it in notes.md."}])
 
 
 class SharedItemTests(unittest.TestCase):
@@ -178,10 +200,12 @@ class SharedItemTests(unittest.TestCase):
         b.item(1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
             .at("2026-10-30 09:00", assigned=gus.emails[0]).at("2026-11-03 09:00", state="Closed")
         closed(b, 2)
-        want = {"level": "grey", "text": "#1 is counted for teams ALFA and GAMMA.",
+        want = {"id": 1, "person": "", "kind": "shared", "badge": "Check",
+                "level": "grey", "text": "#1 is counted for teams ALFA and GAMMA.",
                 "ask": "Check that both teams should count it."}
         for team in ("ALFA", "GAMMA"):
             t = run(b, team, "S29", people=PEOPLE + [gus])
+            want["person"] = "Maya Brook" if team == "ALFA" else "Gus Lane"
             self.assertIn(1, t["delivered"])
             self.assertEqual([a for a in flags(t, "grey") if "counted for" in a["text"]], [want])
 

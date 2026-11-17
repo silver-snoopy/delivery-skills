@@ -114,6 +114,7 @@ class Config:
     half_day_codes: List[str] = field(default_factory=list)
     waiting_states: List[str] = field(default_factory=list)
     hold_states: List[str] = field(default_factory=list)
+    test_states: List[str] = field(default_factory=list)
     not_delivered_reasons: List[str] = field(default_factory=lambda: list(DEFAULT_NOT_DELIVERED))
     staff: str = ""
     vacations: str = ""

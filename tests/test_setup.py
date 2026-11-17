@@ -80,6 +80,22 @@ class SuggestTest(unittest.TestCase):
         s = setup.suggest(b.cache(), STAFF, [])
         self.assertEqual(s["hold"], ["Impeded", "On Hold"])
 
+    def test_suggest_test_states(self):
+        b = board()
+        states = (("Ready for QA", "InProgress"), ("In Review", "InProgress"),
+                  ("On Hold", "InProgress"), ("Verify", "Resolved"), ("UAT", "Resolved"),
+                  ("Acceptance", "InProgress"), ("Testing", "InProgress"),
+                  ("Resolved", "Resolved"),
+                  ("Test backlog", "Proposed"), ("Test done", "Completed"),
+                  ("Test removed", "Removed"))
+        for i, (state, category) in enumerate(states, 1):
+            b.item(i).at("2026-10-06 09:00", state=state, category=category, assigned=MAYA)
+        s = setup.suggest(b.cache(), STAFF, [])
+        self.assertEqual(s["test"], ["Acceptance", "In Review", "Ready for QA", "Resolved", "Testing",
+                                      "UAT", "Verify"])
+        self.assertNotIn("Active", s["test"])
+        self.assertNotIn("On Hold", s["test"])
+
 
 class InitTest(unittest.TestCase):
     def setUp(self):
@@ -147,6 +163,29 @@ class InitTest(unittest.TestCase):
         self.assertIn("Proposed hold states: On Hold", text)
         self.assertEqual(load_config(self.d).hold_states, ["On Hold"])
         self.assertLess(text.index("Proposed waiting states"), text.index("Proposed hold states"))
+        self.assertLess(text.index("Proposed hold states"), text.index("Proposed test states"))
+
+    def test_test_states_proposed_and_saved(self):
+        b = board()
+        b.item(1).at("2026-10-06 09:00", state="Ready for QA", assigned=MAYA)
+        b.item(2).at("2026-10-06 09:00", state="In Review", assigned=MAYA)
+        _, text = self.run_init(b.cache())
+        self.assertIn("Proposed test states: In Review, Ready for QA", text)
+        self.assertEqual(load_config(self.d).test_states, ["In Review", "Ready for QA"])
+
+    def test_configured_test_states_are_kept(self):
+        from ledger.config import Config, save_config
+        cfg = Config(timezone="Europe/Zurich")
+        cfg.test_states = ["Custom QA"]
+        save_config(self.d, cfg)
+        b = board()
+        b.item(1).at("2026-10-06 09:00", state="Ready for QA", assigned=MAYA)
+        self.run_init(b.cache())
+        self.assertEqual(load_config(self.d).test_states, ["Custom QA"])
+
+    def test_no_test_states_prints_none(self):
+        _, text = self.run_init()
+        self.assertIn("Proposed test states: none", text)
 
     def test_squad_teams_maps_calendar_squad_to_team(self):
         from ledger.config import Config, save_config

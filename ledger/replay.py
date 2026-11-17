@@ -95,6 +95,15 @@ class History:
         return done is not None and any(
             row["category"] in ACTIVE and ts > done for row, ts in zip(self.rows, self.times))
 
+    def returned(self, test_states: Sequence[str]) -> bool:
+        """Any test return or reopen in the whole history, regardless of tags."""
+        return any(
+            (prev["state"] in test_states and new["state"] not in test_states
+             and new["category"] not in ("Completed", "Removed"))
+            or (prev["category"] == "Completed" and not self.cut(prev)
+                and new["category"] in ("Proposed", "InProgress", "Resolved"))
+            for prev, new in zip(self.rows, self.rows[1:]))
+
     def assignees_active(self, until: datetime) -> Set[str]:
         """Assignees recorded on revisions up to `until` while the item was active."""
         return {row["assigned"] for row, ts in zip(self.rows, self.times)

@@ -113,14 +113,14 @@ class RenderTest(unittest.TestCase):
         for tracked, cells in ((True, '<td>50%</td><td>–</td><td>100%</td>'),
                                (False, '<td>not tracked</td><td>–</td><td>not tracked</td>')):
             t["first_pass"]["tracked"] = tracked
-            for render in (render_manager, render_dm):
+            for render in (render_manager,):
                 with self.subTest(tracked=tracked, render=render.__name__):
                     page = render("Sprint 29", [t], GEN)
                     self.assertIn('<td>First-time pass</td>' + cells, page)
 
     def test_first_pass_figure_caps_percent_when_an_item_returned(self):
         for scored in (200, 1000):
-            for render in (render_manager, render_dm):
+            for render in (render_manager,):
                 with self.subTest(scored=scored, render=render.__name__):
                     t = self.first_pass_team(scored=scored, returned=[1],
                                              share=(scored - 1) / scored)
@@ -134,18 +134,17 @@ class RenderTest(unittest.TestCase):
         t = self.first_pass_team()
         t["trend"] = [dict(t["trend"][0], first_pass=share)
                       for share in (0.995, 0.999, 1.0)]
-        for render in (render_manager, render_dm):
+        for render in (render_manager,):
             with self.subTest(render=render.__name__):
                 page = render("Sprint 29", [t], GEN)
                 row = re.search(r'<td>First-time pass</td>(.*?)</tr>', page).group(1)
                 self.assertEqual(row, '<td>99%</td><td>99%</td><td>100%</td>')
 
-    def test_dm_page_shows_first_pass(self):
+    def test_dm_page_has_no_team_figures(self):
         page = render_dm("Sprint 29", [self.first_pass_team()], GEN)
-        people, team = page.split('<h2>Team figures</h2>')
-        self.assertIn('<span class="n">92%</span>'
-                      '<span class="l">first-time pass (2 returned)</span>', team)
-        self.assertNotIn("first-time pass", people.lower())
+        self.assertNotIn("Team figures", page)
+        self.assertNotIn('<div class="figs">', page)
+        self.assertNotIn('<span class="l">first-time pass', page)
         person = render_person(PEOPLE[0], [], GEN)
         self.assertNotIn("first-time pass", person.lower())
 
@@ -176,21 +175,19 @@ class RenderTest(unittest.TestCase):
         self.assertNotRegex(page, r"(?i)(stories|tasks) delivered")
         self.assertNotRegex(page, r"(?i)\b(story|stories|task|tasks)\b")
         dm = text(render_dm("Sprint 29", teams(), GEN))
-        self.assertIn("Counts: stories", dm)
-        self.assertIn("Counts: tasks", dm)
-        self.assertIn("Claims intake (2 work items)", dm)
+        self.assertNotIn("Counts:", dm)
         self.assertIn("our convention, not an industry standard", dm)
         self.assertIn("waiting (in a waiting state or blocked)", dm)
         for page in (page, dm):
             self.assertNotIn("on the customer", page)
-        stripped = dm.replace("Counts: stories", "").replace("Counts: tasks", "")
-        stripped = re.sub(r"Method\..*", "", stripped)
+        stripped = re.sub(r"Method\..*", "", dm)
         for word in ("story", "task"):
             self.assertNotRegex(stripped, r"(?i)\b%ss?\b" % word)
 
     def test_manual_status_and_small_sample(self):
         page = text(render_dm("Sprint 29", teams(NOTES), GEN))
-        self.assertIn("AMBER PO asked to hold the release (set by hand)", page)
+        self.assertIn("BETA AMBER Last sprint: Sprint 29 (27 Oct – 7 Nov 2026) PO asked to hold the "
+                      "release (set by hand)", page)
         page = text(render_manager("Sprint 29", teams(NOTES), GEN))
         self.assertNotIn("AMBER", page)
         self.assertIn("cycle time median / P85 over the last 2 sprints", page)
@@ -201,14 +198,15 @@ class RenderTest(unittest.TestCase):
         body = text(page[page.index("<body"):])
         self.assertTrue(body.startswith(
             "Internal: delivery manager and team leads only. Not for the customer."))
-        self.assertLess(body.index("Ivan Holt covered support."), body.index("ours vs rest of squad"))
-        self.assertLess(body.index("ours vs rest of squad"), body.index("Person Work item Sprint"))
-        self.assertLess(body.index("Person Work item Sprint"), body.index("Team figures"))
+        self.assertLess(body.index("Ivan Holt covered support."), body.index("Last sprint:"))
+        self.assertLess(body.index("Last sprint:"), body.index("Our engineers"))
+        self.assertLess(body.index("Our engineers"), body.index("Person Work item Sprint"))
+        self.assertNotIn("Team figures", body)
         self.assertIn("Use this as context, not as a ranking.", body)
         self.assertIn("Maya Brook", body)
         self.assertNotIn("Needs attention", body)
         self.assertNotIn("<h3>People</h3>", page)
-        self.assertIn("2 of 3 planned work items delivered", body)
+        self.assertNotIn("2 of 3 planned work items delivered", body)
 
     def test_missing_sprint_is_listed(self):
         missing = [{"team": "GAMMA", "missing": "No sprint named Sprint 29."}]
@@ -220,7 +218,7 @@ class RenderTest(unittest.TestCase):
     def card(self, page, team):
         """The article for `team` in `page`."""
         return next(a for a in re.findall(r'(?s)<article class="squad">.*?</article>', page)
-                    if "<h2>%s</h2>" % team in a)
+                    if re.search(r"<h2>%s(</h2>| <span)" % re.escape(team), a))
 
     def test_manager_card_layout(self):
         card = self.card(render_manager("Sprint 29", teams(NOTES), GEN), "ALFA")
@@ -234,9 +232,6 @@ class RenderTest(unittest.TestCase):
         for absent in ("Counts:", "GREEN", "AMBER", "RED", "Worked on", "worked on", "Age"):
             self.assertNotIn(absent, card)
         self.assertIn("<td>Planned</td>", card)
-        dm = self.card(render_dm("Sprint 29", teams(NOTES), GEN).split("<h2>Team figures</h2>")[1],
-                       "ALFA")
-        self.assertIn("<br>Counts: stories</span>", dm)
 
     def test_manager_card_without_summary_has_no_highlights(self):
         self.assertNotIn("Delivery highlights", render_manager("Sprint 29", teams(), GEN))
@@ -255,30 +250,20 @@ class RenderTest(unittest.TestCase):
         card = self.card(render_manager("Sprint 29", teams(NOTES), GEN), "ALFA")
         self.assertIn("<h3>Delivery highlights</h3><p>Upload is live.</p>", card)
 
-    def test_dm_card_unchanged(self):
-        page = render_dm("Sprint 29", teams(NOTES), GEN).split("<h2>Team figures</h2>")[1]
-        card = self.card(page, "ALFA")
-        order = ['<span class="chip ', "The team worked on", "Upload is live.",
-                 '<div class="figs">', "<h3>Carried over</h3>", "<h3>Last 2 sprints</h3>"]
+    def test_dm_card_status_first_and_no_team_figures(self):
+        card = self.card(render_dm("Sprint 29", teams(NOTES), GEN), "BETA")
+        order = ['<h2>BETA <span class="chip AMBER">AMBER</span></h2>',
+                 "<h3>Last sprint: Sprint 29 (27 Oct – 7 Nov 2026)</h3>",
+                 "<p>PO asked to hold the release (set by hand)</p>", "<th>Person</th>"]
         self.assertEqual([card.index(o) for o in order], sorted(card.index(o) for o in order))
-        self.assertNotIn("work items carried over", card)
-        self.assertNotIn("<details>", card)
-        self.assertIn("<th>Age</th>", card)
-
-    def test_dm_card_multiline_summary_renders_as_bullets(self):
-        notes = Notes(summary={"ALFA": "Delivered upload\nIn progress: retries"})
-        page = render_dm("Sprint 29", teams(notes), GEN).split("<h2>Team figures</h2>")[1]
-        self.assertIn("<ul><li>Delivered upload</li><li>In progress: retries</li></ul>",
-                      self.card(page, "ALFA"))
+        for absent in ("The team worked on", "Upload is live.", '<div class="figs">',
+                       "Carried over", "Last 2 sprints"):
+            self.assertNotIn(absent, card)
 
     def test_carry_and_person_show_days_on_hold(self):
         t = teams()
         t[0]["carry"][0]["held"] = 3
         t[0]["people"][0]["held"] = [[103, 3], [7, 1]]
-        dm = render_dm("Sprint 29", t, GEN)
-        self.assertIn("<h3>Carried over (1 On Hold)</h3>", dm)
-        self.assertIn("<td>3 d</td>", dm)
-        self.assertIn("<th>On Hold</th>", dm)
         self.assertIn("<summary>Carried over items (1) (1 On Hold)</summary>",
                       render_manager("Sprint 29", t, GEN))
         for render in (render_manager, render_dm):
@@ -294,10 +279,6 @@ class RenderTest(unittest.TestCase):
         self.assertIn('<div class="carry-empty"><h3>Carried over items (0)</h3><p class="note">No '
                       'work items carried over.</p></div>', card)
         self.assertNotIn("<summary>Carried over", card)
-        dm = self.card(render_dm("Sprint 29", t, GEN).split("<h2>Team figures</h2>")[1], "BETA")
-        self.assertIn('<div><h3>Carried over</h3><p class="note">No work items carried over.</p></div>',
-                      dm)
-        self.assertNotIn("carry-empty", dm)
 
     def test_work_items_link_to_azure_devops(self):
         page = link_ids(render_manager("Sprint 29", teams(NOTES), GEN),
@@ -363,7 +344,7 @@ class RenderTest(unittest.TestCase):
                                   row(6, "Zed <lead>", "red", "Stuck"),
                                   row(5, "Bea", "grey", "Check")])
         page = link_ids(render_dm("Sprint 29", [t], GEN), "https://dev.azure.com/acme", "Proj")
-        before_figures = page.split("<h2>Team figures</h2>")[0]
+        before_figures = page.split('<div class="foot">')[0]
         self.assertIn("<th>Person</th><th>Work item</th><th>Sprint</th><th>Signal</th>"
                       "<th>Problem</th><th>Action</th><th>Age</th>", before_figures)
         self.assertIn('<td rowspan="4">Zed &lt;lead&gt;', before_figures)
@@ -395,12 +376,12 @@ class RenderTest(unittest.TestCase):
         expected = ('Raise it with the PO. Ask what is blocking it. '
                     'Confirm with the PO and record it in notes.md.')
         self.assertEqual(row['ask'], expected)
-        page = render_dm('Old', [t], GEN).split('<h2>Team figures</h2>')[0]
+        page = render_dm('Old', [t], GEN).split('<div class="foot">')[0]
         self.assertIn('<td>' + expected + '</td>', page)
         self.assertNotIn('.;', page)
         answer = 'DM text.; keep it exactly.  Next step'
         row['answer'] = answer
-        page = render_dm('Old', [t], GEN).split('<h2>Team figures</h2>')[0]
+        page = render_dm('Old', [t], GEN).split('<div class="foot">')[0]
         self.assertIn('<td>' + answer + '</td>', page)
         self.assertNotIn('<td>' + expected + '</td>', page)
 
@@ -411,7 +392,7 @@ class RenderTest(unittest.TestCase):
         t["actions"]["rows"] = [dict(id=7, person="Zoe", title="item", sprint="Now", level="red",
                                        badge="Stuck", problem="stuck", ask="ask", age=3, open=True,
                                        handled=True, answer="fixed")]
-        page = render_dm("Sprint 29", [t], GEN).split("<h2>Team figures</h2>")[0]
+        page = render_dm("Sprint 29", [t], GEN).split('<div class="foot">')[0]
         self.assertLess(page.index('>Amy<br>'), page.index('>Zoe<br>'))
 
     def test_suggestions_and_problems_use_markdown_notes(self):
@@ -495,8 +476,9 @@ class RunReportTest(unittest.TestCase):
         self.assertIn("Sprint 28 delivery summary", manager)
         self.assertNotIn("day 7 of 9", manager)
         self.assertIn("Sprint 29 · day 7 of 9 working days · planned done 2 of 3", text(dm))
-        self.assertIn("BETA: ours vs rest of squad", dm)  # BETA has no closed sprint
-        beta_actions = dm.split("BETA: ours vs rest of squad")[1].split("<h2>Team figures</h2>")[0]
+        self.assertIn("<h2>BETA</h2>", dm)  # BETA has no closed sprint, so no status chip
+        self.assertIn("<h3>Current sprint</h3>", dm)
+        beta_actions = dm.split("<h2>BETA</h2>")[1].split('<div class="foot">')[0]
         self.assertIn("No closed sprint available for comparison.", beta_actions)
         self.assertNotIn("No other delivered work items", beta_actions)
         self.assertIn("Lena Ford", dm)
@@ -509,7 +491,7 @@ class RunReportTest(unittest.TestCase):
         self.edit("Sprint 28/notes.md", lambda t: t.replace(
             "|  |  |", "| chased: after standup |  |"))
         self.run_cli("report", "--offline", "--today", "2026-11-05")
-        first = self.read_report("dm_2026-11-05.html", "Sprint 28").split("<h2>Team figures</h2>")[0]
+        first = self.read_report("dm_2026-11-05.html", "Sprint 28").split('<div class="foot">')[0]
         notes = self.read_report("notes.md", "Sprint 28")
         state = self.read_report(".notes-state.json", "Sprint 28")
         def close(t):
@@ -522,9 +504,13 @@ class RunReportTest(unittest.TestCase):
         self.edit(CACHE_FILE, close)
         code, out = self.run_cli("report", "--offline", "--today", "2026-11-05")
         self.assertEqual(code, 0, out)
-        second = self.read_report("dm_2026-11-05.html", "Sprint 28").split("<h2>Team figures</h2>")[0]
-        self.assertEqual(re.sub(r".*generated .*\n", "", first),
-                         re.sub(r".*generated .*\n", "", second))
+        second = self.read_report("dm_2026-11-05.html", "Sprint 28").split('<div class="foot">')[0]
+        # The closed sprint's status is recomputed from the full history; the running rows are not.
+        def same(page):
+            page = re.sub(r".*generated .*\n", "", page)
+            page = re.sub(r' <span class="chip (GREEN|AMBER|RED)">\w+</span>', "", page)
+            return re.sub(r"(<h3>Last sprint[^<]*</h3>\n)<p>.*?</p>\n", r"\1", page)
+        self.assertEqual(same(first), same(second))
         self.assertEqual(notes, self.read_report("notes.md", "Sprint 28"))
         self.assertEqual(state, self.read_report(".notes-state.json", "Sprint 28"))
         self.assertIn("Handled", second)
@@ -592,8 +578,8 @@ class RunReportTest(unittest.TestCase):
             code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
             self.assertEqual(code, 0, out)
             dm = self.read_report("dm_2026-11-13.html")
-            action_card = dm.split("<h2>Team figures</h2>")[0]
-            beta = action_card.split("BETA: ours vs rest of squad")[1]
+            action_card = dm.split('<div class="foot">')[0]
+            beta = action_card.split("<h2>BETA")[1]
             self.assertNotIn("no PO answer", beta)
             self.assertNotIn("not recorded as agreed", text(dm).split("BETA")[-1])
             self.assertNotIn("BETA action:", out)
@@ -615,7 +601,7 @@ class RunReportTest(unittest.TestCase):
             code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
             self.assertEqual(code, 0, out)
             dm = self.read_report("dm_2026-11-13.html")
-            self.assertNotIn("#10", dm.split("<h2>Team figures</h2>")[0])
+            self.assertNotIn("#10", dm.split('<div class="foot">')[0])
             self.assertNotIn("carry-over without note: #10", out)
             saved = parse_notes(self.read_report("notes.md"))
             self.assertFalse(any(r["id"] == 10 for r in saved.teams["ALFA"]["Actions"]))
@@ -825,7 +811,7 @@ class RunReportTest(unittest.TestCase):
         with open(os.path.join(self.d, "Sprint 29", "dm_2026-11-13.html"), encoding="utf-8") as f:
             page = text(f.read())
         self.assertIn("GAMMA", page)
-        self.assertIn("Counts: stories", page)
+        self.assertIn("GAMMA RED Last sprint: Sprint 29", page)
         self.assertNotIn("BETA", page)
 
     def test_notes_bom_and_unused_lines_are_warnings(self):

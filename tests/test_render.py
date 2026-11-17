@@ -80,7 +80,7 @@ class ManagerWindowTest(unittest.TestCase):
                  throughput={"per10": 3.4, "before": 4.2},
                  first_pass={"scored": 25, "returned": [1], "share": 0.96,
                              "tracked": True, "before": 0.92},
-                 flow={"total": 12, "building": 4, "waiting": 6, "other": 2,
+                 flow={"total": 12, "building": 35, "waiting": 50, "other": 15,
                        "states": ["Ready for QA", "PO Review"]})
         t["trend"] = [dict(t["trend"][0], build=v, per10=v) for v in (None, 3.54)]
         return t
@@ -145,12 +145,11 @@ class ManagerWindowTest(unittest.TestCase):
         for value, days in ((0, "0 days"), (1, "1 day"), (2, "2 days")):
             with self.subTest(value=value):
                 t = self.team()
-                t["flow"] = dict(total=value, building=value, waiting=value,
-                                 other=value, states=[])
+                t["flow"] = dict(total=value, building=40, waiting=35, other=25, states=[])
                 t["build"].update(median=value, before=1 if value != 1 else 2)
                 page = self.page(t)
-                self.assertIn(days + " typical from start to done = " + days +
-                              " building · " + days + " waiting · " + days + " other", text(page))
+                self.assertIn(days + " typical from start to done: 40% building · 35% waiting · "
+                              "25% other", text(page))
                 figure = str(value) if value in (0, 1) else "%.1f" % value
                 unit = "day" if value == 1 else "days"
                 self.assertIn('<span class="n">' + figure + " <small>" + unit + "</small>", page)
@@ -167,12 +166,12 @@ class ManagerWindowTest(unittest.TestCase):
     def test_where_the_time_goes(self):
         t = self.team()
         self.assertIn('Where the time goes (last 6 sprints)', self.page(t))
-        self.assertIn('12 days typical from start to done = 4 days building · 6 days waiting '
-                      '(Ready for QA, PO Review) · 2 days other', text(self.page(t)))
+        self.assertIn('12 days typical from start to done: 35% building · 50% waiting '
+                      '(Ready for QA, PO Review) · 15% other', text(self.page(t)))
         for color in ('var(--accent)', 'var(--warn)', '#B8C0CA'):
             self.assertIn('background:' + color, self.page(t))
         t["flow"]["states"] = []
-        self.assertIn('6 days waiting · 2 days other', text(self.page(t)))
+        self.assertIn('50% waiting · 15% other', text(self.page(t)))
         t["flow"] = None
         self.assertNotIn('<h3>Where the time goes', self.page(t))
 
@@ -205,8 +204,7 @@ class ManagerWindowTest(unittest.TestCase):
                            'pooled', 'Where the time goes', 'Late =', 'own past'):
             self.assertIn(definition, page)
         self.assertNotIn('Cycle time =', page)
-        self.assertIn("Its parts are shares of the typical start-to-done time, so the building "
-                      "part is not the build time median.", page)
+        self.assertIn("Parts are whole percentages of that time, with the remainder in other.", page)
 
 
 class RenderTest(unittest.TestCase):

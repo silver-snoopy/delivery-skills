@@ -48,7 +48,7 @@ The manager card tells one story: are we delivering, how fast, how well, and are
   - **waiting:** the summed time between first active and done in waiting states or with the Blocked tag, outside build time;
   - **other:** the rest of first active to done, for example hold, time before ours picked it up, and rework after a return.
 
-  The three parts are pooled shares of that summed time, multiplied by the typical start-to-done time and rounded to whole days. Rounding gives any leftover day to "other", so the three parts always add up to the total. **(builder's call)** The waiting part lists the configured waiting states that actually occurred in the window, in config order.
+  The three parts are pooled shares of that summed time, shown as whole percentages. Rounding gives any leftover to "other", so the three parts always add up to 100%. Changed on 2026-11-18 from days to percentages, because day counts for "building" clashed with the build time median on the same card. **(builder's call)** The waiting part lists the configured waiting states that actually occurred in the window, in config order.
 
 ## 4. What the reader sees
 
@@ -66,7 +66,7 @@ The manager card tells one story: are we delivering, how fast, how well, and are
   - both cycle time figures;
   - the waiting share figure;
   - the "planned work items completed after the sprint ended" figure.
-- **Where the time goes (last 6 sprints)** sits under the figures. It is one sentence, "12 days typical from start to done = 4 days building · 6 days waiting (Ready for QA, PO Review) · 2 days other", plus a thin three-part bar: accent for building, warn for waiting, grey for other. The bar is decoration. The sentence carries the numbers, so the line still reads correctly in print. With no item that has a cycle time, the section is left out.
+- **Where the time goes (last 6 sprints)** sits under the figures. It is one sentence, "12 days typical from start to done: 35% building · 50% waiting (Ready for QA, PO Review) · 15% other", plus a thin three-part bar: accent for building, warn for waiting, grey for other. The bar is decoration. The sentence carries the numbers, so the line still reads correctly in print. With no item that has a cycle time, the section is left out.
 - **Delivered items:** the summary reads "Delivered items (9, 2 late)". Late rows get an amber `Late` chip in a new last column. With no late items the summary stays "Delivered items (9)" and has no extra column. **(builder's call)** No empty column.
 - **Trend table:**
   - "Cycle time P85 (days)" is replaced by "Work items per 10 PD" and "Build time median (days)";
@@ -107,7 +107,7 @@ The tests use invented histories only, with no real names or ticket data:
 - the window median is pooled;
 - per-sprint trend values;
 - first-time pass pooled versus a median of sprint shares;
-- the three Where the time goes parts add up to the total;
+- the three Where the time goes parts add up to 100%;
 - the now and before windows split the 6 sprints, and the arrow direction and colour per figure (lower build time is green);
 - no arrow with an empty before window, an unchanged value or "not tracked";
 - throughput per 10 person-days, and "–" with zero capacity;

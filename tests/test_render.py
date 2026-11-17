@@ -343,11 +343,11 @@ class RenderTest(unittest.TestCase):
 
     def test_action_table_rowspans_order_badges_answers_and_escaping(self):
         t = teams(NOTES)[0]
-        def row(i, person, level, badge, **extra):
+        def row(i, person, level, badge, open=True, **extra):
             return dict(id=i, person=person, title="<img src=x onerror=bad> & title",
                         sprint="Now", sprint_path=S29, level=level, badge=badge,
                         kinds=[], problem="<problem>", ask="suggested action", age=12,
-                        open=True, carry=False, **extra)
+                        open=open, carry=False, **extra)
         t["actions"] = dict(current=dict(sprint=dict(name="Current <sprint>"), day=4, days=10,
                                           planned=[1, 2, 3], delivered_planned=[1], added=[4],
                                           removed=[2], held=[3], waiting=[4, 5]),
@@ -356,7 +356,9 @@ class RenderTest(unittest.TestCase):
                                     dict(name="Bea", available=9, nominal=10, onboarding=False),
                                     dict(name="Cal", available=10, nominal=10, onboarding=False)],
                             rows=[row(9, "Amy", "red", "Stuck", handled=True, answer="<answer> & fixed"),
-                                  row(8, "Zed <lead>", "green", "OK"),
+                                  row(4, "Zed <lead>", "green", "Done", open=False),
+                                  row(3, "Zed <lead>", "green", "Done", open=False),
+                                  row(8, "Zed <lead>", "green", "On track"),
                                   row(7, "Zed <lead>", "amber", "Waiting", worse=True, answer="chased"),
                                   row(6, "Zed <lead>", "red", "Stuck"),
                                   row(5, "Bea", "grey", "Check")])
@@ -364,16 +366,19 @@ class RenderTest(unittest.TestCase):
         before_figures = page.split("<h2>Team figures</h2>")[0]
         self.assertIn("<th>Person</th><th>Work item</th><th>Sprint</th><th>Signal</th>"
                       "<th>Problem</th><th>Action</th><th>Age</th>", before_figures)
-        self.assertIn('<td rowspan="3">Zed &lt;lead&gt;', before_figures)
+        self.assertIn('<td rowspan="4">Zed &lt;lead&gt;', before_figures)
         self.assertIn("8.5 / 10 d available", text(before_figures))
         self.assertIn("onboarding", before_figures)
         self.assertIn("nothing open", before_figures)
         self.assertIn("Current &lt;sprint&gt; · day 4 of 10 working days · planned done 1 of 3"
                       " · +1 added / −1 removed · 1 On Hold · 2 waiting", before_figures)
-        positions = [before_figures.index('>#%d</a>' % i) for i in (6, 7, 8, 5, 9)]
+        positions = [before_figures.index('>#%d</a>' % i) for i in (6, 7, 8, 4, 5, 9)]
         self.assertEqual(positions, sorted(positions))
         self.assertIn('title="worse since your answer">Waiting ↑</span>', before_figures)
         self.assertIn('class="chip grey">Handled</span>', before_figures)
+        self.assertIn('class="chip green">Done (2)</span>', before_figures)
+        self.assertIn('>#3</a> &lt;img src=x onerror=bad&gt; &amp; title<br><a', before_figures)
+        self.assertIn('class="chip track">On track</span>', before_figures)
         self.assertIn("&lt;answer&gt; &amp; fixed", before_figures)
         self.assertNotIn("<img", page)
         self.assertNotIn("<problem>", page)

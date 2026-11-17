@@ -126,6 +126,17 @@ class ActionTests(unittest.TestCase):
             problem='#1 is counted for teams ALFA, BETA and GAMMA.')),
             'counted for teams ALFA, BETA and GAMMA')
 
+    def test_done_rows_only_in_the_running_sprint(self):
+        b = board()
+        b.item(1).at('2026-10-19 09:00', iteration=OLD, assigned=ADA, state='Active').at(
+            '2026-10-27 09:00', state='Closed')
+        item(b, 2, state='Active').at('2026-11-04 09:00', state='Closed')
+        prior = closed(b)
+        running = self.actions(b, prior=prior)
+        self.assertEqual([(r['id'], r['badge']) for r in running['rows'] if r['id']], [(2, 'Done')])
+        self.assertFalse(any(r['badge'] == 'Done' for r in
+                             self.actions(b, '2026-10-31', prior=prior, running=False)['rows']))
+
     def test_merged_age_problems_use_the_same_age_as_the_now_column(self):
         b = board()
         b.item(1).at('2026-10-19 09:00', iteration=OLD, assigned=ADA, state='Active')
@@ -147,19 +158,24 @@ class ActionTests(unittest.TestCase):
         result = self.actions(b)
         self.assertEqual(result['current'], {
             'sprint': b.sprints[-1], 'day': 6, 'days': 15, 'planned': [1, 2, 4, 5],
-            'delivered_planned': [1], 'added': [3], 'removed': [2, 5],
+            'delivered_planned': [1], 'added': [3], 'removed': [2, 5], 'delivered': [1],
             'held': [], 'waiting': []})
         self.assertNotIn('status', result)
         self.assertNotIn('status', result['current'])
         self.assertTrue(all(not r['carry'] for r in result['rows']))
-        self.assertEqual(self.row(result, 3)['badge'], 'OK')
+        self.assertEqual(self.row(result, 3)['badge'], 'On track')
         self.assertEqual(self.row(result, 4)['badge'], 'Not started')
+        done = self.row(result, 1)
+        self.assertEqual((done['badge'], done['level'], done['open'], done['age']),
+                         ('Done', 'green', False, None))
+        self.assertEqual([r['id'] for r in result['rows']][-1], 1)  # Done rows come last
+        self.assertNotIn(5, [r['id'] for r in result['rows']])  # removed: no Done row
         self.assertEqual(set(self.row(result, 4)), {'id', 'person', 'title', 'sprint',
                          'sprint_path', 'level', 'badge', 'kinds', 'problem', 'ask',
                          'age', 'open', 'carry'})
 
     def test_wait_thresholds_and_blocked_tag(self):
-        for today, badge, flagged in [('2026-11-06', 'OK', False),
+        for today, badge, flagged in [('2026-11-06', 'On track', False),
                                       ('2026-11-07', 'Waiting', True),
                                       ('2026-11-17', 'Waiting', True),
                                       ('2026-11-18', 'Stuck', True)]:
@@ -199,12 +215,12 @@ class ActionTests(unittest.TestCase):
         self.assertNotIn('stale', self.row(self.actions(b, '2026-11-07'), 1)['kinds'])
         a = self.actions(b, '2026-11-10')
         self.assertEqual(self.row(a, 1)['badge'], 'No movement')
-        self.assertEqual(self.row(a, 2)['badge'], 'OK')
+        self.assertEqual(self.row(a, 2)['badge'], 'On track')
 
     def test_not_started_after_third_working_day_and_weekends(self):
         b = board()
         item(b, 1)
-        for today, day, badge in [('2026-11-02', 0, None), ('2026-11-04', 2, 'OK'),
+        for today, day, badge in [('2026-11-02', 0, None), ('2026-11-04', 2, 'On track'),
                                   ('2026-11-05', 3, 'Not started'),
                                   ('2026-11-06', 4, 'Not started'),
                                   ('2026-11-07', 5, 'Not started'),
@@ -335,7 +351,7 @@ class ActionTests(unittest.TestCase):
         prior = closed(b, Notes(items={1: ('agreed', 'continue')}))
         self.assertEqual([c['id'] for c in prior['carry']], [1])
         r = self.row(self.actions(b, prior=prior), 1)
-        self.assertEqual((r['badge'], r['kinds'], r['carry']), ('OK', [], True))
+        self.assertEqual((r['badge'], r['kinds'], r['carry']), ('On track', [], True))
 
     def test_earlier_outside_work_does_not_make_new_ours_item_stuck(self):
         b = board()
@@ -419,7 +435,7 @@ class ActionTests(unittest.TestCase):
         item(b, 1, '2026-11-08 09:00', state='Active')
         item(b, 2, '2026-11-07 09:00', state='Active')
         a = self.actions(b, prior=closed(b))
-        self.assertEqual((self.row(a, 1)['age'], self.row(a, 1)['badge']), (2, 'OK'))
+        self.assertEqual((self.row(a, 1)['age'], self.row(a, 1)['badge']), (2, 'On track'))
         self.assertEqual((self.row(a, 2)['age'], self.row(a, 2)['badge']), (3, 'Chase'))
 
     def test_closed_only_all_badge_mappings_keep_information_and_asks(self):

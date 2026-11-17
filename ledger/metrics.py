@@ -567,6 +567,13 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
     def cycles(ids):
         return [c for c in (t.cycle_days(t.hist[i]) for i in ids) if c is not None]
 
+    def first_pass(g):
+        scored = len(g["delivered"])
+        returned = sorted(i for i in g["delivered"] if t.hist[i].returned(cfg.test_states))
+        return {"scored": scored, "returned": returned,
+                "share": (scored - len(returned)) / scored if scored else None}
+
+    passes = {path: first_pass(g) for path, g in figs.items()}
     carry = []
     for i in f["carry"]:
         h, row = t.hist[i], t.hist[i].at(t1)
@@ -620,6 +627,8 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
         **{k: f[k] for k in ("planned", "delivered_planned", "added", "removed", "delivered",
                              "late", "reopened")},
         "cycle": _stats(cycles(f["delivered"])), "cycle_window": cycle_window,
+        "first_pass": {**passes[sprint["path"]],
+                       "tracked": any(passes[s["path"]]["returned"] for s in window)},
         "waiting_share": t.waiting_share(f["delivered"]),
         "carry": carry,
         "delivered_items": [{"id": i, "title": title_at(i), "planned": i in f["planned"]}
@@ -630,6 +639,7 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
         "trend": [{"sprint": s["name"], "planned": len(figs[s["path"]]["planned"]),
                    "delivered_planned": len(figs[s["path"]]["delivered_planned"]),
                    "delivered": len(figs[s["path"]]["delivered"]),
+                   "first_pass": passes[s["path"]]["share"],
                    "p85": percentile(cycles(figs[s["path"]]["delivered"]), P85)} for s in window],
         "capacity": {"engineers": len(members),
                      "onboarding": sum(m["onboarding"] for m in members),

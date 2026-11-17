@@ -11,7 +11,7 @@ from unittest import mock
 from ledger import cli
 from ledger.ado import CACHE_FILE
 from ledger.config import Config, Notes, Person, parse_notes, save_config, write_team
-from ledger.metrics import team_actions, team_sprint
+from ledger.metrics import TREND, team_actions, team_sprint
 from ledger.render import folder_name, link_ids, render_dm, render_manager, render_person
 from tests.fixture import Board
 from tests.test_xlsx import build_workbook, calendar_rows
@@ -73,6 +73,91 @@ def text(page):
 
 
 class RenderTest(unittest.TestCase):
+    def first_pass_team(self, scored=25, returned=None, share=0.92, tracked=True):
+        t = teams()[0]
+        t["first_pass"] = {"scored": scored, "returned": [1, 2] if returned is None else returned,
+                           "share": share, "tracked": tracked}
+        return t
+
+    def test_first_pass_figure_tracked(self):
+        for share, percent in ((0.92, "92%"), (0.926, "93%")):
+            with self.subTest(share=share):
+                page = render_manager("Sprint 29", [self.first_pass_team(share=share)], GEN)
+                self.assertIn('<span class="n">' + percent + '</span>'
+                              '<span class="l">first-time pass (2 returned)</span>', page)
+
+    def test_first_pass_figure_without_returns_has_no_count(self):
+        page = render_manager("Sprint 29", [self.first_pass_team(share=1.0, returned=[])], GEN)
+        self.assertIn('<span class="n">100%</span><span class="l">first-time pass</span>', page)
+        self.assertNotIn("0 returned", page)
+
+    def test_first_pass_not_tracked(self):
+        page = render_manager("Sprint 29", [self.first_pass_team(
+            scored=3, returned=[], share=1.0, tracked=False)], GEN)
+        self.assertIn('<span class="n">not tracked</span><span class="l">first-time pass: '
+                      'no item moved back on the board in the last %d sprints</span>' % TREND, page)
+        figures = re.findall(r'<div class="fig[^"]*">(.*?)</div>', page)
+        self.assertTrue(any("first-time pass" in f for f in figures))
+        self.assertFalse(any("100%" in f for f in figures if "first-time pass" in f))
+
+    def test_first_pass_nothing_delivered(self):
+        for tracked in (True, False):
+            with self.subTest(tracked=tracked):
+                page = render_manager("Sprint 29", [self.first_pass_team(
+                    scored=0, returned=[], share=None, tracked=tracked)], GEN)
+                self.assertIn('<span class="n">–</span><span class="l">first-time pass</span>', page)
+
+    def test_trend_row_first_pass(self):
+        t = self.first_pass_team()
+        t["trend"] = [dict(t["trend"][0], first_pass=share) for share in (0.5, None, 1.0)]
+        for tracked, cells in ((True, '<td>50%</td><td>–</td><td>100%</td>'),
+                               (False, '<td>not tracked</td><td>–</td><td>not tracked</td>')):
+            t["first_pass"]["tracked"] = tracked
+            for render in (render_manager, render_dm):
+                with self.subTest(tracked=tracked, render=render.__name__):
+                    page = render("Sprint 29", [t], GEN)
+                    self.assertIn('<td>First-time pass</td>' + cells, page)
+
+    def test_first_pass_figure_caps_percent_when_an_item_returned(self):
+        for scored in (200, 1000):
+            for render in (render_manager, render_dm):
+                with self.subTest(scored=scored, render=render.__name__):
+                    t = self.first_pass_team(scored=scored, returned=[1],
+                                             share=(scored - 1) / scored)
+                    page = render("Sprint 29", [t], GEN)
+                    figure = re.search(r'<span class="n">([^<]+)</span>'
+                                       r'<span class="l">first-time pass \(1 returned\)</span>', page)
+                    self.assertIsNotNone(figure)
+                    self.assertEqual(figure.group(1), "99%")
+
+    def test_first_pass_trend_caps_nonperfect_share(self):
+        t = self.first_pass_team()
+        t["trend"] = [dict(t["trend"][0], first_pass=share)
+                      for share in (0.995, 0.999, 1.0)]
+        for render in (render_manager, render_dm):
+            with self.subTest(render=render.__name__):
+                page = render("Sprint 29", [t], GEN)
+                row = re.search(r'<td>First-time pass</td>(.*?)</tr>', page).group(1)
+                self.assertEqual(row, '<td>99%</td><td>99%</td><td>100%</td>')
+
+    def test_dm_page_shows_first_pass(self):
+        page = render_dm("Sprint 29", [self.first_pass_team()], GEN)
+        people, team = page.split('<h2>Team figures</h2>')
+        self.assertIn('<span class="n">92%</span>'
+                      '<span class="l">first-time pass (2 returned)</span>', team)
+        self.assertNotIn("first-time pass", people.lower())
+        person = render_person(PEOPLE[0], [], GEN)
+        self.assertNotIn("first-time pass", person.lower())
+
+    def test_footnote_defines_first_pass(self):
+        sentence = ('First-time pass = share of delivered work items never sent back from a '
+                    'test state and never reopened, counted per team; “not tracked” means no '
+                    'item moved back in the last %d sprints.' % TREND)
+        for render in (render_manager, render_dm):
+            with self.subTest(render=render.__name__):
+                page = render("Sprint 29", [self.first_pass_team()], GEN)
+                self.assertIn(sentence, text(page))
+
     def test_manager_has_no_names_or_emails(self):
         page = render_manager("Sprint 29", teams(NOTES), GEN)
         for p in PEOPLE:
@@ -346,6 +431,18 @@ def load_vac(d):
 
 
 class RunReportTest(unittest.TestCase):
+    def test_warning_without_test_states(self):
+        warning = ("warning: no test states in config.json; first-time pass counts reopens only")
+        self.edit("config.json", lambda s: json.dumps(
+            {k: v for k, v in json.loads(s).items() if k != "test_states"}))
+        for states in (None, [], ["Ready for QA"]):
+            with self.subTest(states=states):
+                if states is not None:
+                    self.edit("config.json", lambda s: json.dumps(dict(json.loads(s), test_states=states)))
+                code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+                self.assertEqual(code, 0, out)
+                self.assertEqual(out.splitlines().count(warning), 0 if states else 1, out)
+
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

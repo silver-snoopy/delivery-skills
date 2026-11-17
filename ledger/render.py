@@ -69,8 +69,11 @@ def _days(x) -> str:
     return "–" if x is None else "%d d" % x
 
 
-def _pct(x) -> str:
-    return "–" if x is None else "%d%%" % round(x * 100)
+def _pct(x, cap=None) -> str:
+    if x is None:
+        return "–"
+    n = round(x * 100)
+    return "%d%%" % (min(cap, n) if cap is not None else n)
 
 
 def _items(n: int) -> str:
@@ -159,6 +162,17 @@ def _cycle(t: dict) -> str:
                        % (_last(len(t["trend"])), _items(w["n"])))
 
 
+def _first_pass(t: dict) -> str:
+    f = t["first_pass"]
+    if not f["scored"]:
+        return _fig("–", "first-time pass")
+    if not f["tracked"]:
+        return _fig("not tracked", "first-time pass: no item moved back on the board in the "
+                    "last %d sprints" % TREND)
+    return _fig(_pct(f["share"], 99 if f["returned"] else 100),
+                "first-time pass" + (" (%d returned)" % len(f["returned"]) if f["returned"] else ""))
+
+
 def _figs(t: dict, carried: bool = False) -> str:
     figs = [_fig("%d <small>of %d</small>" % (len(t["delivered_planned"]), len(t["planned"])),
                  "planned work items delivered", True),
@@ -168,7 +182,8 @@ def _figs(t: dict, carried: bool = False) -> str:
     figs += [_fig("+%d / −%d" % (len(t["added"]), len(t["removed"])),
                   "work items added / removed mid-sprint"),
              _fig(str(len(t["late"])), "planned work items completed after the sprint ended"),
-             _cycle(t), _fig(_pct(t["waiting_share"]), "of cycle time spent in waiting states")]
+             _cycle(t), _fig(_pct(t["waiting_share"]), "of cycle time spent in waiting states"),
+             _first_pass(t)]
     return _tag("div", "".join(figs), "figs")
 
 
@@ -227,7 +242,10 @@ def _trend_table(t: dict) -> str:
     rows = [["Planned work items delivered"] + ["%d/%d" % (s["delivered_planned"], s["planned"])
                                                 for s in tr],
             ["Work items delivered in total"] + [str(s["delivered"]) for s in tr],
-            ["Cycle time P85 (days)"] + [_num(s["p85"]) for s in tr]]
+            ["Cycle time P85 (days)"] + [_num(s["p85"]) for s in tr],
+            ["First-time pass"] + ["–" if s["first_pass"] is None else
+                                   _pct(s["first_pass"], 99 if s["first_pass"] < 1.0 else 100)
+                                   if t["first_pass"]["tracked"] else "not tracked" for s in tr]]
     return _table([""] + [s["sprint"] for s in tr], [[r[0]] + [escape(c) for c in r[1:]] for r in rows])
 
 
@@ -276,6 +294,9 @@ def _footnote(dm: bool) -> str:
         "iteration, even after its end date. Cycle time = calendar days from first active to done, "
         "inclusive; we show the median and the 85th percentile (P85), not averages, so figures can "
         "differ from Azure DevOps widgets. Ages and the status rule use the team's P85 over its "
+        "last %d sprints. " % TREND
+        + "First-time pass = share of delivered work items never sent back from a test state "
+        "and never reopened, counted per team; “not tracked” means no item moved back in the "
         "last %d sprints." % TREND]
     if dm:
         lines.append(
@@ -531,6 +552,8 @@ def _pick(data, cfg, people, team_names, today, wanted) -> tuple:
 
 def run_report(args, client: Optional[Client], out) -> int:
     cfg, people, data, vac, today, team_names = _load(args, client, out)
+    if not cfg.test_states:
+        _warn(out, "no test states in config.json; first-time pass counts reopens only")
     name, picked = _pick(data, cfg, people, team_names, today, args.sprint)
     folder = os.path.join(args.dir, folder_name(name))
     os.makedirs(folder, exist_ok=True)

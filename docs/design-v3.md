@@ -57,7 +57,7 @@ What `init` does:
    - **Joined the team on?** Suggested from the person's first activity on the board. When that first activity is within 30 days of the start of the history window, the suggestion is blank (unknown, so never onboarding): the person was probably there before the window.
    People with no tickets at all are asked too. They stay on the team and show up in the report as having capacity but no assigned work.
    Then, once per team: **Count stories or tasks?** Suggested from the team's delivered items in the window: tasks when it closed more than five times as many tasks as stories, stories otherwise. The suggestion comes with the numbers behind it.
-4. Writes `.delivery-skills/team.csv`, `config.json` and the cache, and prints a summary: people, counting level per team, every state (waiting states marked `*`), the proposed waiting states, the proposed hold states, the not-delivered reasons, the closure reasons seen on the board (not-delivered ones marked `*`), calendar names it could not match, and warnings. Warnings include each staff email never assigned on the board ("check the sign-in email") and a time zone it could not detect.
+4. Writes `.delivery-skills/team.csv`, `config.json` and the cache, and prints a summary: people, counting level per team, every state (waiting states marked `*`), the proposed waiting states, the proposed hold states, the proposed test states, the not-delivered reasons, the closure reasons seen on the board (not-delivered ones marked `*`), calendar names it could not match, and warnings. Warnings include each staff email never assigned on the board ("check the sign-in email") and a time zone it could not detect.
 
 ```
 name,email,team,joined,left,allocation
@@ -87,6 +87,7 @@ Tom H.,tom.h@vendor.example,ALFA,2024-11-04,,0.5
   "half_day_codes": [],
   "waiting_states": ["Ready for QA", "In Review", "PO Acceptance"],
   "hold_states": ["On Hold"],
+  "test_states": ["Ready for QA", "PO Acceptance"],
   "not_delivered_reasons": ["Removed", "Won't Fix", "Won't Do", "Cut", "Duplicate", "Obsolete", "Deferred", "Abandoned"],
   "staff": "/abs/path/staff.txt",
   "vacations": "/abs/path/vacations.xlsx",
@@ -99,6 +100,7 @@ Tom H.,tom.h@vendor.example,ALFA,2024-11-04,,0.5
 - `organization` and `project` come from `--org`/`--project`, else the `az devops` defaults. `timezone` comes from `--timezone`, else the machine (`TZ`, then `/etc/localtime`). If the machine zone cannot be found, `init` uses UTC and warns the operator to set `timezone`. An unknown zone name is an error; it never falls back silently.
 - `count` must be `stories`, `tasks` or a non-empty list of work item type names; anything else is an error naming the team.
 - `waiting_states` is proposed from active-category state names (review, QA, test, accept, wait, blocked, verify, UAT). `init` prints every state so the operator can correct the list.
+- `test_states` is global like `waiting_states`; `init` proposes test states for the DM to confirm. An empty list counts reopens only, with a report warning.
 - `hold_states` is proposed from state names of any category that contain hold, blocked or impeded. It only feeds the On Hold column.
 - `not_delivered_reasons` match the closure reason in any case.
 - `staff` and `vacations` are the input files; `report` reads the calendar again on every run.
@@ -202,6 +204,7 @@ Times: t0 = 24:00 local on the sprint's first day; t1 = 24:00 local on its last 
 | On Hold | Mon-Fri local dates in the sprint on which the item was in a `hold_states` state or tagged `Blocked` at any moment. Closed-sprint hold days are context only and do not change closed figures or status. Current hold state also supplies On Hold and Stuck action signals. |
 | Cycle time | Done date minus first active date, plus 1, in calendar days. Median and 85th percentile (P85), nearest rank (`sorted(v)[ceil(p*n)-1]`), with n. When n < 10, also show the figure over the last 6 sprints. Ages and the status rule use the team's P85 over the last 6 sprints. |
 | Waiting share | Of the delivered items' cycle time, the share spent waiting. |
+| First-time pass | Team only: the share of delivered items at its counting level with no test return or reopen, rounded to a whole percent. A test return leaves `test_states` for a non-test state outside Completed or Removed; moves between test states and tags do not count. A reopen moves from a delivered close (Completed with no not-delivered reason) to Proposed, InProgress or Resolved. Each returned item counts once, using history up to report time, so later reopens can lower a past sprint's figure. Shows "not tracked" across the team's figures and trend when none of its scored items in the last 6 sprints was returned; the figure shows "–" instead when nothing was delivered. |
 | Reopened | Done, then active again within the sprint: listed, never counted twice. |
 | Capacity | Working days (Mon-Fri) in the sprint from `joined` to before `left`, minus days off in `vacations.xlsx`, multiplied by allocation. Shown as context, never used to adjust figures. |
 | Onboarding | A person is onboarding in the sprint containing their join date (or the next one) and the next `onboarding_sprints − 1` sprints. Their work counts; they are excluded from "nothing delivered" and "no item assigned" flags. |
@@ -216,10 +219,10 @@ Sprint selection: with `--sprint S`, each team gets its last sprint named S (an 
 **manager_ (executives, no RAG status, no people tables, no per-person figures)**, one card per squad:
 1. header: team name, sprint name and dates, engineers and PD capacity;
 2. **Delivery highlights**: the summary lines from notes (one line as a paragraph, several as bullets) and the exec note; left out when both are empty;
-3. **Delivery stats**: planned work items delivered (X of Y), delivered in total, carried over, added / removed mid-sprint, completed after the sprint ended, cycle time median and P85, waiting share;
+3. **Delivery stats**: planned work items delivered (X of Y), delivered in total, carried over, added / removed mid-sprint, completed after the sprint ended, cycle time median and P85, waiting share, first-time pass;
 4. **Delivered items (N)**, a folded panel: work item, title, planned or added; "No work items delivered." when there are none;
 5. **Carried over items (N)** (with "(K On Hold)" when some have hold days), a folded panel: work item, title, sprints carried, now in, On Hold, reason, agreed with PO. When nothing was carried over, a visible, non-folding panel says "No work items carried over.";
-6. the 6-sprint trend in a folded panel: X of Y, delivered in total, P85;
+6. the 6-sprint trend in a folded panel: X of Y, delivered in total, P85, first-time pass;
 7. footnote with the method, including "PD = person-days available after leave" and the On Hold definition.
 
 Ticket titles and the DM's own text appear as written. After writing manager_, `report` scans it (ignoring case) for every roster full name as a whole word and every email and prints `warning: manager file mentions <name>` for each one found; the DM decides.
@@ -250,7 +253,7 @@ ledger person EMAIL [--offline] [--today YYYY-MM-DD]          # one engineer ove
 ```
 
 One agent skill, `delivery-report`, runs the flow:
-1. `init --yes` on first use, or when `staff.txt` changed. Show the DM the printed counting levels, waiting states, not-delivered and closure reasons, unmatched calendar names and warnings (such as emails never seen on the board), and correct `config.json` from their answers. Show `team.csv` and correct teams and join dates.
+1. `init --yes` on first use, or when `staff.txt` changed. Show the DM the printed counting levels, waiting states, proposed hold states and test states, not-delivered and closure reasons, unmatched calendar names and warnings (such as emails never seen on the board), and correct `config.json` from their answers. Show `team.csv` and correct teams and join dates.
 2. `report`. Show every warning.
 3. Ask, for each team: "Anything to add for team T this sprint?" Write under `## Note`. Write under `## Exec note` only when the DM says executives should see it.
 4. Ask about each printed action. Put the DM's answer in Answer. For carry-over, ask whether carrying it over was agreed with the PO and why. Use the agreement prefixes above.
@@ -264,7 +267,7 @@ The agent reads ticket titles to write the summary. The wording may differ betwe
 
 ## 8. Build
 
-- Python 3.9+ standard library only. Modules: `ado.py` (token, WIQL and work item REST APIs with retries, cache), `replay.py` (item state at a point in time), `metrics.py` (counting rules, flags, status), `render.py` (HTML pages and the `report` and `person` commands), `setup.py` (`init`), `xlsx.py` (team calendar), `config.py` (config.json, team.csv, staff.txt, notes.md and .notes-state.json), `cli.py`. At most 3,200 physical lines under `ledger/`, enforced by a test.
+- Python 3.9+ standard library only. Modules: `ado.py` (token, WIQL and work item REST APIs with retries, cache), `replay.py` (item state at a point in time), `metrics.py` (counting rules, flags, status), `render.py` (HTML pages and the `report` and `person` commands), `setup.py` (`init`), `xlsx.py` (team calendar), `config.py` (config.json, team.csv, staff.txt, notes.md and .notes-state.json), `cli.py`. At most 3,300 physical lines under `ledger/`, enforced by a test.
 - Tests run against an invented fixture of revision rows covering both squad styles, carry-overs, moves to the next sprint, reopen, late close, mid-sprint add and remove, and leave. No test touches the network or `az`.
 - The v2 code is removed from `main` and stays in git history.
 

@@ -13,6 +13,7 @@ from ledger.xlsx import match_name, read_vacations, resolve_name
 
 WAITING_WORDS = ("review", "qa", "test", "accept", "wait", "blocked", "verify", "uat")
 HOLD_WORDS = ("hold", "blocked", "impeded")
+TEST_WORDS = ("qa", "test", "review", "verify", "uat", "accept", "resolved")
 TASKS_FACTOR = 5
 TEAM_FILE = "team.csv"
 
@@ -103,12 +104,14 @@ def suggest(data: dict, staff: Dict[str, List[str]], known: List[Person],
     waiting = [s for s in names if states[s] in ("InProgress", "Resolved")
                and any(w in s.lower() for w in WAITING_WORDS)]
     hold = [s for s in names if any(w in s.lower() for w in HOLD_WORDS)]
+    test = [s for s in names if states[s] in ("InProgress", "Resolved")
+            and any(w in s.lower() for w in TEST_WORDS)]
     closures = {(r["id"], r["reason"]) for r in data["revisions"]
                 if r["category"] in ("Completed", "Removed")}
     return {"people": people, "teams": count_stats(data, _team_emails((p["team"], p["emails"]) for p in people)),
             "reasons": Counter(reason for _, reason in closures),
             "states": [{"name": s, "category": states[s]} for s in names], "waiting": waiting,
-            "hold": hold}
+            "hold": hold, "test": test}
 
 
 def machine_timezone() -> Optional[str]:
@@ -236,6 +239,8 @@ def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out
         cfg.waiting_states = sug["waiting"]
     if not cfg.hold_states:
         cfg.hold_states = sug["hold"]
+    if not cfg.test_states:
+        cfg.test_states = sug["test"]
     save_cache(d, data, warn)
     cache = cache_path(d)
     write_team(team_path, people)
@@ -270,6 +275,7 @@ def _summary(out, people, stats, cfg, sug, unmatched, warnings, paths) -> None:
         w("  %s%s: %s" % ("*" if s["name"] in cfg.waiting_states else " ", s["name"], s["category"]))
     w("Proposed waiting states: %s" % (", ".join(sug["waiting"]) or "none"))
     w("Proposed hold states: %s" % (", ".join(sug["hold"]) or "none"))
+    w("Proposed test states: %s" % (", ".join(sug["test"]) or "none"))
     w("Not-delivered reasons (config): %s" % ", ".join(cfg.not_delivered_reasons))
     cut = {r.lower() for r in cfg.not_delivered_reasons}
     reasons = ["%s%s (%d)" % ("*" if (r or "").lower() in cut else "", r or "(no reason)", n)

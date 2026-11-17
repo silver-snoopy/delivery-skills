@@ -1,8 +1,9 @@
 """Sprint figures per team, replayed from the revision cache at fixed instants."""
 import math
 import re
+from statistics import median
 from datetime import date, datetime, timedelta
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from ledger.config import Config, Notes, Person
 from ledger.replay import ACTIVE, History, day_end, day_start, is_held, is_waiting, local_tz, parse_ts
@@ -16,6 +17,7 @@ WIP_FLAG = 3
 NOT_STARTED_DAY = 3
 GREEN_SHARE = 0.8
 TREND = 6
+NOW = 3
 MAX_SPRINT_DAYS = 42  # longer dated iterations are releases or PIs, not sprints
 CLOSED = ("Completed", "Removed")
 
@@ -226,6 +228,52 @@ class _Team:
         if fa is None or done is None or fa > done:
             return None
         return (self.local(done) - self.local(fa)).days + 1
+
+    def build_span(self, h: History) -> Optional[Tuple[datetime, datetime]]:
+        """First active ownership to first test entry, capped at the delivered close."""
+        done = h.done_at
+        if done is None:
+            return None
+        times = set(h.times)
+        for c in self.children.get(h.id, ()):
+            child = self.hist[c]
+            times.update(t for t in child.times if child in self.kids(h, t))
+        start = next((t for t in sorted(times) if (h.at(t) or {}).get("category") in ACTIVE
+                      and self._ours_at(h, t)), None)
+        if start is None:
+            return None
+        # An entry at start (including creation in test) is an immediate handoff.
+        handoff = next((t for i, (r, t) in enumerate(zip(h.rows, h.times))
+                        if start <= t < done and r["state"] in self.cfg.test_states
+                        and (not i or h.rows[i - 1]["state"] not in self.cfg.test_states)), done)
+        return (start, handoff) if start < handoff else None
+
+    def build_seconds(self, h: History) -> Optional[float]:
+        """Build-span seconds excluding the union of waiting, hold and Blocked."""
+        span = self.build_span(h)
+        if span is None:
+            return None
+        start, end = span
+        excluded = h.seconds_where(start, end, lambda r:
+                                   is_waiting(r, self.cfg.waiting_states)
+                                   or r["state"] in self.cfg.hold_states)
+        return (end - start).total_seconds() - excluded
+
+    def time_split(self, h: History) -> Optional[Tuple[float, float, float]]:
+        """Building, waiting and remaining seconds from first active to delivered close."""
+        if self.cycle_days(h) is None:
+            return None
+        building = self.build_seconds(h) or 0.0
+        waiting = h.waiting_seconds(h.first_active, h.done_at, self.cfg.waiting_states)
+        total = (h.done_at - h.first_active).total_seconds()
+        return building, waiting, max(0.0, total - building - waiting)
+
+    def waiting_states_seen(self, h: History) -> List[str]:
+        """Configured waiting states visited during the cycle, in config order."""
+        if self.cycle_days(h) is None:
+            return []
+        seen = {r["state"] for r, t in zip(h.rows, h.times) if h.first_active <= t < h.done_at}
+        return [state for state in self.cfg.waiting_states if state in seen]
 
     def owner(self, h: History, at: datetime) -> str:
         """Current assignee, newest open child's assignee, then last ours assignee."""
@@ -567,13 +615,13 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
     def cycles(ids):
         return [c for c in (t.cycle_days(t.hist[i]) for i in ids) if c is not None]
 
-    def first_pass(g):
-        scored = len(g["delivered"])
-        returned = sorted(i for i in g["delivered"] if t.hist[i].returned(cfg.test_states))
+    def first_pass(ids):
+        scored = len(ids)
+        returned = sorted({i for i in ids if t.hist[i].returned(cfg.test_states)})
         return {"scored": scored, "returned": returned,
                 "share": (scored - len(returned)) / scored if scored else None}
 
-    passes = {path: first_pass(g) for path, g in figs.items()}
+    passes = {path: first_pass(g["delivered"]) for path, g in figs.items()}
     carry = []
     for i in f["carry"]:
         h, row = t.hist[i], t.hist[i].at(t1)
@@ -589,10 +637,42 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
         title = t.parent_title(t.hist[i], t1)
         groups[title] = groups.get(title, 0) + 1
     window = upto[-TREND:]
+    now, before = window[-NOW:], window[-2 * NOW:-NOW]
     window_ids = sorted({i for s in window for i in figs[s["path"]]["delivered"]})
     cycle_window = _stats(cycles(window_ids))
+    window_members = {s["path"]: t.members(people, team, sprints, s, days_off) for s in window}
+    builds = {s["path"]: [seconds / 86400 for i in figs[s["path"]]["delivered"]
+                          for seconds in [t.build_seconds(t.hist[i])] if seconds is not None]
+              for s in window}
+
+    def build(group):
+        values = [v for s in group for v in builds[s["path"]]]
+        return {"median": median(values) if values else None, "n": len(values)}
+
+    def throughput(group):
+        available = sum(m["available"] for s in group for m in window_members[s["path"]])
+        delivered = sum(len(figs[s["path"]]["delivered"]) for s in group)
+        return delivered / available * 10 if available else None
+
+    def pooled_pass(group):
+        return first_pass([i for s in group for i in figs[s["path"]]["delivered"]])
+
+    flow = None
+    splits = [split for i in window_ids for split in [t.time_split(t.hist[i])]
+              if split is not None]
+    if splits and cycle_window["median"] is not None:
+        total = cycle_window["median"]
+        seconds = sum(sum(split) for split in splits)
+        building, waiting = [round(total * sum(split[k] for split in splits) / seconds)
+                             if seconds else 0 for k in (0, 1)]
+        other = total - building - waiting
+        if other < 0:
+            waiting, other = waiting + other, 0
+        seen = {state for i in window_ids for state in t.waiting_states_seen(t.hist[i])}
+        flow = {"total": total, "building": building, "waiting": waiting, "other": other,
+                "states": [state for state in cfg.waiting_states if state in seen]}
     counted = t.counted(t1)
-    members = t.members(people, team, sprints, sprint, days_off)
+    members = window_members[sprint["path"]]
     persons = [t.person(m, f, counted, sprint) for m in members]
     others = {o: _emails(people, o) for o in sorted({p.team for p in people if p.team})
               if o.lower() != team.lower() and count_of(cfg, o) == t.count}
@@ -627,11 +707,16 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
         **{k: f[k] for k in ("planned", "delivered_planned", "added", "removed", "delivered",
                              "late", "reopened")},
         "cycle": _stats(cycles(f["delivered"])), "cycle_window": cycle_window,
-        "first_pass": {**passes[sprint["path"]],
+        "windows": {"now": [s["name"] for s in now], "before": [s["name"] for s in before]},
+        "build": {**build(now), "before": build(before)["median"]},
+        "throughput": {"per10": throughput(now), "before": throughput(before)},
+        "flow": flow,
+        "first_pass": {**pooled_pass(now), "before": pooled_pass(before)["share"],
                        "tracked": any(passes[s["path"]]["returned"] for s in window)},
         "waiting_share": t.waiting_share(f["delivered"]),
         "carry": carry,
-        "delivered_items": [{"id": i, "title": title_at(i), "planned": i in f["planned"]}
+        "delivered_items": [{"id": i, "title": title_at(i), "planned": i in f["planned"],
+                             "late": i in f["late"]}
                             for i in sorted(f["delivered"])],
         "worked_items": [{"id": i, "title": title_at(i), "delivered": i in f["delivered"]}
                          for i in worked],
@@ -640,7 +725,7 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
                    "delivered_planned": len(figs[s["path"]]["delivered_planned"]),
                    "delivered": len(figs[s["path"]]["delivered"]),
                    "first_pass": passes[s["path"]]["share"],
-                   "p85": percentile(cycles(figs[s["path"]]["delivered"]), P85)} for s in window],
+                   "build": build([s])["median"], "per10": throughput([s])} for s in window],
         "capacity": {"engineers": len(members),
                      "onboarding": sum(m["onboarding"] for m in members),
                      "available": sum(m["available"] for m in members),

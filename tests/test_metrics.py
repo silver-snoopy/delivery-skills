@@ -356,8 +356,10 @@ class SprintFigureTests(unittest.TestCase):
         b.item(3, title="Export").at("2026-10-29 09:00", iteration=S29, assigned=IVAN,
                                       state="Active").at("2026-11-04 09:00", state="Closed")
         t = run(b, "ALFA", "S29")
-        self.assertEqual(t["delivered_items"], [{"id": 1, "title": "Upload", "planned": True},
-                                                {"id": 3, "title": "Export", "planned": False}])
+        self.assertEqual(t["delivered_items"], [{"id": 1, "title": "Upload", "planned": True,
+                                               "late": False},
+                                            {"id": 3, "title": "Export", "planned": False,
+                                             "late": False}])
         self.assertEqual(t["worked_items"], [{"id": 1, "title": "Upload", "delivered": True},
                                              {"id": 3, "title": "Export", "delivered": True},
                                              {"id": 2, "title": "Retry", "delivered": False}])

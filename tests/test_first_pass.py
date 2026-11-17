@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-from ledger.config import load_config
+from ledger.config import Person, load_config
 from ledger.replay import History
 from tests.test_metrics import board, run, config, MAYA, S28, S29
 
@@ -20,7 +20,7 @@ class FirstPassTest(unittest.TestCase):
             .at("2026-10-29 09:00", state="Active").at("2026-11-04 09:00", state="Closed")
         t = run(b, "ALFA", "S29", cfg=self.cfg)
         self.assertEqual(t["first_pass"], {"scored": 1, "returned": [1], "share": 0.0,
-                                          "tracked": True})
+                                          "tracked": True, "before": None})
         self.assertTrue(all("first_pass" not in p for p in t["people"]))
 
     def test_forward_and_between_test_states_do_not_count(self):
@@ -99,8 +99,24 @@ class FirstPassTest(unittest.TestCase):
             .at("2026-11-04 09:00", state="Closed")
         t = run(b, "ALFA", "S29", cfg=self.cfg)
         self.assertIs(t["first_pass"]["tracked"], True)
-        self.assertEqual(t["first_pass"]["share"], 1.0)
+        self.assertEqual(t["first_pass"]["share"], 0.5)
         self.assertEqual([e["first_pass"] for e in t["trend"]], [0.0, 1.0])
+
+    def test_first_pass_pools_now_window_not_median(self):
+        b = board()
+        ada = "ada@vendor.example"
+        people = [Person("Ada Vale", [ada], "ALFA", None, None)]
+        b.item(20).at("2026-10-13 09:00", iteration=S28, assigned=ada, state="Active") \
+            .at("2026-10-14 09:00", state="Ready for QA") \
+            .at("2026-10-15 09:00", state="Active").at("2026-10-21 09:00", state="Closed")
+        for i in range(1, 10):
+            b.item(i).at("2026-10-27 09:00", iteration=S29, assigned=ada, state="Active") \
+                .at("2026-11-04 09:00", state="Closed")
+        result = run(b, "ALFA", "S29", people=people, cfg=self.cfg)
+        self.assertEqual(result["first_pass"],
+                         {"scored": 10, "returned": [20], "share": 0.9,
+                          "tracked": True, "before": None})
+        self.assertEqual([s["first_pass"] for s in result["trend"]], [0.0, 1.0])
 
     def test_nothing_delivered_share_none(self):
         b = board()

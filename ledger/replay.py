@@ -1,7 +1,7 @@
 """Replay a work item's revision rows: when it became active, was done, waited or moved."""
 import re
 from datetime import date, datetime, timedelta, timezone, tzinfo
-from typing import Dict, List, Optional, Sequence, Set
+from typing import Callable, Dict, List, Optional, Sequence, Set
 
 ACTIVE = ("InProgress", "Resolved")
 _TS = re.compile(r"^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.(\d+))?(Z|[+-]\d\d:?\d\d)?$")
@@ -110,11 +110,15 @@ class History:
                 if ts <= until and row["category"] in ACTIVE and row["assigned"]}
 
     def waiting_seconds(self, start: datetime, end: datetime, waiting_states: Sequence[str]) -> float:
+        return self.seconds_where(start, end, lambda row: is_waiting(row, waiting_states))
+
+    def seconds_where(self, start: datetime, end: datetime, pred: Callable[[dict], bool]) -> float:
+        """Seconds in [start, end) whose revision in force satisfies `pred`."""
         total = 0.0
         for i, (row, ts) in enumerate(zip(self.rows, self.times)):
             nxt = self.times[i + 1] if i + 1 < len(self.rows) else end
             lo, hi = max(ts, start), min(nxt, end)
-            if hi > lo and is_waiting(row, waiting_states):
+            if hi > lo and pred(row):
                 total += (hi - lo).total_seconds()
         return total
 

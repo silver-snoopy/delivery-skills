@@ -62,7 +62,7 @@ Each team has a `# TEAM` heading and these sections, in this order:
 |---|---|---|---|---|
 ```
 
-Summary supplies Delivery highlights. Exec note appears in both reports. Note appears only in dm_. Status is blank for the computed closed-sprint status, or `GREEN|AMBER|RED - reason` for a manual override in dm_. Keep names out of Summary, Exec note and Status. Carry-over answers reach the manager_ file, so no names in them. A reason is shown only from a prefixed answer entered or changed in this folder on a carry-over row for the current closed sprint. Copied answers and running-only answers supply no manager reason. The reason is the text after the prefix and still passes through the manager name warning.
+Summary supplies Delivery highlights. Exec note appears in manager_ only. Note appears only in dm_. Status is blank for the computed closed-sprint status, or `GREEN|AMBER|RED - reason` for a manual override in dm_. Keep names out of Summary, Exec note and Status. Carry-over answers reach the manager_ file, so no names in them. A reason is shown only from a prefixed answer entered or changed in this folder on a carry-over row for the current closed sprint. Copied answers and running-only answers supply no manager reason. The reason is the text after the prefix and still passes through the manager name warning.
 
 Answer is the only DM-owned cell in either table. Answered is tool-owned, as are Person, Work item and Problem. The tool rewrites those cells. Answered records the date, severity level and every signal kind present when the answer was observed. It uses display labels, for example `2026-11-16 amber Chase, Waiting`.
 

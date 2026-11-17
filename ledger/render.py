@@ -7,9 +7,11 @@ from typing import Dict, List, Optional
 from urllib.parse import quote
 
 from ledger.ado import Client, cached_ids, fetch, load_cache, save_cache
-from ledger.config import Notes, Person, email_index, load_config, parse_notes, read_team
-from ledger.metrics import (CARRIED_FLAG, GREEN_SHARE, STALE_DAYS, TREND, WAIT_FLAG_DAYS,
-                            WAIT_RED_DAYS, WIP_FLAG, team_sprint, team_sprints)
+from ledger.config import (Notes, Person, email_index, load_config, load_report_notes,
+                           notes_for_team, read_team, reconcile_notes, write_report_notes)
+from ledger.metrics import (CARRIED_FLAG, GREEN_SHARE, NOT_STARTED_DAY, STALE_DAYS, TREND,
+                            WAIT_FLAG_DAYS, WAIT_RED_DAYS, WIP_FLAG, team_actions,
+                            team_sprint, team_sprints)
 from ledger.replay import local_tz, parse_ts
 from ledger.xlsx import read_vacations, resolve_name
 
@@ -40,16 +42,15 @@ font-variant-numeric:tabular-nums}th{text-align:left;font-size:12px;color:var(--
 text-transform:uppercase;padding:6px 10px;border-bottom:1px solid var(--line)}
 td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 .id{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--accent);white-space:nowrap}
-.chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600}
+.chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
 .GREEN,.yes{background:var(--good-soft);color:var(--good)}
 .AMBER,.unk{background:var(--warn-soft);color:var(--warn)}
 .RED,.no{background:var(--bad-soft);color:var(--bad)}.wait{background:var(--accent-soft);color:var(--accent)}
 .hot{color:var(--bad);font-weight:600}
+.red{background:var(--bad-soft);color:var(--bad)}.amber{background:var(--warn-soft);color:var(--warn)}
+.grey{background:var(--bg);color:var(--muted)}.green{background:var(--good-soft);color:var(--good)}
 .foot{font-size:12.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px;
 display:flex;flex-direction:column;gap:6px}
-.attn{background:var(--paper);border:1px solid var(--line);border-radius:8px;overflow:hidden}
-.row{border-left:6px solid var(--warn);border-bottom:1px solid var(--line);padding:12px 16px}
-.row.red{border-left-color:var(--bad)}.row.grey{border-left-color:var(--line)}
 .private{background:var(--bad-soft);color:var(--bad);font-size:12px;padding:6px 10px;
 border-radius:6px;align-self:flex-start}
 details{border:1px solid var(--line);border-radius:6px;padding:8px 12px}summary{cursor:pointer;font-weight:600}
@@ -116,14 +117,10 @@ def _head(title: str, teams: List[dict], generated: datetime, private: bool, boa
     meta.append("%d team%s" % (len(teams), "" if len(teams) == 1 else "s"))
     if board:
         meta.append("Board data as of %s" % board)
-    return "\n".join(([_tag("p", "Private: delivery manager only", "private")] if private else [])
+    return "\n".join(([_tag("p", "Internal: delivery manager and team leads only. Not for the customer.", "private")] if private else [])
                      + [_tag("h1", escape(title)), _tag("p", escape(" · ".join(meta)), "meta"),
                         _tag("p", "generated %s" % generated.strftime("%Y-%m-%d %H:%M %Z").strip(),
                              "meta")])
-
-
-def _title(sprint_name: str, kind: str, running: bool) -> str:
-    return "%s delivery %s%s" % (sprint_name, kind, " (sprint still running)" if running else "")
 
 
 def _missing(t: dict) -> str:
@@ -288,11 +285,23 @@ def _footnote(dm: bool) -> str:
             "work item waiting (in a waiting state or blocked) for more than %d working days."
             % (round(GREEN_SHARE * 100), WAIT_RED_DAYS))
         lines.append(
-            "<b>Needs attention</b> thresholds (our convention, not an industry standard), evaluated "
-            "at the sprint end: open longer than the team's P85; carried over %d or more sprints; "
-            "waiting (in a waiting state or blocked) more than %d working days; no board change for "
-            "%d working days; more than %d work items in progress for one engineer."
-            % (CARRIED_FLAG, WAIT_FLAG_DAYS, STALE_DAYS, WIP_FLAG))
+            "<b>Running sprint.</b> Rows use the start of today in the configured time zone "
+            "(end of yesterday). Working days count Monday–Friday through yesterday. Planned "
+            "scope uses the end of the first day, clamped to that snapshot; added, removed and "
+            "done use that snapshot too. There is no running carry-over or running status.")
+        lines.append(
+            "<b>Signals</b> (our convention, not an industry standard): Stuck = waiting or On Hold "
+            "over %d working days, or older than P85 and carried in; Waiting = waiting or Blocked "
+            "over %d working days; On Hold = in a hold state; Chase = older than P85; No movement "
+            "= no board change for %d working days; Not started = still Proposed after working "
+            "day %d. Carry-over = no PO agreement or carried %d+ sprints (red when also older "
+            "than P85). No work = available, not onboarding, no open assignment; Too much WIP = "
+            "over %d in progress; Nothing delivered = no delivery in the closed sprint. Check = "
+            "never active, reopened or shared; OK = open without a signal. Handled = answered "
+            "without worsening; ↑ = higher severity, a new signal kind or a new sprint since "
+            "the answer. Copied answers do not renew PO agreement; change or clear and re-enter "
+            "the Answer to renew it."
+            % (WAIT_RED_DAYS, WAIT_FLAG_DAYS, STALE_DAYS, NOT_STARTED_DAY, CARRIED_FLAG, WIP_FLAG))
     lines.append("On Hold = days the work item spent in a hold state or tagged Blocked during the "
                  "sprint; shown for context and not counted against the team.")
     lines.append("Figures are recomputed from the board history on every run and do not change for "
@@ -305,10 +314,9 @@ def _teams(teams: List[dict], dm: bool) -> List[str]:
             for t in teams]
 
 
-def render_manager(sprint_name: str, teams: List[dict], generated: datetime, running: bool = False,
-                   board: str = "") -> str:
-    """`board` is the board data time; `running` marks a sprint that has not ended."""
-    title = _title(sprint_name, "summary", running)
+def render_manager(sprint_name: str, teams: List[dict], generated: datetime, board: str = "") -> str:
+    """Render closed-sprint results; `board` is the board data time."""
+    title = "%s delivery summary" % sprint_name
     body = [_head(title, teams, generated, False, board)]
     return _page(title, "\n".join(body + _teams(teams, False) + [_footnote(False)]), light=True)
 
@@ -327,20 +335,50 @@ def link_ids(page: str, organization: str, project: str) -> str:
     return head + sep + re.sub(r">([^<]+)<", link, body)
 
 
-def _person_row(p: dict) -> List[str]:
-    name = escape(p["name"]) + (" " + _tag("span", "onboarding", "chip wait") if p["onboarding"] else "")
-    oldest = "%s %s" % (_ids([p["oldest"][0]]), _days(p["oldest"][1])) if p["oldest"] else "–"
-    worked = _tag("span", "no item assigned", "hot") if p["no_assignment"] else _ids(p["items"])
-    held = ", ".join("#%d %d day%s" % (i, d, "" if d == 1 else "s") for i, d in p["held"]) or "–"
-    return [name, "%s / %s" % (_num(p["available"]), _num(p["nominal"])), str(len(p["delivered"])),
-            str(len(p["in_progress"])), oldest, held, _days(p["median"]), worked]
+def _action_rank(row: dict) -> int:
+    return 3 if row.get("handled") else {"red": 0, "amber": 1, "grey": 2, "green": 4}[row["level"]]
+
+
+def _actions(result: dict) -> str:
+    rows = result["rows"]
+    people = sorted(result["people"], key=lambda p: (
+        min([3] + [_action_rank(r) for r in rows if r["person"] == p["name"]]), p["name"]))
+    body = []
+    for person in people:
+        mine = sorted((r for r in rows if r["person"] == person["name"]), key=lambda r: (
+            _action_rank(r), r["id"] is None, r["id"] or 0, r["badge"]))
+        who = escape(person["name"]) + "<br>" + _tag("span", "%s / %s d available" % (
+            _num(person["available"]), _num(person["nominal"])), "note")
+        if person["onboarding"]:
+            who += " " + _tag("span", "onboarding", "chip wait")
+        for index, row in enumerate(mine or [None]):
+            cell = '<td rowspan="%d">%s</td>' % (max(1, len(mine)), who) if index == 0 else ""
+            if row is None:
+                cells = ["nothing open", "–", "–", "–", "–", "–"]
+            else:
+                handled = row.get("handled")
+                badge = "Handled" if handled else row["badge"] + (" ↑" if row.get("worse") else "")
+                tooltip = ' title="worse since your answer"' if row.get("worse") and not handled else ""
+                signal = '<span class="chip %s"%s>%s</span>' % (
+                    "grey" if handled else row["level"], tooltip, escape(badge))
+                work = ("#%d %s" % (row["id"], row["title"])) if row["id"] is not None else "–"
+                cells = [escape(work), escape(row["sprint"]), signal, escape(row["problem"]),
+                         escape(row.get("answer") or row["ask"]),
+                         _days(row["age"]) if row["open"] else "–"]
+            body.append(_tag("tr", cell + "".join(_tag("td", c) for c in cells)))
+    head = "".join(_tag("th", h) for h in (
+        "Person", "Work item", "Sprint", "Signal", "Problem", "Action", "Age"))
+    return _tag("div", _tag("table", _tag("thead", _tag("tr", head))
+                           + _tag("tbody", "".join(body))), "tbl")
 
 
 def _dm_team(t: dict) -> str:
     parts = [_tag("div", _tag("h2", escape("%s: ours vs rest of squad" % t["team"])), "top")]
-    r = t["rest"]
+    r = t.get("rest")
     if r is None:
-        parts.append(_tag("p", "No other delivered work items in this team's areas.", "note"))
+        message = ("No closed sprint available for comparison." if t.get("missing") else
+                   "No other delivered work items in this team's areas.")
+        parts.append(_tag("p", message, "note"))
     else:
         c = t["cycle"]
         rows = [["<b>Our engineers</b>", str(t["capacity"]["engineers"]), str(len(t["delivered"])),
@@ -351,33 +389,30 @@ def _dm_team(t: dict) -> str:
                           "Waiting share"], rows),
                   _tag("p", "The two groups may pick up different kinds of work. "
                             "Use this as context, not as a ranking.", "note")]
-    parts.append(_tag("div", _tag("h3", "People") + _table(
-        ["Engineer", "Days available", "Work items delivered", "In progress at end", "Oldest open",
-         "On Hold", "Median cycle", "Worked on"], [_person_row(p) for p in t["people"]])))
+    actions = t.get("actions", {"people": [], "rows": [], "current": None})
+    current = actions["current"]
+    if current:
+        line = ("%s · day %d of %d working days · planned done %d of %d · "
+                "+%d added / −%d removed · %d On Hold · %d waiting") % (
+            current["sprint"]["name"], current["day"], current["days"], len(current["delivered_planned"]),
+            len(current["planned"]), len(current["added"]), len(current["removed"]),
+            len(current["held"]), len(current["waiting"]))
+        parts.append(_tag("p", escape(line), "meta"))
+    parts.append(_actions(actions))
     return _tag("article", "\n".join(parts), "squad")
 
 
-def render_dm(sprint_name: str, teams: List[dict], generated: datetime, running: bool = False,
-              board: str = "") -> str:
-    title = _title(sprint_name, "review", running)
-    present = [t for t in teams if not t.get("missing")]
+def render_dm(sprint_name: str, teams: List[dict], generated: datetime, board: str = "") -> str:
+    title = "%s delivery review" % sprint_name
     notes = [_tag("li", escape("%s: %s" % (t["team"], t["notes"]["note"])))
-             for t in present if t["notes"]["note"]]
+             for t in teams if t.get("notes", {}).get("note")]
     body = [_head(title, teams, generated, True, board),
-            _tag("h2", "Needs attention"),
-            _tag("div", _tag("div", _tag("p", "<b>Your notes for this sprint</b>")
-                             + (_tag("ul", "".join(notes)) if notes else
-                                _tag("p", "No notes for this sprint.", "note")), "row grey"),
-                 "attn")]
-    for t in present:
-        rows = [_tag("div", _tag("p", escape(a["text"])) + _tag("p", escape(a["ask"]), "ask"),
-                     "row " + a["level"]) for a in t["attention"]]
-        body.append(_tag("div", _tag("h3", escape(t["team"])) + (
-            _tag("div", "".join(rows), "attn") if rows
-            else _tag("p", "Nothing needs attention.", "note"))))
-    body += [_dm_team(t) for t in present]
+            _tag("div", _tag("h3", "Your notes for this sprint")
+                 + (_tag("ul", "".join(notes)) if notes else
+                    _tag("p", "No notes for this sprint.", "note")), "squad")]
+    body += [_dm_team(t) for t in teams if not t.get("missing") or t.get("actions", {}).get("current")]
     body += [_tag("h2", "Team figures")] + _teams(teams, True)
-    return _page(title, "\n".join(body + [_footnote(True)]))
+    return _page(title, "\n".join(body + [_footnote(True)]), light=True)
 
 
 def render_person(person: Person, rows: List[dict], generated: datetime) -> str:
@@ -399,7 +434,7 @@ def render_person(person: Person, rows: List[dict], generated: datetime) -> str:
                                   "time = calendar days from first active to done, inclusive.")
                  + _tag("p", "Per-person reporting may fall under local labour law and works-council "
                              "rules."), "foot")]
-    return _page(person.name, "\n".join(body))
+    return _page(person.name, "\n".join(body), light=True)
 
 
 def folder_name(name: str) -> str:
@@ -462,20 +497,6 @@ def _ended(data, cfg, people, team, today) -> List[dict]:
             if date.fromisoformat(s["end"]) < today]
 
 
-def _check_notes(notes: Notes, teams: List[dict], name: str, out) -> None:
-    """Warn about notes.txt lines that no reported team uses."""
-    present = [t for t in teams if not t.get("missing")]
-    reported = {t["team"].lower() for t in present}
-    for kind in ("summary", "note", "exec note", "status"):
-        for team in getattr(notes, kind.replace(" ", "_")):
-            if team.lower() not in reported:
-                _warn(out, "notes.txt has a %s %s line, but no team %s is in this report"
-                      % (team, kind, team))
-    carried = {c["id"] for t in present for c in t["carry"]}
-    for i in sorted(set(notes.items) - carried):
-        _warn(out, "notes.txt #%d is not a carry-over of any team in %s" % (i, name))
-
-
 def _no_sprint(data: dict, cfg, people: List[Person], team: str) -> str:
     """Why a team has no ended sprint."""
     emails = {e.lower() for p in people if p.team.lower() == team.lower() for e in p.emails}
@@ -493,6 +514,9 @@ def _pick(data, cfg, people, team_names, today, wanted) -> tuple:
     if wanted:
         if not any(s["name"] == wanted for ss in by_team.values() for s in ss):
             raise ValueError("no team has a sprint named '%s'" % wanted)
+        if any(s["name"] == wanted and date.fromisoformat(s["end"]) >= today
+               for ss in by_team.values() for s in ss):
+            raise ValueError("sprint '%s' has not ended before %s" % (wanted, today.isoformat()))
         return wanted, {t: next((s for s in reversed(ss) if s["name"] == wanted), None)
                         for t, ss in by_team.items()}
     picked = {t: next((s for s in reversed(ss) if date.fromisoformat(s["end"]) < today), None)
@@ -510,34 +534,44 @@ def run_report(args, client: Optional[Client], out) -> int:
     name, picked = _pick(data, cfg, people, team_names, today, args.sprint)
     folder = os.path.join(args.dir, folder_name(name))
     os.makedirs(folder, exist_ok=True)
-    notes_path = os.path.join(folder, "notes.txt")
-    if not os.path.exists(notes_path):
-        open(notes_path, "w", encoding="utf-8").close()
-    with open(notes_path, encoding="utf-8-sig") as f:
-        notes = parse_notes(f.read())
+    notes_path = os.path.join(folder, "notes.md")
+    notes = load_report_notes(args.dir, folder, picked, data["iterations"], lambda line: _warn(out, line))
+    loaded_warnings = len(notes.warnings)
+    running = {team: next((s for s in reversed(team_sprints(data, cfg, people, team))
+                           if s["start"] <= today.isoformat() <= s["end"]), None)
+               if not args.sprint else None for team in picked}
+    # Always reconcile source signals without agreement. Otherwise an agreed row can
+    # disappear, lose its baseline and return as unanswered on alternating reruns.
+    closed = {team: team_sprint(data, cfg, people, team, sprint, Notes(), vac.days_off)
+              if sprint else None for team, sprint in picked.items()}
+    actions = {team: team_actions(data, cfg, people, team, closed[team], running[team], today, vac.days_off)
+               for team in picked}
+    reconcile_notes(notes, actions, picked, today)
     teams = []
     for team, sprint in picked.items():
+        scoped = notes_for_team(notes, team)
         if sprint is not None:
-            teams.append(team_sprint(data, cfg, people, team, sprint, notes, vac.days_off))
+            result = team_sprint(data, cfg, people, team, sprint, scoped, vac.days_off)
         else:
             why = ("No sprint named %s." % name if args.sprint
                    else _no_sprint(data, cfg, people, team))
-            teams.append({"team": team, "missing": why})
+            result = {"team": team, "missing": why, "notes": {"note": notes.note.get(team, "")}}
+        refreshed = team_actions(data, cfg, people, team, result if sprint else None,
+                                 running[team], today, vac.days_off)
+        reconcile_notes(notes, {team: refreshed}, picked, today, observed=actions)
+        result["actions"] = refreshed
+        teams.append(result)
+    write_report_notes(folder, notes)
     for s in {(t["sprint"]["name"], t["sprint"]["start"], t["sprint"]["end"])
               for t in teams if not t.get("missing")}:
         if not any(date.fromisoformat(s[1]) <= d <= date.fromisoformat(s[2]) for d in vac.days):
             _warn(out, "the calendar does not cover %s (%s to %s); leave is not counted" % s)
-    running = any(date.fromisoformat(t["sprint"]["end"]) >= today
-                  for t in teams if not t.get("missing"))
-    if running:
-        _warn(out, "%s has not ended by %s; the report shows it as it stands (sprint still running)"
-              % (name, today.isoformat()))
     board = parse_ts(data["fetched"]).astimezone(local_tz(cfg.timezone)).strftime("%Y-%m-%d %H:%M %Z")
     generated = datetime.now().astimezone()
     paths, pages = [], []
     for prefix, render in (("manager", render_manager), ("dm", render_dm)):
         paths.append(os.path.join(folder, "%s_%s.html" % (prefix, today.isoformat())))
-        pages.append(link_ids(render(name, teams, generated, running, board),
+        pages.append(link_ids(render(name, teams, generated, board),
                               cfg.organization, cfg.project))
         with open(paths[-1], "w", encoding="utf-8") as f:
             f.write(pages[-1])
@@ -546,12 +580,11 @@ def run_report(args, client: Optional[Client], out) -> int:
         word = r"(?<!\w)%s(?!\w)" % re.escape(term.lower())
         if (term.lower() in manager) if "@" in term else re.search(word, manager):
             _warn(out, "manager file mentions %s" % term)
-    for line in notes.warnings:
+    for line in notes.warnings[loaded_warnings:]:
         _warn(out, line)
-    _check_notes(notes, teams, name, out)
     for t in teams:
         if not t.get("missing") and not t["notes"]["summary"]:
-            _warn(out, "%s has no summary in notes.txt; the manager card shows no highlights"
+            _warn(out, "%s has no summary in notes.md; the manager card shows no highlights"
                   % t["team"])
     for t in teams:
         if t.get("missing"):
@@ -560,12 +593,20 @@ def run_report(args, client: Optional[Client], out) -> int:
     print("sprint: %s\nnotes: %s" % (name, notes_path), file=out)
     for t in sorted((t for t in teams if not t.get("missing")), key=lambda t: t["team"]):
         lines = ["carry-over without note: #%d %s" % (c["id"], c["title"] or "")
-                 for c in t["carry"] if c["id"] not in notes.items]
+                 for c in t["carry"] if c["id"] not in notes_for_team(notes, t["team"]).items]
         lines += ["worked on: #%d %s (%s)" % (w["id"], w["title"],
                                              "delivered" if w["delivered"] else "in progress")
                   for w in t["worked_items"]]
         for line in lines:
             print("%s %s" % (t["team"], " ".join(line.split())), file=out)
+    for t in teams:
+        for row in t["actions"]["rows"]:
+            if row["level"] in ("red", "amber") and (not row.get("answer") or row.get("worse")
+                    or (row.get("carry") and row["id"] not in notes_for_team(notes, t["team"]).items)):
+                item = " #%d" % row["id"] if row["id"] is not None else ""
+                line = "%s action: %s%s %s - %s" % (
+                    t["team"], row["person"], item, row["badge"] + (" ↑" if row.get("worse") else ""), row["problem"])
+                print(" ".join(line.split()), file=out)
     return 0
 
 

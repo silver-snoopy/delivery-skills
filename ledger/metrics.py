@@ -665,7 +665,7 @@ def _running(t: _Team, sprint: dict, now: datetime, members: List[dict],
     f = t.figures(sprint, now)
     current = {"sprint": dict(sprint), "day": day,
                "days": _workdays_after(start - timedelta(days=1), end),
-               **{k: f[k] for k in ("planned", "delivered_planned", "added", "removed")},
+               **{k: f[k] for k in ("planned", "delivered_planned", "added", "removed", "delivered")},
                "held": [], "waiting": []}
     ages, waits, stale, opened = {}, {}, {}, []
     for h in t.counted(now):
@@ -818,7 +818,7 @@ def team_actions(data: dict, cfg: Config, people: List[Person], team: str,
             is_open = bool(row and row["category"] not in CLOSED)
             rows[key] = {"id": i, "person": name, "title": (row["title"] or "") if row else "",
                          "sprint": "Now" if running else sprint["name"],
-                         "sprint_path": sprint["path"], "level": "green", "badge": "OK",
+                         "sprint_path": sprint["path"], "level": "green", "badge": "On track" if is_open else "Done",
                          "kinds": [], "problem": "", "ask": "",
                          "age": t.open_age(h, at, t.local(at - timedelta(microseconds=1)))
                          if is_open else None, "open": is_open, "carry": i in carry}
@@ -862,6 +862,8 @@ def team_actions(data: dict, cfg: Config, people: List[Person], team: str,
             row.update(sprint=closed["sprint"]["name"], sprint_path=closed["sprint"]["path"])
     for h in opened:
         row_for(h.id, t.owner(h, at), {})
+    for i in current["delivered"] if current else []:  # Done rows: delivered in the running sprint
+        row_for(i, t.owner(t.hist[i], at), {})
     for row in rows.values():
         row["problem"] = _action_problem(row)
         row["ask"] = row["ask"].replace("\n", " ")
@@ -874,5 +876,5 @@ def team_actions(data: dict, cfg: Config, people: List[Person], team: str,
     persons.sort(key=lambda p: (worst[p["name"]], p["name"]))
     order = {p["name"]: n for n, p in enumerate(persons)}
     ordered = sorted(rows.values(), key=lambda r: (order[r["person"]], _LEVELS.index(r["level"]),
-                                                  r["id"] is None, r["id"] or 0, r["kinds"]))
+                                                  not r["open"], r["id"] is None, r["id"] or 0, r["kinds"]))
     return {"people": persons, "rows": ordered, "current": current}

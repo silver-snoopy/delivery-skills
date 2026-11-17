@@ -45,7 +45,7 @@ td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 .chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
 .GREEN,.yes{background:var(--good-soft);color:var(--good)}
 .AMBER,.unk{background:var(--warn-soft);color:var(--warn)}
-.RED,.no{background:var(--bad-soft);color:var(--bad)}.wait{background:var(--accent-soft);color:var(--accent)}
+.RED,.no{background:var(--bad-soft);color:var(--bad)}.wait,.track{background:var(--accent-soft);color:var(--accent)}
 .hot{color:var(--bad);font-weight:600}
 .red{background:var(--bad-soft);color:var(--bad)}.amber{background:var(--warn-soft);color:var(--warn)}
 .grey{background:var(--bg);color:var(--muted)}.green{background:var(--good-soft);color:var(--good)}
@@ -318,7 +318,8 @@ def _footnote(dm: bool) -> str:
             "day %d. Carry-over = no PO agreement or carried %d+ sprints (red when also older "
             "than P85). No work = available, not onboarding, no open assignment; Too much WIP = "
             "over %d in progress; Nothing delivered = no delivery in the closed sprint. Check = "
-            "never active, reopened or shared; OK = open without a signal. Handled = answered "
+            "never active, reopened or shared; On track = open without a signal; Done = delivered "
+            "in the running sprint. Handled = answered "
             "without worsening; ↑ = higher severity, a new signal kind or a new sprint since "
             "the answer. Copied answers do not renew PO agreement; change or clear and re-enter "
             "the Answer to renew it."
@@ -357,7 +358,9 @@ def link_ids(page: str, organization: str, project: str) -> str:
 
 
 def _action_rank(row: dict) -> int:
-    return 3 if row.get("handled") else {"red": 0, "amber": 1, "grey": 2, "green": 4}[row["level"]]
+    if row.get("handled"):
+        return 3
+    return {"red": 0, "amber": 1, "grey": 2, "green": 4 if row["open"] else 5}[row["level"]]
 
 
 def _actions(result: dict) -> str:
@@ -372,16 +375,24 @@ def _actions(result: dict) -> str:
             _num(person["available"]), _num(person["nominal"])), "note")
         if person["onboarding"]:
             who += " " + _tag("span", "onboarding", "chip wait")
+        done = [r for r in mine if r["badge"] == "Done" and not r["open"] and not r.get("handled")]
+        mine = [r for r in mine if r not in done] + ([{"done": done}] if done else [])
         for index, row in enumerate(mine or [None]):
             cell = '<td rowspan="%d">%s</td>' % (max(1, len(mine)), who) if index == 0 else ""
             if row is None:
                 cells = ["nothing open", "–", "–", "–", "–", "–"]
+            elif "done" in row:  # one row for everything the person delivered in the running sprint
+                cells = ["<br>".join(escape("#%d %s" % (r["id"], r["title"])) for r in done),
+                         escape(", ".join(sorted({r["sprint"] for r in done}))),
+                         '<span class="chip green">Done%s</span>' % (
+                             " (%d)" % len(done) if len(done) > 1 else ""), "", "", "–"]
             else:
                 handled = row.get("handled")
                 badge = "Handled" if handled else row["badge"] + (" ↑" if row.get("worse") else "")
                 tooltip = ' title="worse since your answer"' if row.get("worse") and not handled else ""
                 signal = '<span class="chip %s"%s>%s</span>' % (
-                    "grey" if handled else row["level"], tooltip, escape(badge))
+                    "grey" if handled else "track" if row["level"] == "green" and row["open"]
+                    else row["level"], tooltip, escape(badge))
                 work = ("#%d %s" % (row["id"], row["title"])) if row["id"] is not None else "–"
                 cells = [escape(work), escape(row["sprint"]), signal, escape(row["problem"]),
                          escape(row.get("answer") or row["ask"]),

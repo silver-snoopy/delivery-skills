@@ -66,7 +66,7 @@ Summary supplies Delivery highlights. Exec note appears in both reports. Note ap
 
 Answer is the only DM-owned cell in either table. Answered is tool-owned, as are Person, Work item and Problem. The tool rewrites those cells. Answered records the date, severity level and every signal kind present when the answer was observed. It uses display labels, for example `2026-11-16 amber Chase, Waiting`.
 
-Actions holds red and amber problems, including answered ones. OK and grey checks are not listed there. When a problem goes away, an answered row moves to Resolved. If it returns, the row returns to Actions with its answer. The tool keeps the DM's Answer text and text sections. Malformed lines and unknown sections are kept with warnings. In table cells, escape a pipe as `\|` and a backslash as `\\`.
+Actions holds red and amber problems, including answered ones. On track, Done and grey rows are not listed there. When a problem goes away, an answered row moves to Resolved. If it returns, the row returns to Actions with its answer. The tool keeps the DM's Answer text and text sections. Malformed lines and unknown sections are kept with warnings. In table cells, escape a pipe as `\|` and a backslash as `\\`.
 
 Carry-over answers start with `agreed:`, `not agreed:` or `unknown:`, followed by the reason. Without a prefix, the answer counts as unknown for PO agreement. Other answers record what the DM agreed to do.
 

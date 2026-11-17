@@ -42,7 +42,7 @@ font-variant-numeric:tabular-nums}th{text-align:left;font-size:12px;color:var(--
 text-transform:uppercase;padding:6px 10px;border-bottom:1px solid var(--line)}
 td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 .id{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--accent);white-space:nowrap}
-.chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600}
+.chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
 .GREEN,.yes{background:var(--good-soft);color:var(--good)}
 .AMBER,.unk{background:var(--warn-soft);color:var(--warn)}
 .RED,.no{background:var(--bad-soft);color:var(--bad)}.wait{background:var(--accent-soft);color:var(--accent)}

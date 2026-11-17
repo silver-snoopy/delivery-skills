@@ -26,7 +26,7 @@ class Person:
 
 
 def _clean_name(raw: str) -> str:
-    name = raw.strip().strip('"').strip()
+    name = re.sub(r"\s*\([^()]*\)$", "", raw.strip().strip('"').strip())
     if "," in name:
         last, first = name.split(",", 1)
         name = "%s %s" % (first.strip(), last.strip())
@@ -79,7 +79,7 @@ def read_team(path: str) -> List[Person]:
                 person = Person(name, [], row["team"].strip().upper(), _date(row.get("joined")),
                                 _date(row.get("left")), float(alloc) if alloc else 1.0)
                 people[name] = person
-            if email not in person.emails:
+            if email and email not in person.emails:
                 person.emails.append(email)
     return list(people.values())
 
@@ -90,7 +90,7 @@ def write_team(path: str, people: List[Person]) -> None:
         w = csv.writer(f, lineterminator="\n")
         w.writerow(TEAM_COLUMNS)
         for p in people:
-            for email in p.emails:
+            for email in p.emails or [""]:
                 w.writerow([p.name, email, p.team,
                             p.joined.isoformat() if p.joined else "",
                             p.left.isoformat() if p.left else "",
@@ -111,10 +111,12 @@ class Config:
     onboarding_sprints: int = 2
     half_day_codes: List[str] = field(default_factory=list)
     waiting_states: List[str] = field(default_factory=list)
+    hold_states: List[str] = field(default_factory=list)
     not_delivered_reasons: List[str] = field(default_factory=lambda: list(DEFAULT_NOT_DELIVERED))
     staff: str = ""
     vacations: str = ""
     name_aliases: Dict[str, str] = field(default_factory=dict)
+    squad_teams: Dict[str, str] = field(default_factory=dict)
     history_days: int = 200
 
 
@@ -128,9 +130,11 @@ def load_config(directory: str, warn: Callable[[str], None] = lambda line: None)
         warn("config.json keys not recognised and ignored: %s" % ", ".join(unknown))
     cfg = Config(**{k: v for k, v in data.items() if k in known})
     for team, entry in cfg.teams.items():
-        if (entry or {}).get("count") not in (None, "", "stories", "tasks"):
-            raise ValueError("config.json: team %s has count '%s'; use \"stories\" or \"tasks\""
-                             % (team, entry["count"]))
+        c = (entry or {}).get("count")
+        is_list = isinstance(c, list) and c and all(isinstance(t, str) and t.strip() for t in c)
+        if not is_list and c not in (None, "", "stories", "tasks"):
+            raise ValueError("config.json: team %s has count '%s'; use \"stories\", \"tasks\" or a "
+                             "list of work item types" % (team, c))
     local_tz(cfg.timezone)
     return cfg
 
@@ -175,9 +179,13 @@ def parse_notes(text: str) -> Notes:
                 if s:
                     notes.status[team] = (s.group(1).upper(), (s.group(2) or "").strip())
                     continue
+            elif key == "summary":
+                value = re.sub(r"^-\s+", "", value)
+                old = notes.summary.get(team)
+                notes.summary[team] = old + "\n" + value if old else value
+                continue
             else:
-                {"summary": notes.summary, "note": notes.note,
-                 "exec note": notes.exec_note}[key][team] = value
+                {"note": notes.note, "exec note": notes.exec_note}[key][team] = value
                 continue
         notes.warnings.append("notes.txt line %d ignored: %s" % (n, line))
     return notes

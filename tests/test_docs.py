@@ -27,7 +27,7 @@ class DocsTest(unittest.TestCase):
         text = SKILL.read_text(encoding="utf-8")
         for s in ("init --query Q --staff staff.txt --vacations vacations.xlsx --yes",
                   "Anything to add for team", "notes.txt", "T exec note:",
-                  "carry-over without note", "delivered: #ID"):
+                  "carry-over without note", "worked on: #ID"):
             self.assertIn(s, text)
         self.assertIn("Never open the HTML files", text)
         for doc in (text, (ROOT / "AGENTS.md").read_text(encoding="utf-8")):

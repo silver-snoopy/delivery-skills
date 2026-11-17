@@ -12,6 +12,7 @@ from ledger.replay import History, local_tz, parse_ts
 from ledger.xlsx import match_name, read_vacations, resolve_name
 
 WAITING_WORDS = ("review", "qa", "test", "accept", "wait", "blocked", "verify", "uat")
+HOLD_WORDS = ("hold", "blocked", "impeded")
 TASKS_FACTOR = 5
 TEAM_FILE = "team.csv"
 
@@ -101,11 +102,13 @@ def suggest(data: dict, staff: Dict[str, List[str]], known: List[Person],
     names = sorted(states)
     waiting = [s for s in names if states[s] in ("InProgress", "Resolved")
                and any(w in s.lower() for w in WAITING_WORDS)]
+    hold = [s for s in names if any(w in s.lower() for w in HOLD_WORDS)]
     closures = {(r["id"], r["reason"]) for r in data["revisions"]
                 if r["category"] in ("Completed", "Removed")}
     return {"people": people, "teams": count_stats(data, _team_emails((p["team"], p["emails"]) for p in people)),
             "reasons": Counter(reason for _, reason in closures),
-            "states": [{"name": s, "category": states[s]} for s in names], "waiting": waiting}
+            "states": [{"name": s, "category": states[s]} for s in names], "waiting": waiting,
+            "hold": hold}
 
 
 def machine_timezone() -> Optional[str]:
@@ -162,7 +165,7 @@ def _match_calendar(vac, staff, cfg, ask):
         if target is None:
             unmatched.append(cal)
         elif vac.squad.get(cal):
-            squads[target] = vac.squad[cal]
+            squads[target] = cfg.squad_teams.get(vac.squad[cal], vac.squad[cal])
     return squads, unmatched
 
 
@@ -231,6 +234,8 @@ def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out
     cfg.staff, cfg.vacations = os.path.abspath(args.staff), os.path.abspath(args.vacations)
     if not cfg.waiting_states:
         cfg.waiting_states = sug["waiting"]
+    if not cfg.hold_states:
+        cfg.hold_states = sug["hold"]
     save_cache(d, data, warn)
     cache = cache_path(d)
     write_team(team_path, people)
@@ -246,6 +251,10 @@ def _level(text: str) -> str:
     return text
 
 
+def _count_text(count) -> str:
+    return ", ".join(count) if isinstance(count, list) else count
+
+
 def _summary(out, people, stats, cfg, sug, unmatched, warnings, paths) -> None:
     w = lambda line="": print(line, file=out)  # noqa: E731
     w("People:")
@@ -255,11 +264,12 @@ def _summary(out, people, stats, cfg, sug, unmatched, warnings, paths) -> None:
     w("Counting level:")
     for team, st in stats.items():
         w("  %s counts %s (done in the window: %d tasks, %d stories)"
-          % (team, cfg.teams[team]["count"], st["tasks"], st["stories"]))
+          % (team, _count_text(cfg.teams[team]["count"]), st["tasks"], st["stories"]))
     w("States (waiting states in the config are marked *):")
     for s in sug["states"]:
         w("  %s%s: %s" % ("*" if s["name"] in cfg.waiting_states else " ", s["name"], s["category"]))
     w("Proposed waiting states: %s" % (", ".join(sug["waiting"]) or "none"))
+    w("Proposed hold states: %s" % (", ".join(sug["hold"]) or "none"))
     w("Not-delivered reasons (config): %s" % ", ".join(cfg.not_delivered_reasons))
     cut = {r.lower() for r in cfg.not_delivered_reasons}
     reasons = ["%s%s (%d)" % ("*" if (r or "").lower() in cut else "", r or "(no reason)", n)

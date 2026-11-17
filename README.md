@@ -28,7 +28,7 @@ bin/ledger person EMAIL                                                  # one e
 
 `staff.txt` lists your people as `Name <email>;`. `vacations.xlsx` is your team calendar and is read again on every `report`. `init` asks, for each person, the team and the join date, and prints the counting levels, waiting states and closure reasons it chose so you can correct `config.json`. `team.csv` can be edited afterwards; a new team name there is picked up by `report`, which warns until the team has a `count` in `config.json`. A trailing tag such as `(external)` is dropped from staff names; `squad_teams` in `config.json` maps the calendar's squad codes to team names.
 
-Without `--sprint`, `report` takes each team's own last ended sprint. When the teams' sprints have different names, the report is called `Sprints ended by DATE`. A team with no sprint gets a card that says why. The private dm_ file is for the DM and team leads, never the customer. It shows running-sprint actions before the closed Team figures.
+Without `--sprint`, `report` takes each team's own last ended sprint. When the teams' sprints have different names, the report is called `Sprints ended by DATE`. A team with no sprint gets a card that says why. The private dm_ file is for the DM and team leads, never the customer. It shows the closed-sprint status and ours-vs-rest comparison, then running-sprint actions.
 
 Report prints the notes path and action prompts. Ask about each action and put the DM's answer in its Answer cell. For a carry-over, ask whether the PO agreed and why. Ask for optional notes per team. Add an executive note only if the DM asks for it. Propose summary bullets from the printed worked-on titles and have the DM confirm them. Rerun report, show every warning, and give the DM the two HTML paths. The DM reads manager_ before sending it.
 
@@ -80,14 +80,23 @@ Unanswered red and amber problems print as `TEAM action: PERSON #ID BADGE - PROB
 
 `TEAM carry-over without note: #ID TITLE` names a carry-over with no agreement answer yet for this closed sprint, including one with a copied answer. The same item also has an `action:` line. Ask about it once and write one answer in that row's Answer cell. Start it with `agreed:`, `not agreed:` or `unknown:`, followed by the reason.
 
+## Manager card
+
+The manager_ card shows five Delivery stats figures in order: planned work items delivered; work items delivered in total; work items per 10 person-days (last 3 sprints); build time, median (last 3 sprints); first-time pass (last 3 sprints, R of N returned). The last three compare with the preceding three sprints at displayed precision: triangles follow the number, green means better (higher throughput or pass, lower build time), and red means worse. Missing or unchanged values have no arrow. Compare a team only with its own past; arrows are a direction, not a verdict. Empty and not-tracked first-time pass labels stay unchanged.
+
+Scope changes and carry-over appear in one Scope line below the figures. Where the time goes (last 6 sprints) splits typical start-to-done time into building, waiting (with observed waiting-state names), and other, with a decorative bar; it is absent without cycle-time data. Delivered items shows a late count and amber Late chips for planned items closed after the sprint end, with an extra column only when needed. The trend shows planned delivered, total delivered, work items per 10 PD, build time median (days), and first-time pass. Cycle time and waiting share remain in dm_ only. See [the build-time design](docs/superpowers/specs/2026-11-17-build-time-design.md) for definitions.
+
 ## How figures are counted
 
 - Everything is counted in work items, at the level each team chose: stories, tasks, or an explicit list of work item types. The DM card shows it as "Counts: ...".
 - Planned means in the sprint and assigned to one of the team's engineers at the end of its first day. Work that becomes theirs later counts as added, not planned.
-- A sprint gets credit for the work items closed while on its iteration, even after its end date; a close after the end is shown as "completed after the sprint ended".
+- A sprint gets credit for the work items closed while on its iteration, even after its end date; a planned close after the end gets a Late chip in Delivered items.
 - A sprint figure is "delivered X of Y planned", not counting removed items. An unfinished planned item that is still on this sprint or moved to a later sprint is a carry-over; it is removed only when it went back to the backlog (or another path that is not a sprint) or was closed with a not-delivered reason.
-- Cycle time runs from the first In Progress or Resolved state to the first delivered completion, in days; the report shows the median and the P85 (nearest rank) over the last 6 sprints.
-- First-time pass is the whole-percent share of delivered work items never sent back from a `test_states` state or reopened, per team. It shows "not tracked" when no scored item moved back in the last 6 sprints, or "–" when nothing was delivered.
+- Cycle time runs from the first In Progress or Resolved state to the first delivered completion, in days; dm_ keeps cycle time median / P85 and waiting share; its signals and status use the P85 (nearest rank) over the last 6 sprints.
+- First-time pass is the whole-percent share of delivered work items never sent back from a `test_states` state or reopened, pooled across the last 3 sprints per team. A return caps the display at 99%. It shows "not tracked" when no scored item moved back in the last 6 sprints, or "–" when nothing was delivered in the now window. The trend keeps per-sprint shares.
+- Build time starts at the first InProgress or Resolved revision while the item or a child is ours, and ends at the first test handoff or delivered close. Waiting, hold and Blocked time is excluded. The figure pools measured items from the last 3 sprints and shows their median to one decimal day; items without a build start before handoff are excluded.
+- Work items per 10 person-days pools delivered items and available capacity after leave over the last 3 sprints, divides delivered by capacity and multiplies by 10, shown to one decimal. Zero capacity shows "–".
+- Where the time goes uses the last 6 sprints: the median cycle time is split by pooled elapsed-time shares into building, waiting and other. The parts round to whole days with the remainder in other.
 - Waiting is time in states you mark as waiting (or with the Blocked tag). More than 3 working days is a DM flag; more than 10 makes the status RED.
 - On Hold is the number of working days an item spent in a hold state (`hold_states`) or with the Blocked tag during the sprint. It is shown for context and never changes a figure.
 - Board history covers the last `history_days` days (default 200) and is kept in the cache. Every run fetches the cached items again, so an item that left the query keeps its real latest state; an item that is deleted or no longer readable is dropped, with a warning.

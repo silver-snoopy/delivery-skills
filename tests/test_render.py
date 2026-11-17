@@ -72,11 +72,148 @@ def text(page):
     return " ".join(re.sub(r"<[^>]+>", " ", page).split())
 
 
+class ManagerWindowTest(unittest.TestCase):
+    def team(self):
+        t = teams()[0]
+        t.update(windows={"now": ["S40", "S41", "S42"], "before": ["S37", "S38", "S39"]},
+                 build={"median": 3.54, "n": 25, "before": 5.5},
+                 throughput={"per10": 3.4, "before": 4.2},
+                 first_pass={"scored": 25, "returned": [1], "share": 0.96,
+                             "tracked": True, "before": 0.92},
+                 flow={"total": 12, "building": 4, "waiting": 6, "other": 2,
+                       "states": ["Ready for QA", "PO Review"]})
+        t["trend"] = [dict(t["trend"][0], build=v, per10=v) for v in (None, 3.54)]
+        return t
+
+    def page(self, t=None):
+        return render_manager("Sprint 29", [self.team() if t is None else t], GEN)
+
+    def test_manager_figures_order_and_labels(self):
+        page = self.page()
+        labels = re.findall(r'<span class="l">(.*?)</span>', page)
+        self.assertEqual(labels, ["planned work items delivered", "work items delivered in total",
+            "work items per 10 person-days (last 3 sprints)",
+            "build time, median (last 3 sprints)",
+            "first-time pass (last 3 sprints, 1 of 25 returned)"])
+        self.assertIn('3.5 <small>days</small>', page)
+
+    def test_manager_drops_old_figures(self):
+        page = self.page()
+        for old in ("cycle time median", "of cycle time spent in waiting states",
+                    "completed after the sprint ended", '>work items carried over</span>',
+                    '>work items added / removed mid-sprint</span>'):
+            self.assertNotIn(old, page)
+
+    def test_scope_line(self):
+        t = self.team()
+        t.update(added=[1, 2], removed=[3])
+        self.assertIn('Scope: +2 added / −1 removed mid-sprint · 1 work item carried over', self.page(t))
+        t["carry"] *= 2
+        self.assertIn('2 work items carried over', self.page(t))
+        t.update(added=[], removed=[], carry=[])
+        self.assertIn('<p class="note">Scope: no changes mid-sprint · nothing carried over</p>', self.page(t))
+
+    def test_arrows(self):
+        page = self.page()
+        self.assertIn('<span class="d up">▼ from 5.5 days vs sprints S37–S39</span>', page)
+        self.assertIn('<span class="d down">▼ from 4.2 vs sprints S37–S39</span>', page)
+        self.assertIn('<span class="d up">▲ from 92% vs sprints S37–S39</span>', page)
+        t = self.team()
+        t["build"]["before"] = 3.51
+        t["throughput"]["before"] = None
+        t["first_pass"]["before"] = 0.961
+        self.assertNotIn('class="d ', self.page(t))
+        t["first_pass"].update(tracked=False, before=0.8)
+        self.assertNotIn('class="d ', self.page(t))
+        t["windows"]["before"] = ["S39"]
+        t["build"].update(median=6, before=5.5)
+        self.assertIn('<span class="d down">▲ from 5.5 days vs sprints S39</span>', self.page(t))
+        t["build"]["median"] = None
+        t["throughput"]["per10"] = None
+        self.assertNotIn('class="d ', self.page(t))
+
+    def test_arrow_sprint_prefix_is_not_repeated(self):
+        for first, last in (("Sprint 30", "Sprint 32"), ("sPrInT 30", "sPrInT 32"),
+                            ("S37", "S39")):
+            with self.subTest(first=first):
+                t = self.team()
+                t["windows"]["before"] = [first, last]
+                comparison = ("sprints " if first == "S37" else "") + first + "–" + last
+                self.assertIn("from 5.5 days vs " + comparison + "</span>", self.page(t))
+
+    def test_manager_day_counts_use_singular_only_for_one(self):
+        for value, days in ((0, "0 days"), (1, "1 day"), (2, "2 days")):
+            with self.subTest(value=value):
+                t = self.team()
+                t["flow"] = dict(total=value, building=value, waiting=value,
+                                 other=value, states=[])
+                t["build"].update(median=value, before=1 if value != 1 else 2)
+                page = self.page(t)
+                self.assertIn(days + " typical from start to done = " + days +
+                              " building · " + days + " waiting · " + days + " other", text(page))
+                figure = str(value) if value in (0, 1) else "%.1f" % value
+                unit = "day" if value == 1 else "days"
+                self.assertIn('<span class="n">' + figure + " <small>" + unit + "</small>", page)
+                if value != 1:
+                    self.assertIn("from 1 day vs sprints S37–S39", page)
+
+    def test_manager_footnote_does_not_use_dm_trend_convention(self):
+        from ledger.render import _footnote
+        with mock.patch("ledger.render.TREND", None):
+            footnote = _footnote(False)
+        self.assertIn("Build time =", footnote)
+        self.assertNotIn("Cycle time =", footnote)
+
+    def test_where_the_time_goes(self):
+        t = self.team()
+        self.assertIn('Where the time goes (last 6 sprints)', self.page(t))
+        self.assertIn('12 days typical from start to done = 4 days building · 6 days waiting '
+                      '(Ready for QA, PO Review) · 2 days other', text(self.page(t)))
+        for color in ('var(--accent)', 'var(--warn)', '#B8C0CA'):
+            self.assertIn('background:' + color, self.page(t))
+        t["flow"]["states"] = []
+        self.assertIn('6 days waiting · 2 days other', text(self.page(t)))
+        t["flow"] = None
+        self.assertNotIn('<h3>Where the time goes', self.page(t))
+
+    def test_delivered_items_late_badge(self):
+        t = self.team()
+        t["delivered_items"] = [dict(t["delivered_items"][0], id=i, late=i < 2) for i in range(9)]
+        page = self.page(t)
+        self.assertIn('Delivered items (9, 2 late)', page)
+        self.assertEqual(page.count('<span class="chip amber">Late</span>'), 2)
+        self.assertIn('<th>Late</th>', page)
+        t["delivered_items"] = [dict(d, late=False) for d in t["delivered_items"][:3]]
+        page = self.page(t)
+        self.assertIn('Delivered items (3)', page)
+        self.assertNotIn('<th>Late</th>', page)
+
+    def test_trend_rows(self):
+        page = self.page()
+        self.assertIn('<td>Work items per 10 PD</td><td>–</td><td>3.5</td>', page)
+        self.assertIn('<td>Build time median (days)</td><td>–</td><td>3.5</td>', page)
+        self.assertNotIn('Cycle time P85', page)
+
+    def test_dm_unchanged_by_build_time(self):
+        page = render_dm("Sprint 29", [self.team()], GEN)
+        for label in ('build time', 'per 10 person-days', 'Where the time goes'):
+            self.assertNotIn(label, page)
+
+    def test_manager_footnote_definitions(self):
+        page = text(self.page())
+        for definition in ('Arrows', 'Work items per 10 person-days =', 'Build time =',
+                           'pooled', 'Where the time goes', 'Late =', 'own past'):
+            self.assertIn(definition, page)
+        self.assertNotIn('Cycle time =', page)
+        self.assertIn("Its parts are shares of the typical start-to-done time, so the building "
+                      "part is not the build time median.", page)
+
+
 class RenderTest(unittest.TestCase):
     def first_pass_team(self, scored=25, returned=None, share=0.92, tracked=True):
         t = teams()[0]
         t["first_pass"] = {"scored": scored, "returned": [1, 2] if returned is None else returned,
-                           "share": share, "tracked": tracked}
+                           "share": share, "tracked": tracked, "before": None}
         return t
 
     def test_first_pass_figure_tracked(self):
@@ -84,12 +221,11 @@ class RenderTest(unittest.TestCase):
             with self.subTest(share=share):
                 page = render_manager("Sprint 29", [self.first_pass_team(share=share)], GEN)
                 self.assertIn('<span class="n">' + percent + '</span>'
-                              '<span class="l">first-time pass (2 returned)</span>', page)
+                              '<span class="l">first-time pass (last 3 sprints, 2 of 25 returned)</span>', page)
 
-    def test_first_pass_figure_without_returns_has_no_count(self):
+    def test_first_pass_figure_without_returns_shows_zero_count(self):
         page = render_manager("Sprint 29", [self.first_pass_team(share=1.0, returned=[])], GEN)
-        self.assertIn('<span class="n">100%</span><span class="l">first-time pass</span>', page)
-        self.assertNotIn("0 returned", page)
+        self.assertIn('<span class="n">100%</span><span class="l">first-time pass (last 3 sprints, 0 of 25 returned)</span>', page)
 
     def test_first_pass_not_tracked(self):
         page = render_manager("Sprint 29", [self.first_pass_team(
@@ -126,7 +262,7 @@ class RenderTest(unittest.TestCase):
                                              share=(scored - 1) / scored)
                     page = render("Sprint 29", [t], GEN)
                     figure = re.search(r'<span class="n">([^<]+)</span>'
-                                       r'<span class="l">first-time pass \(1 returned\)</span>', page)
+                                       r'<span class="l">first-time pass \(last 3 sprints, 1 of %d returned\)</span>' % scored, page)
                     self.assertIsNotNone(figure)
                     self.assertEqual(figure.group(1), "99%")
 
@@ -152,7 +288,7 @@ class RenderTest(unittest.TestCase):
         sentence = ('First-time pass = share of delivered work items never sent back from a '
                     'test state and never reopened, counted per team; “not tracked” means no '
                     'item moved back in the last %d sprints.' % TREND)
-        for render in (render_manager, render_dm):
+        for render in (render_dm,):
             with self.subTest(render=render.__name__):
                 page = render("Sprint 29", [self.first_pass_team()], GEN)
                 self.assertIn(sentence, text(page))
@@ -184,13 +320,13 @@ class RenderTest(unittest.TestCase):
         for word in ("story", "task"):
             self.assertNotRegex(stripped, r"(?i)\b%ss?\b" % word)
 
-    def test_manual_status_and_small_sample(self):
+    def test_manual_status_is_dm_only_and_manager_shows_build_and_trend(self):
         page = text(render_dm("Sprint 29", teams(NOTES), GEN))
         self.assertIn("BETA AMBER Last sprint: Sprint 29 (27 Oct – 7 Nov 2026) PO asked to hold the "
                       "release (set by hand)", page)
         page = text(render_manager("Sprint 29", teams(NOTES), GEN))
         self.assertNotIn("AMBER", page)
-        self.assertIn("cycle time median / P85 over the last 2 sprints", page)
+        self.assertIn("build time, median (last 3 sprints)", page)
         self.assertIn("Last 2 sprints Sprint 28 Sprint 29", page)
 
     def test_dm_starts_with_internal_marker_and_notes_before_comparison(self):
@@ -224,7 +360,7 @@ class RenderTest(unittest.TestCase):
         card = self.card(render_manager("Sprint 29", teams(NOTES), GEN), "ALFA")
         order = ["<h2>ALFA</h2>", "Sprint 29 (27 Oct – 7 Nov 2026)", "<h3>Delivery highlights</h3>",
                  "Upload is live.", "QA environment was down.", "<h3>Delivery stats</h3>",
-                 "work items carried over", "<summary>Delivered items (2)</summary>",
+                 "1 work item carried over", "<summary>Delivered items (2)</summary>",
                  "<summary>Carried over items (1)</summary>", "<summary>Last 2 sprints</summary>"]
         self.assertEqual([card.index(o) for o in order], sorted(card.index(o) for o in order))
         self.assertIn('<span class="cap">Sprint 29 (27 Oct – 7 Nov 2026)<br>2 engineers (18 PD '

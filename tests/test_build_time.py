@@ -260,15 +260,15 @@ class BuildWindowTest(unittest.TestCase):
             item.at(str(start + timedelta(days=d)) + " 09:00", state=state)
         self.deliver(3, 6, 1)
         flow = self.result()["flow"]
-        self.assertEqual(flow, {"total": 3, "building": 1, "waiting": 2, "other": 0,
+        self.assertEqual(flow, {"total": 3, "building": 25, "waiting": 62, "other": 13,
                                 "states": ["Ready for QA", "PO Review"]})
-        self.assertEqual(flow["building"] + flow["waiting"] + flow["other"], flow["total"])
+        self.assertEqual(flow["building"] + flow["waiting"] + flow["other"], 100)
         self.assertTrue(all(flow[k] >= 0 for k in ("building", "waiting", "other")))
 
-    def test_flow_rounding_deficit_is_taken_from_waiting(self):
+    def test_flow_even_split_in_percent(self):
         self.deliver(1, 6, 1)
         self.assertEqual(self.result()["flow"],
-                         {"total": 3, "building": 2, "waiting": 1, "other": 0,
+                         {"total": 3, "building": 50, "waiting": 50, "other": 0,
                           "states": ["Ready for QA"]})
 
     def test_no_measured_items_and_no_cycle(self):
@@ -282,7 +282,7 @@ class BuildWindowTest(unittest.TestCase):
         self.board.item(1).at(s["start"] + " 09:00", iteration=s["path"], assigned=ADA,
                               state="Active").at(s["start"] + " 09:00", state="Closed")
         self.assertEqual(self.result()["flow"],
-                         {"total": 1, "building": 0, "waiting": 0, "other": 1, "states": []})
+                         {"total": 1, "building": 0, "waiting": 0, "other": 100, "states": []})
 
     def test_trend_keeps_per_sprint_build_and_throughput(self):
         self.deliver(1, 4, 1)

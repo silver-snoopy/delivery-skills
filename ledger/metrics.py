@@ -663,9 +663,10 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
     if splits and cycle_window["median"] is not None:
         total = cycle_window["median"]
         seconds = sum(sum(split) for split in splits)
-        building, waiting = [round(total * sum(split[k] for split in splits) / seconds)
+        # Parts are whole percentages of the pooled time; the remainder goes to other.
+        building, waiting = [round(100 * sum(split[k] for split in splits) / seconds)
                              if seconds else 0 for k in (0, 1)]
-        other = total - building - waiting
+        other = 100 - building - waiting
         if other < 0:
             waiting, other = waiting + other, 0
         seen = {state for i in window_ids for state in t.waiting_states_seen(t.hist[i])}

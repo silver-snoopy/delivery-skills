@@ -220,9 +220,8 @@ def _flow(t: dict) -> str:
     if f is None:
         return ""
     states = " (%s)" % escape(", ".join(f["states"])) if f["states"] else ""
-    sentence = "%s typical from start to done = %s building · %s waiting%s · %s other" % (
-        _day_count(str(f["total"])), _day_count(str(f["building"])),
-        _day_count(str(f["waiting"])), states, _day_count(str(f["other"])))
+    sentence = "%s typical from start to done: %d%% building · %d%% waiting%s · %d%% other" % (
+        _day_count(str(f["total"])), f["building"], f["waiting"], states, f["other"])
     bar = '<div aria-hidden="true" style="display:flex;height:6px;border-radius:3px;overflow:hidden">' + "".join(
         '<span style="flex:%d;background:%s"></span>' % (f[k], color)
         for k, color in (("building", "var(--accent)"), ("waiting", "var(--warn)"), ("other", "#B8C0CA"))) + '</div>'
@@ -362,9 +361,7 @@ def _footnote(dm: bool) -> str:
                  "with its own past. Arrows are a direction, not a verdict, especially with small samples.",
                  "Where the time goes = median start-to-done time over the last 6 sprints, split using "
                  "pooled time shares into building, waiting (named states or Blocked) and other, including "
-                 "hold and rework. Parts are rounded to whole days, with the remainder in other. "
-                 "Its parts are shares of the typical start-to-done time, so the building part is not "
-                 "the build time median."]
+                 "hold and rework. Parts are whole percentages of that time, with the remainder in other."]
     lines.append("On Hold = days the work item spent in a hold state or tagged Blocked during the "
                  "sprint; shown for context and not counted against the team.")
     lines.append("Figures are recomputed from the board history on every run and do not change for "

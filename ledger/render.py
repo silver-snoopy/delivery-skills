@@ -518,6 +518,11 @@ def folder_name(name: str) -> str:
     return re.sub(r'[/\\:*?"<>|]', "-", name)
 
 
+def report_folder(name: str) -> str:
+    """Kebab-case folder name for a report: 'Sprints ended by 2026-11-07' -> 'sprints-ended-by-2026-11-07'."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "report"
+
+
 def _warn(out, line: str) -> None:
     print("warning: %s" % line, file=out)
 
@@ -611,7 +616,9 @@ def run_report(args, client: Optional[Client], out) -> int:
     if not cfg.test_states:
         _warn(out, "no test states in config.json; first-time pass counts reopens only")
     name, picked = _pick(data, cfg, people, team_names, today, args.sprint)
-    folder = os.path.join(args.dir, folder_name(name))
+    fetched = parse_ts(data["fetched"]).astimezone(local_tz(cfg.timezone)).strftime("%Y-%m-%d %H:%M")
+    print("data: %s %s" % ("cached board from" if args.offline else "fetched board at", fetched), file=out)
+    folder = os.path.join(args.dir, "reports", report_folder(name))
     os.makedirs(folder, exist_ok=True)
     notes_path = os.path.join(folder, "notes.md")
     notes = load_report_notes(args.dir, folder, picked, data["iterations"], lambda line: _warn(out, line))

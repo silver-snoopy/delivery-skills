@@ -36,7 +36,7 @@ class FinalReviewTest(unittest.TestCase):
             assigned='nia@vendor.example').at('2026-10-30 15:00', state='Closed')
         (self.root / 'cache').mkdir()
         self.pages = {}
-        self.folder = 'Maple'
+        self.folder = 'maple'
 
     def item(self, item=202, carry=False, active=False, title='Retry manifest'):
         return self.board.item(item, title=title).at(
@@ -67,7 +67,7 @@ class FinalReviewTest(unittest.TestCase):
 
     @property
     def notes_path(self):
-        return self.root / self.folder / 'notes.md'
+        return self.root / 'reports' / self.folder / 'notes.md'
 
     def saved(self, item=202):
         sec = parse_notes(self.notes_path.read_text(encoding='utf-8')).teams['ALFA']
@@ -91,7 +91,7 @@ class FinalReviewTest(unittest.TestCase):
         self.board.sprint('Willow', '2026-11-23', '2026-12-04')
         for item in items:
             item.at('2026-11-20 18:00', iteration='Proj\\Willow')
-        self.folder = 'Cedar'
+        self.folder = 'cedar'
 
     def action(self, item=202):
         return next(row for row in self.team['actions']['rows'] if row['id'] == item)
@@ -114,8 +114,8 @@ class FinalReviewTest(unittest.TestCase):
         self.report()
         self.board.sprints[1]['end'] = '2026-11-12'
         # Reuse the current notes file in place, as the marker-mismatch path allows.
-        (self.root / 'Maple').rename(self.root / 'Cedar')
-        self.folder = 'Cedar'
+        (self.root / 'reports' / 'maple').rename(self.root / 'reports' / 'cedar')
+        self.folder = 'cedar'
         self.report()
         self.assertNotIn('private running context', self.pages['manager'])
 
@@ -236,7 +236,7 @@ class FinalReviewTest(unittest.TestCase):
 
     def test_m1_closed_hold_also_has_no_movement_signal(self):
         self.item(active=True).at('2026-11-10 09:00', state='On Hold', category='InProgress')
-        self.folder = 'Cedar'
+        self.folder = 'cedar'
         self.report('2026-11-21')
         self.assertNotIn('stale', self.action()['kinds'])
 
@@ -289,7 +289,7 @@ class FinalReviewTest(unittest.TestCase):
         self.report()
         self.answer('agreed: defer until supplier delivery')
         self.report()
-        (self.root / 'Maple').rename(self.root / 'Archive')
+        (self.root / 'reports' / 'maple').rename(self.root / 'reports' / 'archive')
         self.report()
         self.assertEqual(self.team['carry'][0]['agreed'], 'agreed')
         self.assertEqual(self.team['carry'][0]['reason'], '')
@@ -329,7 +329,7 @@ class FinalReviewTest(unittest.TestCase):
         self.item(carry=True)
         self.report()
         archive = self.root / 'Archive'
-        (self.root / 'Maple').rename(archive)
+        (self.root / 'reports' / 'maple').rename(archive)
         path = archive / 'notes.md'
         path.write_text(path.read_text(encoding='utf-8') + '## Unrecognised\nkeep this line\n',
                         encoding='utf-8')

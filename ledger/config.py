@@ -166,6 +166,23 @@ class Notes:
 
 _SECTIONS = ("Summary", "Exec note", "Note", "Status", "Actions", "Resolved")
 _COLUMNS = ["Person", "Work item", "Problem", "Answer", "Answered"]
+# Tool-owned guide lines: rewritten on every run, ignored when reading.
+_GUIDE = "<!-- guide: %s -->"
+_TOP_GUIDE = (
+    "Edit this file, then run `bin/ledger report --offline` to update both reports from the cache.",
+    "Write only in the text sections and the Answer column; the tool rewrites the rest, these lines too.",
+    "Summary, Exec note, Status and carry-over answers reach the manager report: no engineer names.")
+_SECTION_GUIDE = {
+    "Summary": 'Manager report, Delivery highlights. 2-4 bullets, no names. Example: "- Delivered upload '
+               'validation."',
+    "Exec note": 'Manager report, below the card. Optional, no names. Example: "Release moved one week: '
+                 'waiting on the customer test environment."',
+    "Note": 'DM report only; names are fine. Example: "Agreed pairing on the payment flow next sprint."',
+    "Status": 'Leave empty for the computed status. To override: "AMBER - reason" (GREEN, AMBER or RED).',
+    "Actions": 'Open red and amber problems. Write only in Answer; the tool fills Answered. Carry-over: '
+               'start with "agreed:", "not agreed:" or "unknown:". Example: "agreed: PO moved it to next '
+               'sprint".',
+    "Resolved": "Answered problems that went away. A row moves back to Actions if its problem returns."}
 _STATUS = re.compile(r"^(GREEN|AMBER|RED)\s*(?:-\s*(.*))?$", re.I)
 _KIND_LABELS = {"old": "Chase", "agreed": "PO agreement", "waiting": "Waiting",
                 "stale": "No movement", "none": "No work", "nothing": "Nothing delivered",
@@ -228,6 +245,8 @@ def parse_notes(text: str) -> Notes:
     """Parse Markdown only, retaining unknown or malformed lines verbatim."""
     notes, team, heading = Notes(), None, None
     for number, line in enumerate(text.lstrip("\ufeff").splitlines(), 1):
+        if line.startswith("<!-- guide: ") and line.endswith(" -->"):
+            continue
         marker = re.fullmatch(r"<!-- ledger notes: (.*?) -->", line)
         if marker:
             for entry in marker[1].split("; "):
@@ -391,8 +410,10 @@ def load_report_notes(directory: str, folder: str, selected: dict, iterations: l
     exists = os.path.isfile(os.path.join(folder, "notes.md"))
     notes = _read_notes(folder) if exists else Notes()
     sources = []
-    if not exists and os.path.isdir(directory):
-        for entry in sorted(os.scandir(directory), key=lambda e: e.path):
+    # Report folders live in reports/; folders directly in `directory` are the older layout.
+    roots = [r for r in (directory, os.path.join(directory, "reports")) if os.path.isdir(r)]
+    if not exists:
+        for entry in sorted((e for r in roots for e in os.scandir(r)), key=lambda e: e.path):
             if entry.is_dir() and os.path.isfile(os.path.join(entry.path, "notes.md")):
                 source = _read_notes(entry.path)
                 sources.append((entry.path, source))
@@ -557,11 +578,12 @@ def reconcile_notes(notes: Notes, actions: dict, selected: dict, today: date,
 
 def _markdown(notes):
     lines = ["<!-- ledger notes: %s -->" % "; ".join("%s=%s" % pair for pair in notes.markers.items())]
+    lines.extend(_GUIDE % text for text in _TOP_GUIDE)
     lines.extend(notes.raw)
     for team, sec in notes.teams.items():
         lines.append("# " + team)
         for heading in _SECTIONS:
-            lines.append("## " + heading)
+            lines.extend(["## " + heading, _GUIDE % _SECTION_GUIDE[heading]])
             if heading not in ("Actions", "Resolved"):
                 lines.extend(sec[heading].splitlines())
                 continue

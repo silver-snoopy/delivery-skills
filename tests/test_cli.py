@@ -71,7 +71,7 @@ class CliTest(unittest.TestCase):
             current = board.item(2, title="Running retry work").at(
                 "2026-11-09 09:00", iteration="Proj\\Current", assigned="ari@vendor.example")
             (root / "cache").mkdir()
-            notes_path = root / "Closed" / "notes.md"
+            notes_path = root / "reports" / "closed" / "notes.md"
             pages, results = {}, []
 
             def capture_manager(*args):
@@ -176,7 +176,7 @@ class CliTest(unittest.TestCase):
             board.sprint("Next", "2026-11-23", "2026-12-04")
             current.at("2026-11-20 10:00", state="Active", iteration="Proj\\Next")
             report("2026-11-21", closed="Current")
-            notes_path = root / "Current" / "notes.md"
+            notes_path = root / "reports" / "current" / "notes.md"
             inherited = saved_row("Actions")
             self.assertEqual(inherited["answer"], renewed)
             next_answer = "unknown: review planned"

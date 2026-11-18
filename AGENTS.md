@@ -22,7 +22,8 @@ If your agent supports skills, the same procedure is in `skills/delivery-report/
 3. For each team ask: "Anything to add for team T this sprint?" Write the answer under `## Note` (DM file only). Write under `## Exec note` (manager file, no names) only when the DM says so.
 4. For each printed action ask the DM what was agreed or what to do. Write only their answer into that row's Answer cell under `## Actions`. For carry-over actions ask: "Was carrying #ID over agreed with the PO? (agreed / not agreed / unknown) and why?" Start the answer with `agreed:`, `not agreed:` or `unknown:`. Never fill an answer yourself.
 5. Propose summary bullets per team from the printed worked-on titles. Use 2-4 short bullets, with no names. Have the DM confirm the summary bullets before saving them under `## Summary`. They become Delivery highlights on manager_.
-6. Run `bin/ledger report` again. It reads the board again, so figures can change if the board changed. Show every `warning:` line. The DM reviews Handled and worsened rows in dm_.
+6. Run `bin/ledger report --offline`. It reads the cache, so the figures stay the same and only the notes change. Show every `warning:` line. The DM reviews Handled and worsened rows in dm_.
+   Whenever the DM edits `notes.md` or asks to update, refresh or regenerate the report, run `report --offline`. Run `report` without `--offline` only when the DM asks for fresh board data (for example "fetch", "pull latest", "refresh from the board"), or when there is no cache yet; a fetch reads the board again, so figures can change if the board changed. Each run prints `data: cached board from TIME` or `data: fetched board at TIME`; tell the DM which one.
 7. Give the DM the paths of the two files and tell them to read the manager_ file before sending it.
 
 For one engineer's record run `bin/ledger person EMAIL` and give the DM the path; it is for the DM only.
@@ -45,6 +46,7 @@ Keep `notes.md` and `.notes-state.json` together when copying a report folder to
 The first line is a tool-owned marker:
 `<!-- ledger notes: TEAM=closed-sprint-path; ... -->`.
 It records each team's closed sprint. Do not edit it.
+Lines starting `<!-- guide:` are tool-owned hints: a short how-to block after the marker and one line under each section heading saying where the text goes, with an example. The tool rewrites them on every run and ignores them when reading; they never reach a report.
 Each team has a `# TEAM` heading and these sections, in this order:
 
 ```markdown

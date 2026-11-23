@@ -10,7 +10,7 @@ Management sees how much the team delivers, but not whether "done" really meant 
 
 - Goal: one team figure per closed sprint, on the manager_ card and in its trend, from the board history the tool already reads.
 - Non-goal (version 1): bugs linked to a story as a second return signal; a running-sprint "returned 2×" signal on dm_; any per-person figure.
-- Anti-goal: a false 100%. A team that never records returns on the board must show "not tracked", never a perfect score.
+- Anti-goal: a false 100%. A team with no returns and no evidence of testing on the board must show "not tracked", never a perfect score.
 
 ## 3. Definitions
 
@@ -20,16 +20,16 @@ Management sees how much the team delivers, but not whether "done" really meant 
 - **Reopen:** a revision from a delivered close (previous category Completed, with no not-delivered reason) to category Proposed, InProgress or Resolved.
 - **Returned item:** a scored item with at least one test return or reopen anywhere in its history up to the report time. A reopen always comes after the first close, so a later reopen counts against the sprint that got the credit. Rerunning an old sprint's report can therefore lower its figure. This is intended.
 - **First-time pass:** (scored − returned) / scored, shown as a whole percent. Each item counts once, however often it bounced.
-- **Tracked:** a team is tracked if at least one of its scored items in the trend window (the last 6 sprints, as in the existing trend) is returned. Otherwise every figure for the team shows "not tracked".
+- **Tracked:** a team is tracked if at least one of its scored items in the trend window (the last 6 sprints, as in the existing trend) is returned, or if at least half of them went through a test state (changed 2026-11-23, so a clean team can show 100%). Otherwise every figure for the team shows "not tracked".
 
 ## 4. What the reader sees
 
 - **Delivery stats** (manager_ and dm_, because they share the figure row) get one more figure:
   - tracked: `92%` with the label `first-time pass (2 returned)`; with no returned item just `first-time pass`;
-  - not tracked: `not tracked` with the label `first-time pass: no item moved back on the board in the last 6 sprints`;
+  - not tracked: `not tracked` with the label `first-time pass: too few items went through a test state in the last 6 sprints`;
   - nothing delivered in the sprint: `–` with the label `first-time pass`.
 - **Trend table** gets one more row, `First-time pass`, with one cell per sprint: `–` when nothing was delivered comes first; otherwise the percent for tracked teams, or `not tracked`.
-- **Footnote** (both pages) gets one sentence: First-time pass = share of delivered work items never sent back from a test state and never reopened, counted per team; "not tracked" means no item moved back in the last 6 sprints.
+- **Footnote** (both pages) gets one sentence: First-time pass = share of delivered work items never sent back from a test state and never reopened, counted per team; "not tracked" means no item moved back and fewer than half of the delivered items went through a test state in the last 6 sprints.
 - No figure per person anywhere.
 
 ## 5. Setup and config

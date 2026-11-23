@@ -180,8 +180,8 @@ def _first_pass(t: dict) -> str:
     if not f["scored"]:
         return _fig("–", "first-time pass")
     if not f["tracked"]:
-        return _fig("not tracked", "first-time pass: no item moved back on the board in the "
-                    "last %d sprints" % TREND)
+        return _fig("not tracked", "first-time pass: too few items went through a test "
+                    "state in the last %d sprints" % TREND)
     now = _pct(f["share"], 99 if f["returned"] else 100)
     before = f.get("before")
     previous = None if before is None else _pct(before, 99 if before < 1 else 100)
@@ -314,8 +314,9 @@ def _footnote(dm: bool) -> str:
             "differ from Azure DevOps widgets. Ages and the status rule use the team's P85 over its "
             "last %d sprints. " % TREND
             + "First-time pass = share of delivered work items never sent back from a test state "
-            "and never reopened, counted per team; “not tracked” means no item moved back in the "
-            "last %d sprints." % TREND]
+            "and never reopened, counted per team; “not tracked” means no item moved back and "
+            "fewer than half of the delivered items went through a test state in the last %d "
+            "sprints." % TREND]
         lines.append(
             "<b>Status rule</b> (our convention, not an industry standard): GREEN = at least %d%% of "
             "planned work items delivered, not counting removed ones, and no carry-over older than the "
@@ -354,7 +355,8 @@ def _footnote(dm: bool) -> str:
                  "hold and Blocked time; the median of measured items delivered in the last 3 sprints.",
                  "First-time pass = share of delivered work items never sent back from a test state "
                  "and never reopened, pooled over the last 3 sprints; “not tracked” means no item moved "
-                 "back in the last 6 sprints. – means no scored items; a return caps the display at 99%.",
+                 "back and fewer than half of the delivered items went through a test state in the "
+                 "last 6 sprints. – means no scored items; a return caps the display at 99%.",
                  "Arrows compare the last 3 sprints with the 3 before: the triangle follows the number; "
                  "green means better (higher throughput or first-time pass, lower build time), red worse. "
                  "No arrow means a missing value or no change at displayed precision. Compare a team only "

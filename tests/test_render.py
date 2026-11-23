@@ -229,7 +229,7 @@ class RenderTest(unittest.TestCase):
         page = render_manager("Sprint 29", [self.first_pass_team(
             scored=3, returned=[], share=1.0, tracked=False)], GEN)
         self.assertIn('<span class="n">not tracked</span><span class="l">first-time pass: '
-                      'no item moved back on the board in the last %d sprints</span>' % TREND, page)
+                      'too few items went through a test state in the last %d sprints</span>' % TREND, page)
         figures = re.findall(r'<div class="fig[^"]*">(.*?)</div>', page)
         self.assertTrue(any("first-time pass" in f for f in figures))
         self.assertFalse(any("100%" in f for f in figures if "first-time pass" in f))
@@ -285,7 +285,8 @@ class RenderTest(unittest.TestCase):
     def test_footnote_defines_first_pass(self):
         sentence = ('First-time pass = share of delivered work items never sent back from a '
                     'test state and never reopened, counted per team; “not tracked” means no '
-                    'item moved back in the last %d sprints.' % TREND)
+                    'item moved back and fewer than half of the delivered items went through a '
+                    'test state in the last %d sprints.' % TREND)
         for render in (render_dm,):
             with self.subTest(render=render.__name__):
                 page = render("Sprint 29", [self.first_pass_team()], GEN)

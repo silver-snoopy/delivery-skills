@@ -639,6 +639,8 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
     window = upto[-TREND:]
     now, before = window[-NOW:], window[-2 * NOW:-NOW]
     window_ids = sorted({i for s in window for i in figs[s["path"]]["delivered"]})
+    # With no return, test-state use is the evidence that the board records testing.
+    tested = [i for i in window_ids if any(r["state"] in cfg.test_states for r in t.hist[i].rows)]
     cycle_window = _stats(cycles(window_ids))
     window_members = {s["path"]: t.members(people, team, sprints, s, days_off) for s in window}
     builds = {s["path"]: [seconds / 86400 for i in figs[s["path"]]["delivered"]
@@ -713,7 +715,8 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
         "throughput": {"per10": throughput(now), "before": throughput(before)},
         "flow": flow,
         "first_pass": {**pooled_pass(now), "before": pooled_pass(before)["share"],
-                       "tracked": any(passes[s["path"]]["returned"] for s in window)},
+                       "tracked": any(passes[s["path"]]["returned"] for s in window)
+                       or 0 < len(window_ids) <= 2 * len(tested)},
         "waiting_share": t.waiting_share(f["delivered"]),
         "carry": carry,
         "delivered_items": [{"id": i, "title": title_at(i), "planned": i in f["planned"],

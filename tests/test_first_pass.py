@@ -90,6 +90,37 @@ class FirstPassTest(unittest.TestCase):
         self.assertIs(fp["tracked"], False)
         self.assertEqual(fp["share"], 1.0)
 
+    def through_test(self, tested, total, cfg=None):
+        """`total` items delivered without a return, `tested` of them through a test state."""
+        b = board()
+        for i in range(1, total + 1):
+            item = b.item(i).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active")
+            if i <= tested:
+                item.at("2026-10-28 09:00", state="Ready for QA")
+            item.at("2026-11-04 09:00", state="Closed")
+        return run(b, "ALFA", "S29", cfg=cfg or self.cfg)["first_pass"]
+
+    def test_tracked_without_returns_when_half_went_through_a_test_state(self):
+        for tested, total, tracked in ((1, 1, True), (2, 4, True), (1, 2, True), (1, 3, False),
+                                       (2, 5, False), (0, 4, False)):
+            with self.subTest(tested=tested, total=total):
+                fp = self.through_test(tested, total)
+                self.assertIs(fp["tracked"], tracked)
+                self.assertEqual((fp["returned"], fp["share"]), ([], 1.0))
+
+    def test_tracked_evidence_covers_all_window_sprints(self):
+        b = board()
+        b.item(1).at("2026-10-13 09:00", iteration=S28, assigned=MAYA, state="Active") \
+            .at("2026-10-14 09:00", state="Ready for QA").at("2026-10-21 09:00", state="Closed")
+        b.item(2).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
+            .at("2026-11-04 09:00", state="Closed")
+        self.assertIs(run(b, "ALFA", "S29", cfg=self.cfg)["first_pass"]["tracked"], True)
+
+    def test_not_tracked_without_test_states_or_deliveries(self):
+        self.assertIs(self.through_test(0, 0)["tracked"], False)
+        self.cfg.test_states = []
+        self.assertIs(self.through_test(4, 4)["tracked"], False)
+
     def test_tracked_by_return_in_earlier_window_sprint(self):
         b = board()
         b.item(1).at("2026-10-13 09:00", iteration=S28, assigned=MAYA, state="Active") \

@@ -683,7 +683,7 @@ class RenderTest(unittest.TestCase):
             "Agreed with PO",
         ):
             self.assertNotIn(absent, card)
-        self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", card)
+        self.assertIn("<th>Times carried</th><th>At sprint end</th><th>On Hold</th><th>Reason</th>", card)
         self.assertIn("<td>Planned</td>", card)
 
     def test_manager_card_without_summary_has_no_highlights(self):

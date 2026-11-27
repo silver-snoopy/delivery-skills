@@ -383,7 +383,7 @@ def _carry(t: dict) -> str:
             _tag("h3", "Carried over items (0)") + _tag("p", "No work items carried over.", "note"),
             "carry-empty",
         )
-    table = _table(["Work item", "Title", "Sprints carried", "At sprint end", "On Hold", "Reason"], rows)
+    table = _table(["Work item", "Title", "Times carried", "At sprint end", "On Hold", "Reason"], rows)
     held_suffix = f" ({held} On Hold)" if held else ""
     return _fold(f"Carried over items ({len(rows)}){held_suffix}", table)
 

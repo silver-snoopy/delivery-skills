@@ -11,7 +11,7 @@ class SizeTest(unittest.TestCase):
         for path in glob.glob(os.path.join(ROOT, "ledger", "**", "*.py"), recursive=True):
             with open(path, encoding="utf-8") as f:
                 total += sum(1 for _ in f)
-        self.assertLessEqual(total, 3600)
+        self.assertLessEqual(total, 4600)
 
 
 if __name__ == "__main__":

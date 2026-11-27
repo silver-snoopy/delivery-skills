@@ -2,17 +2,22 @@ import unittest
 from datetime import date
 
 from ledger.config import Config, Notes, Person
+from ledger.metrics import histories, is_onboarding, level_of, percentile, team_sprint, team_sprints
 from ledger.replay import parse_ts
-from ledger.metrics import (histories, is_onboarding, level_of, percentile, team_sprint,
-                            team_sprints)
 from tests.fixture import Board
 
-MAYA, IVAN, LENA, PO = ("maya@vendor.example", "ivan@vendor.example", "lena@vendor.example",
-                        "po@customer.example")
+MAYA, IVAN, LENA, PO = (
+    "maya@vendor.example",
+    "ivan@vendor.example",
+    "lena@vendor.example",
+    "po@customer.example",
+)
 S28, S29 = "Proj\\S28", "Proj\\S29"
-PEOPLE = [Person("Maya Brook", [MAYA], "ALFA", None, None),
-          Person("Ivan Holt", [IVAN], "ALFA", None, None),
-          Person("Lena Ford", [LENA], "BETA", None, None)]
+PEOPLE = [
+    Person("Maya Brook", [MAYA], "ALFA", None, None),
+    Person("Ivan Holt", [IVAN], "ALFA", None, None),
+    Person("Lena Ford", [LENA], "BETA", None, None),
+]
 
 
 def board():
@@ -20,8 +25,12 @@ def board():
 
 
 def config():
-    return Config(timezone="Europe/Zurich", waiting_states=["Ready for QA"], hold_states=["On Hold"],
-                  teams={"ALFA": {"count": "stories"}, "BETA": {"count": "tasks"}})
+    return Config(
+        timezone="Europe/Zurich",
+        waiting_states=["Ready for QA"],
+        hold_states=["On Hold"],
+        teams={"ALFA": {"count": "stories"}, "BETA": {"count": "tasks"}},
+    )
 
 
 def run(b, team, name, people=PEOPLE, notes=None, days_off=None, cfg=None):
@@ -40,15 +49,18 @@ class SprintFigureTests(unittest.TestCase):
     def test_planned_delivered_added_removed(self):
         b = board()
         for i in (101, 102, 103):
-            b.item(i).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
-                .at("2026-11-0%d 10:00" % (i - 98), state="Closed")
-        b.item(104).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
-            .at("2026-11-03 10:00", iteration="Proj")
+            b.item(i).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+                f"2026-11-0{i - 98} 10:00", state="Closed"
+            )
+        b.item(104).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-03 10:00", iteration="Proj"
+        )
         b.item(105).at("2026-10-27 09:00", iteration=S29, assigned=IVAN, state="Active")
         b.item(106).at("2026-10-29 09:00", iteration=S29, assigned=IVAN, state="Active")
         t = run(b, "ALFA", "S29")
-        self.assertEqual((len(t["planned"]), len(t["delivered_planned"]), len(t["added"]),
-                          len(t["removed"])), (5, 3, 1, 1))
+        self.assertEqual(
+            (len(t["planned"]), len(t["delivered_planned"]), len(t["added"]), len(t["removed"])), (5, 3, 1, 1)
+        )
         self.assertEqual(t["planned"], [101, 102, 103, 104, 105])
         self.assertEqual((t["added"], t["removed"], t["delivered"]), ([106], [104], [101, 102, 103]))
         self.assertEqual([c["id"] for c in t["carry"]], [105])
@@ -56,22 +68,27 @@ class SprintFigureTests(unittest.TestCase):
 
     def test_child_task_assignee_makes_story_ours(self):
         b = board()
-        b.item(201).at("2026-10-27 09:00", iteration=S29, assigned=PO) \
-            .at("2026-10-28 09:00", state="Active").at("2026-11-05 09:00", state="Closed")
-        b.item(202, "Task", parent=201).at("2026-10-27 09:00", iteration=S29, assigned=MAYA) \
-            .at("2026-10-28 09:00", state="Active").at("2026-11-04 09:00", state="Closed")
-        b.item(203).at("2026-10-27 09:00", iteration=S29, assigned=PO) \
-            .at("2026-10-28 09:00", state="Active").at("2026-11-05 09:00", state="Closed")
+        b.item(201).at("2026-10-27 09:00", iteration=S29, assigned=PO).at(
+            "2026-10-28 09:00", state="Active"
+        ).at("2026-11-05 09:00", state="Closed")
+        b.item(202, "Task", parent=201).at("2026-10-27 09:00", iteration=S29, assigned=MAYA).at(
+            "2026-10-28 09:00", state="Active"
+        ).at("2026-11-04 09:00", state="Closed")
+        b.item(203).at("2026-10-27 09:00", iteration=S29, assigned=PO).at(
+            "2026-10-28 09:00", state="Active"
+        ).at("2026-11-05 09:00", state="Closed")
         t = run(b, "alfa", "S29")
         self.assertEqual((t["planned"], t["delivered"]), ([201], [201]))
 
     def test_tasks_team_counts_tasks_only(self):
         b = board()
-        b.item(301, title="Claims upload").at("2026-10-27 09:00", iteration=S29, assigned=LENA,
-                                               state="Active")
+        b.item(301, title="Claims upload").at(
+            "2026-10-27 09:00", iteration=S29, assigned=LENA, state="Active"
+        )
         for i in (302, 303, 304):
-            b.item(i, "Task", parent=301).at("2026-10-27 09:00", iteration=S29, assigned=LENA,
-                                             state="Active").at("2026-11-04 09:00", state="Closed")
+            b.item(i, "Task", parent=301).at(
+                "2026-10-27 09:00", iteration=S29, assigned=LENA, state="Active"
+            ).at("2026-11-04 09:00", state="Closed")
         t = run(b, "BETA", "S29")
         self.assertEqual((t["planned"], t["delivered"]), ([302, 303, 304], [302, 303, 304]))
         self.assertEqual(t["worked_on"], [["Claims upload", 3]])
@@ -79,15 +96,18 @@ class SprintFigureTests(unittest.TestCase):
     def test_credit_by_iteration_at_close_and_late(self):
         b = board()
         # closed on S28's path the day after S29 started: S28 gets the credit, flagged late
-        b.item(401).at("2026-10-13 09:00", iteration=S28, assigned=MAYA) \
-            .at("2026-10-15 09:00", state="Active").at("2026-10-28 09:00", state="Closed")
+        b.item(401).at("2026-10-13 09:00", iteration=S28, assigned=MAYA).at(
+            "2026-10-15 09:00", state="Active"
+        ).at("2026-10-28 09:00", state="Closed")
         # carried over to S29 and closed there: S29 gets it
-        b.item(402).at("2026-10-13 09:00", iteration=S28, assigned=MAYA) \
-            .at("2026-10-15 09:00", state="Active").at("2026-10-26 09:00", iteration=S29) \
-            .at("2026-10-28 09:00", state="Closed")
+        b.item(402).at("2026-10-13 09:00", iteration=S28, assigned=MAYA).at(
+            "2026-10-15 09:00", state="Active"
+        ).at("2026-10-26 09:00", iteration=S29).at("2026-10-28 09:00", state="Closed")
         s28, s29 = run(b, "ALFA", "S28"), run(b, "ALFA", "S29")
-        self.assertEqual((s28["planned"], s28["delivered"], s28["delivered_planned"], s28["late"]),
-                         ([401, 402], [401], [401], [401]))
+        self.assertEqual(
+            (s28["planned"], s28["delivered"], s28["delivered_planned"], s28["late"]),
+            ([401, 402], [401], [401], [401]),
+        )
         self.assertEqual(s28["removed"], [])
         self.assertEqual([c["id"] for c in s28["carry"]], [402])
         self.assertEqual((s29["planned"], s29["delivered"], s29["late"]), ([402], [402], []))
@@ -99,11 +119,12 @@ class SprintFigureTests(unittest.TestCase):
         self.assertEqual(percentile([7] * 20, 0.85), 7)
         self.assertIsNone(percentile([], 0.85))
         b = board()
-        b.item(501).at("2026-10-27 09:00", iteration=S29, assigned=MAYA) \
-            .at("2026-11-02 09:00", state="Closed")
-        b.item(502).at("2026-10-27 09:00", iteration=S29, assigned=MAYA) \
-            .at("2026-10-28 09:00", state="Active").at("2026-10-29 09:00", state="Ready for QA") \
-            .at("2026-10-30 09:00", state="Closed")
+        b.item(501).at("2026-10-27 09:00", iteration=S29, assigned=MAYA).at(
+            "2026-11-02 09:00", state="Closed"
+        )
+        b.item(502).at("2026-10-27 09:00", iteration=S29, assigned=MAYA).at(
+            "2026-10-28 09:00", state="Active"
+        ).at("2026-10-29 09:00", state="Ready for QA").at("2026-10-30 09:00", state="Closed")
         t = run(b, "ALFA", "S29")
         self.assertEqual(t["delivered"], [501, 502])
         self.assertEqual(t["cycle"], {"n": 1, "median": 3, "p85": 3})
@@ -120,18 +141,43 @@ class SprintFigureTests(unittest.TestCase):
 
     def test_carry_over_age_and_sprints(self):
         b = board()
-        b.item(601, parent=900).at("2026-10-13 09:00", iteration=S28, assigned=MAYA) \
-            .at("2026-10-15 09:00", state="Active").at("2026-10-26 09:00", iteration=S29) \
-            .at("2026-11-04 09:00", state="Ready for QA")
+        b.item(601, parent=900).at("2026-10-13 09:00", iteration=S28, assigned=MAYA).at(
+            "2026-10-15 09:00", state="Active"
+        ).at("2026-10-26 09:00", iteration=S29).at("2026-11-04 09:00", state="Ready for QA")
         b.item(602).at("2026-10-27 09:00", iteration=S29, assigned=IVAN)
-        notes = Notes(items={601: ("agreed", "QA environment down")},
-                      summary={"Alfa": "Upload work"}, exec_note={"ALFA": "On track"})
+        notes = Notes(
+            items={601: ("agreed", "QA environment down")},
+            summary={"Alfa": "Upload work"},
+            exec_note={"ALFA": "On track"},
+        )
         t = run(b, "ALFA", "S29", notes=notes)
-        self.assertEqual(t["carry"], [
-            {"id": 601, "title": "Item 601", "age": 24, "sprints": 2, "state": "Ready for QA",
-             "waiting": True, "agreed": "agreed", "reason": "QA environment down", "held": 0},
-            {"id": 602, "title": "Item 602", "age": None, "sprints": 1, "state": "New",
-             "waiting": False, "agreed": "unknown", "reason": "", "held": 0}])
+        self.assertEqual(
+            t["carry"],
+            [
+                {
+                    "id": 601,
+                    "title": "Item 601",
+                    "age": 24,
+                    "sprints": 2,
+                    "state": "Ready for QA",
+                    "waiting": True,
+                    "agreed": "agreed",
+                    "reason": "QA environment down",
+                    "held": 0,
+                },
+                {
+                    "id": 602,
+                    "title": "Item 602",
+                    "age": None,
+                    "sprints": 1,
+                    "state": "New",
+                    "waiting": False,
+                    "agreed": "unknown",
+                    "reason": "",
+                    "held": 0,
+                },
+            ],
+        )
         self.assertEqual(run(b, "ALFA", "S28")["carry"][0]["age"], 10)
         self.assertEqual(t["notes"], {"summary": "Upload work", "note": "", "exec_note": "On track"})
         self.assertEqual(t["worked_on"], [["Other", 1], ["Parent 900", 1]])
@@ -141,21 +187,27 @@ class SprintFigureTests(unittest.TestCase):
         b = board()
         b.item(1).at("2026-10-14 09:00", iteration=S28, assigned=MAYA, state="Active")
         b.item(2).at("2026-10-28 09:00", iteration=S29, assigned=MAYA, state="Active")
-        people = [Person("Maya Brook", [MAYA], "ALFA", date(2026, 1, 5), None),
-                  Person("Nadia Kern", ["nadia@vendor.example"], "ALFA", date(2026, 10, 29), None, 0.5),
-                  Person("Old Timer", ["old@vendor.example"], "ALFA", None, date(2026, 10, 20)),
-                  Person("Lena Ford", [LENA], "BETA", None, None)]
-        off = {"Nadia Kern": {date(2026, 11, 3): 1.0, date(2026, 11, 7): 1.0},
-               "Maya Brook": {date(2026, 10, 28): 0.5}}
+        people = [
+            Person("Maya Brook", [MAYA], "ALFA", date(2026, 1, 5), None),
+            Person("Nadia Kern", ["nadia@vendor.example"], "ALFA", date(2026, 10, 29), None, 0.5),
+            Person("Old Timer", ["old@vendor.example"], "ALFA", None, date(2026, 10, 20)),
+            Person("Lena Ford", [LENA], "BETA", None, None),
+        ]
+        off = {
+            "Nadia Kern": {date(2026, 11, 3): 1.0, date(2026, 11, 7): 1.0},
+            "Maya Brook": {date(2026, 10, 28): 0.5},
+        }
         t = run(b, "ALFA", "S29", people=people, days_off=off)
         # S29 has 9 working days (Tue 27 Oct .. Fri 6 Nov); Nadia works 7 of them at 0.5
-        self.assertEqual(t["capacity"], {"engineers": 2, "onboarding": 1,
-                                         "nominal": 12.5, "available": 11.5})
+        self.assertEqual(t["capacity"], {"engineers": 2, "onboarding": 1, "nominal": 12.5, "available": 11.5})
 
     def test_is_onboarding(self):
-        sprints = [{"path": "P\\%d" % i, "name": str(i), "start": s, "end": e} for i, (s, e) in
-                   enumerate([("2026-10-13", "2026-10-24"), ("2026-10-27", "2026-11-07"),
-                              ("2026-11-10", "2026-11-21")])]
+        sprints = [
+            {"path": f"P\\{i}", "name": str(i), "start": s, "end": e}
+            for i, (s, e) in enumerate(
+                [("2026-10-13", "2026-10-24"), ("2026-10-27", "2026-11-07"), ("2026-11-10", "2026-11-21")]
+            )
+        ]
         p = Person("Nadia Kern", [], "ALFA", date(2026, 10, 20), None)
         self.assertEqual([is_onboarding(p, sprints, s, 2) for s in sprints], [True, True, False])
         p.joined = date(2026, 10, 25)  # between sprints: the next sprint is the first
@@ -167,23 +219,27 @@ class SprintFigureTests(unittest.TestCase):
 
     def test_reopened_listed_not_credited_twice(self):
         b = board()
-        b.item(701).at("2026-10-13 09:00", iteration=S28, assigned=MAYA, state="Active") \
-            .at("2026-10-20 09:00", state="Closed").at("2026-10-26 09:00", iteration=S29) \
-            .at("2026-10-28 09:00", state="Active", reason="Reopened") \
-            .at("2026-11-02 09:00", state="Closed", reason="Done")
+        b.item(701).at("2026-10-13 09:00", iteration=S28, assigned=MAYA, state="Active").at(
+            "2026-10-20 09:00", state="Closed"
+        ).at("2026-10-26 09:00", iteration=S29).at("2026-10-28 09:00", state="Active", reason="Reopened").at(
+            "2026-11-02 09:00", state="Closed", reason="Done"
+        )
         s28, s29 = run(b, "ALFA", "S28"), run(b, "ALFA", "S29")
         self.assertEqual((s28["delivered"], s28["reopened"]), ([701], []))
-        self.assertEqual((s29["delivered"], s29["planned"], s29["added"], s29["reopened"]),
-                         ([], [], [], [701]))
+        self.assertEqual(
+            (s29["delivered"], s29["planned"], s29["added"], s29["reopened"]), ([], [], [], [701])
+        )
         self.assertEqual(s28["cycle"]["median"], 8)
 
     def test_bug_level_rule(self):
         b = board()
         b.item(800).at("2026-10-27 09:00", iteration=S29, assigned=PO)
-        b.item(801, "Bug", parent=800).at("2026-10-27 09:00", iteration=S29, assigned=LENA,
-                                          state="Active").at("2026-11-02 09:00", state="Closed")
-        b.item(802, "Bug").at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
-            .at("2026-11-02 09:00", state="Closed")
+        b.item(801, "Bug", parent=800).at(
+            "2026-10-27 09:00", iteration=S29, assigned=LENA, state="Active"
+        ).at("2026-11-02 09:00", state="Closed")
+        b.item(802, "Bug").at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-02 09:00", state="Closed"
+        )
         data = b.cache()
         hist = histories(data, [])
         self.assertEqual(level_of(hist[801], data["levels"], hist), "tasks")
@@ -194,11 +250,13 @@ class SprintFigureTests(unittest.TestCase):
 
     def test_cut_during_sprint_is_removed(self):
         b = board()
-        b.item(901).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
-            .at("2026-11-03 10:00", state="Closed", reason="Cut")
+        b.item(901).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-03 10:00", state="Closed", reason="Cut"
+        )
         t = run(b, "ALFA", "S29")
-        self.assertEqual((t["planned"], t["removed"], t["delivered_planned"], t["carry"]),
-                         ([901], [901], [], []))
+        self.assertEqual(
+            (t["planned"], t["removed"], t["delivered_planned"], t["carry"]), ([901], [901], [], [])
+        )
 
     def test_moved_to_next_sprint_before_the_end_is_a_carry_over(self):
         def sprint(done):
@@ -210,9 +268,9 @@ class SprintFigureTests(unittest.TestCase):
                 else:  # moved to the next sprint the day before the sprint ends
                     it.at("2026-11-06 15:00", iteration="Proj\\S30")
             return run(b, "ALFA", "S29"), run(b, "ALFA", "S30")
+
         t, nxt = sprint(8)
-        self.assertEqual((len(t["planned"]), len(t["delivered_planned"]), t["removed"]),
-                         (10, 8, []))
+        self.assertEqual((len(t["planned"]), len(t["delivered_planned"]), t["removed"]), (10, 8, []))
         self.assertEqual([c["id"] for c in t["carry"]], [9, 10])
         self.assertTrue(t["status"]["reason"].startswith("80% of planned work items delivered;"))
         self.assertEqual(t["status"]["colour"], "AMBER")  # the old rule gave 8 of 8, GREEN
@@ -223,23 +281,32 @@ class SprintFigureTests(unittest.TestCase):
 
     def test_moved_to_backlog_or_cut_is_removed(self):
         b = board().sprint("PI 4", "2026-10-12", "2026-12-18", path="Proj\\PI 4")
-        b.item(1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
-            .at("2026-11-03 09:00", iteration="Proj\\PI 4")
-        b.item(2).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
-            .at("2026-11-03 09:00", state="Closed", reason="won't fix")
-        b.item(3).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
-            .at("2026-11-03 09:00", state="Closed", reason="Obsolete")
-        b.item(4).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
-            .at("2026-11-03 09:00", state="Removed")
+        b.item(1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-03 09:00", iteration="Proj\\PI 4"
+        )
+        b.item(2).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-03 09:00", state="Closed", reason="won't fix"
+        )
+        b.item(3).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-03 09:00", state="Closed", reason="Obsolete"
+        )
+        b.item(4).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-03 09:00", state="Removed"
+        )
         t = run(b, "ALFA", "S29")
-        self.assertEqual((t["planned"], t["removed"], t["delivered"], t["carry"]),
-                         ([1, 2, 3, 4], [1, 2, 3, 4], [], []))
+        self.assertEqual(
+            (t["planned"], t["removed"], t["delivered"], t["carry"]), ([1, 2, 3, 4], [1, 2, 3, 4], [], [])
+        )
 
     def test_long_iterations_are_not_sprints(self):
-        b = board().sprint("PI 4", "2026-10-12", "2026-12-18", path="Proj\\PI 4") \
+        b = (
+            board()
+            .sprint("PI 4", "2026-10-12", "2026-12-18", path="Proj\\PI 4")
             .sprint("Six weeks", "2026-09-01", "2026-10-12", path="Proj\\Six weeks")
-        b.item(1).at("2026-10-13 09:00", iteration="Proj\\PI 4", assigned=MAYA) \
-            .at("2026-10-27 09:00", iteration=S29)
+        )
+        b.item(1).at("2026-10-13 09:00", iteration="Proj\\PI 4", assigned=MAYA).at(
+            "2026-10-27 09:00", iteration=S29
+        )
         b.item(2).at("2026-09-02 09:00", iteration="Proj\\Six weeks", assigned=MAYA)
         names = [s["name"] for s in team_sprints(b.cache(), config(), PEOPLE, "ALFA")]
         self.assertEqual(names, ["Six weeks", "S29"])
@@ -249,77 +316,79 @@ class SprintFigureTests(unittest.TestCase):
         b.item(1).at("2026-10-13 09:00", iteration=S28, assigned=PO)
         b.item(2, "Task", parent=1).at("2026-10-13 09:00", iteration=S28, assigned=LENA)
         b.item(3).at("2026-10-27 09:00", iteration=S29, assigned=MAYA)
-        b.item(4).at("2026-10-13 09:00", iteration=S28, assigned=PO) \
-            .at("2026-11-12 09:00", assigned=MAYA)
+        b.item(4).at("2026-10-13 09:00", iteration=S28, assigned=PO).at("2026-11-12 09:00", assigned=MAYA)
         data = b.cache()
-        names = lambda team, until=None: [s["name"] for s in
-                                          team_sprints(data, config(), PEOPLE, team, until)]
+
+        def names(team, until=None):
+            return [s["name"] for s in team_sprints(data, config(), PEOPLE, team, until)]
+
         self.assertEqual(names("beta"), ["S28"])
         self.assertEqual(names("ALFA"), ["S28", "S29"])
         self.assertEqual(names("ALFA", parse_ts("2026-11-08T00:00:00Z")), ["S29"])
 
     def test_never_active_item_reassigned_away_is_not_ours(self):
         b = board()
-        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=MAYA) \
-            .at("2026-11-02 09:00", assigned=PO)
+        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=MAYA).at("2026-11-02 09:00", assigned=PO)
         self.assertEqual(kinds(run(b, "ALFA", "S29"), 1), [])
 
     def test_never_active_item_reassigned_in_is_added_not_planned(self):
         b = board()
-        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=PO) \
-            .at("2026-11-02 09:00", assigned=MAYA)
+        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=PO).at("2026-11-02 09:00", assigned=MAYA)
         self.assertEqual(kinds(run(b, "ALFA", "S29"), 1), ["added"])
 
     def test_active_item_reassigned_away_still_ours(self):
         b = board()
-        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active") \
-            .at("2026-11-02 09:00", assigned=PO)
+        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-02 09:00", assigned=PO
+        )
         self.assertEqual(kinds(run(b, "ALFA", "S29"), 1), ["planned", "carry"])
 
     def test_reassigned_to_us_mid_sprint_moved_on_is_added_not_planned_or_carry(self):
         # appears on the sprint unassigned, is assigned to us, then moves to the next sprint
         b = board().sprint("S30", "2026-11-10", "2026-11-21")
-        b.item(1).at("2026-11-03 09:00", iteration=S29).at("2026-11-04 09:00", assigned=MAYA) \
-            .at("2026-11-05 09:00", iteration="Proj\\S30")
-        b.item(2).at("2026-10-26 09:00", iteration=S29, assigned=PO) \
-            .at("2026-11-02 09:00", assigned=MAYA, state="Active") \
-            .at("2026-11-05 09:00", iteration="Proj\\S30")
+        b.item(1).at("2026-11-03 09:00", iteration=S29).at("2026-11-04 09:00", assigned=MAYA).at(
+            "2026-11-05 09:00", iteration="Proj\\S30"
+        )
+        b.item(2).at("2026-10-26 09:00", iteration=S29, assigned=PO).at(
+            "2026-11-02 09:00", assigned=MAYA, state="Active"
+        ).at("2026-11-05 09:00", iteration="Proj\\S30")
         t = run(b, "ALFA", "S29")
         self.assertEqual((kinds(t, 1), kinds(t, 2)), (["added"], ["added"]))
 
     def test_reassigned_to_us_mid_sprint_delivered_is_added_not_planned_or_delivered_planned(self):
         b = board()
-        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=PO) \
-            .at("2026-11-02 09:00", assigned=MAYA, state="Active") \
-            .at("2026-11-04 09:00", state="Closed")
+        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=PO).at(
+            "2026-11-02 09:00", assigned=MAYA, state="Active"
+        ).at("2026-11-04 09:00", state="Closed")
         self.assertEqual(kinds(run(b, "ALFA", "S29"), 1), ["added", "delivered"])
 
     def test_unassigned_at_t0_picked_up_mid_sprint_left_open_is_added_not_carry(self):
         b = board()
-        b.item(1).at("2026-10-26 09:00", iteration=S29) \
-            .at("2026-11-02 09:00", assigned=MAYA, state="Active")
+        b.item(1).at("2026-10-26 09:00", iteration=S29).at("2026-11-02 09:00", assigned=MAYA, state="Active")
         self.assertEqual(kinds(run(b, "ALFA", "S29"), 1), ["added"])
 
     def test_assigned_to_us_at_t0_open_at_t1_is_planned_and_carry(self):
         b = board()
-        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=MAYA) \
-            .at("2026-11-02 09:00", state="Active")
+        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=MAYA).at("2026-11-02 09:00", state="Active")
         self.assertEqual(kinds(run(b, "ALFA", "S29"), 1), ["planned", "carry"])
 
     def test_blank_email_member_does_not_claim_unassigned_item(self):
         b = board()
         b.item(1).at("2026-10-26 09:00", iteration=S29)
-        people = PEOPLE + [Person("Ghost", [""], "ALFA", None, None)]
+        people = [*PEOPLE, Person("Ghost", [""], "ALFA", None, None)]
         self.assertEqual(kinds(run(b, "ALFA", "S29", people=people), 1), [])
 
     def test_count_as_type_list(self):
         b = board()
-        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=PO, state="Active") \
-            .at("2026-11-04 09:00", state="Closed")
-        b.item(2, "Task", parent=1).at("2026-10-26 09:00", iteration=S29, assigned=MAYA,
-                                       state="Active").at("2026-11-03 09:00", state="Closed")
-        b.item(3, "Bug", parent=1).at("2026-10-26 09:00", iteration=S29, assigned=PO,
-                                      state="Active").at("2026-11-03 09:00", state="Closed")
+        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=PO, state="Active").at(
+            "2026-11-04 09:00", state="Closed"
+        )
+        b.item(2, "Task", parent=1).at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-03 09:00", state="Closed"
+        )
+        b.item(3, "Bug", parent=1).at("2026-10-26 09:00", iteration=S29, assigned=PO, state="Active").at(
+            "2026-11-03 09:00", state="Closed"
+        )
         b.item(4, "Bug").at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active")
         cfg = config()
         cfg.teams["ALFA"]["count"] = ["User Story", "Bug"]
@@ -331,9 +400,9 @@ class SprintFigureTests(unittest.TestCase):
 
     def test_carry_over_held_days(self):
         b = board()
-        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active") \
-            .at("2026-11-02 09:00", state="On Hold").at("2026-11-04 09:00", state="Active") \
-            .at("2026-11-05 18:00", tags=["Blocked"])
+        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-02 09:00", state="On Hold"
+        ).at("2026-11-04 09:00", state="Active").at("2026-11-05 18:00", tags=["Blocked"])
         b.item(2).at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active")
         t = run(b, "ALFA", "S29")
         # Mon 2, Tue 3, Wed 4 (On Hold), Thu 5 and Fri 6 (Blocked); Sat 7 is not counted
@@ -341,47 +410,68 @@ class SprintFigureTests(unittest.TestCase):
 
     def test_person_held_items(self):
         b = board()
-        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active") \
-            .at("2026-11-03 09:00", state="On Hold").at("2026-11-04 09:00", state="Closed")
+        b.item(1).at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-03 09:00", state="On Hold"
+        ).at("2026-11-04 09:00", state="Closed")
         b.item(2).at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active")
         maya = next(p for p in run(b, "ALFA", "S29")["people"] if p["name"] == "Maya Brook")
         self.assertEqual(maya["held"], [[1, 2]])
 
     def test_delivered_and_worked_items(self):
         b = board()
-        b.item(1, title="Upload").at("2026-10-26 09:00", iteration=S29, assigned=MAYA,
-                                      state="Active").at("2026-11-03 09:00", state="Closed")
-        b.item(2, title="Retry").at("2026-10-26 09:00", iteration=S29, assigned=IVAN,
-                                     state="Active")
-        b.item(3, title="Export").at("2026-10-29 09:00", iteration=S29, assigned=IVAN,
-                                      state="Active").at("2026-11-04 09:00", state="Closed")
+        b.item(1, title="Upload").at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-03 09:00", state="Closed"
+        )
+        b.item(2, title="Retry").at("2026-10-26 09:00", iteration=S29, assigned=IVAN, state="Active")
+        b.item(3, title="Export").at("2026-10-29 09:00", iteration=S29, assigned=IVAN, state="Active").at(
+            "2026-11-04 09:00", state="Closed"
+        )
         t = run(b, "ALFA", "S29")
-        self.assertEqual(t["delivered_items"], [{"id": 1, "title": "Upload", "planned": True,
-                                               "late": False},
-                                            {"id": 3, "title": "Export", "planned": False,
-                                             "late": False}])
-        self.assertEqual(t["worked_items"], [{"id": 1, "title": "Upload", "delivered": True},
-                                             {"id": 3, "title": "Export", "delivered": True},
-                                             {"id": 2, "title": "Retry", "delivered": False}])
+        self.assertEqual(
+            t["delivered_items"],
+            [
+                {"id": 1, "title": "Upload", "planned": True, "late": False},
+                {"id": 3, "title": "Export", "planned": False, "late": False},
+            ],
+        )
+        self.assertEqual(
+            t["worked_items"],
+            [
+                {"id": 1, "title": "Upload", "delivered": True},
+                {"id": 3, "title": "Export", "delivered": True},
+                {"id": 2, "title": "Retry", "delivered": False},
+            ],
+        )
 
     def test_rerun_is_identical(self):
         def build(later):
             b = board().sprint("S27", "2026-09-28", "2026-10-09")
-            one = b.item(1).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active") \
+            one = (
+                b.item(1)
+                .at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active")
                 .at("2026-11-03 09:00", state="Closed")
-            two = b.item(2, area="Proj\\Pay").at("2026-10-13 09:00", iteration=S28,
-                                                  assigned=IVAN, state="Active") \
+            )
+            two = (
+                b.item(2, area="Proj\\Pay")
+                .at("2026-10-13 09:00", iteration=S28, assigned=IVAN, state="Active")
                 .at("2026-10-26 09:00", iteration=S29)
-            b.item(10).at("2026-10-27 09:00", iteration=S29, assigned=PO) \
-                .at("2026-10-28 09:00", state="Active").at("2026-11-05 09:00", state="Closed")
-            child = b.item(11, "Task", parent=10).at("2026-10-27 09:00", iteration=S29,
-                                                     assigned=MAYA, state="Active") \
+            )
+            b.item(10).at("2026-10-27 09:00", iteration=S29, assigned=PO).at(
+                "2026-10-28 09:00", state="Active"
+            ).at("2026-11-05 09:00", state="Closed")
+            child = (
+                b.item(11, "Task", parent=10)
+                .at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active")
                 .at("2026-11-04 09:00", state="Closed")
-            old = b.item(20).at("2026-09-28 09:00", iteration="Proj\\S27", assigned=PO,
-                                state="Active").at("2026-10-08 09:00", state="Closed")
-            b.item(21, area="Proj\\Pay").at("2026-10-28 09:00", iteration=S29, assigned=PO,
-                                              state="Active") \
-                .at("2026-10-30 09:00", state="Closed")
+            )
+            old = (
+                b.item(20)
+                .at("2026-09-28 09:00", iteration="Proj\\S27", assigned=PO, state="Active")
+                .at("2026-10-08 09:00", state="Closed")
+            )
+            b.item(21, area="Proj\\Pay").at(
+                "2026-10-28 09:00", iteration=S29, assigned=PO, state="Active"
+            ).at("2026-10-30 09:00", state="Closed")
             if later:  # all after S29 ended
                 one.type = "Task"
                 one.at("2026-11-10 09:00")
@@ -391,15 +481,19 @@ class SprintFigureTests(unittest.TestCase):
                 two.at("2026-11-12 09:00", iteration="Proj\\S30")
                 one.at("2026-11-11 09:00", assigned="tom.h2@vendor.example")
                 for n in range(3):  # would move Ivan's main area and his assignment
-                    b.item(30 + n, area="Proj\\Other").at("2026-11-10 09:00", iteration=S29,
-                                                         assigned=IVAN, state="Active")
-                b.item(40).at("2026-11-09 09:00", iteration="Proj\\S30", assigned=PO,
-                              state="Active").at("2026-11-10 09:00", state="Closed")
+                    b.item(30 + n, area="Proj\\Other").at(
+                        "2026-11-10 09:00", iteration=S29, assigned=IVAN, state="Active"
+                    )
+                b.item(40).at("2026-11-09 09:00", iteration="Proj\\S30", assigned=PO, state="Active").at(
+                    "2026-11-10 09:00", state="Closed"
+                )
             return b
+
         first = run(build(False), "ALFA", "S29")
         self.assertEqual(first, run(build(False), "ALFA", "S29"))
-        self.assertEqual((first["delivered"], [r["sprint"] for r in first["trend"]]),
-                         ([1, 10], ["S28", "S29"]))
+        self.assertEqual(
+            (first["delivered"], [r["sprint"] for r in first["trend"]]), ([1, 10], ["S28", "S29"])
+        )
         self.assertEqual(first["rest"]["delivered"], 1)
         self.assertEqual([p["delivered"] for p in first["people"]], [[], [1, 10]])
         self.assertEqual([a["level"] for a in first["attention"]], ["red"] + ["amber"] * 3)
@@ -409,39 +503,43 @@ class SprintFigureTests(unittest.TestCase):
         self.assertEqual(first, run(build(True), "ALFA", "S29"))
 
     def test_po_satisfaction_resolution_and_trend(self):
-        b = (board()
-             .sprint("S27", "2026-09-29", "2026-10-10")
-             .sprint("S30", "2026-11-10", "2026-11-21"))
+        b = board().sprint("S27", "2026-09-29", "2026-10-10").sprint("S30", "2026-11-10", "2026-11-21")
         for i, it_path, d_start, d_end in [
             (1, "Proj\\S27", "2026-09-30", "2026-10-08"),
             (2, S28, "2026-10-14", "2026-10-22"),
             (3, S29, "2026-10-28", "2026-11-05"),
             (4, "Proj\\S30", "2026-11-11", "2026-11-18"),
         ]:
-            b.item(i).at("%s 09:00" % d_start, iteration=it_path, assigned=MAYA, state="Active") \
-                .at("%s 10:00" % d_end, state="Closed")
+            b.item(i).at(f"{d_start} 09:00", iteration=it_path, assigned=MAYA, state="Active").at(
+                f"{d_end} 10:00", state="Closed"
+            )
         notes = Notes(
             po_satisfaction={"alfa": (5, "Great demo")},
             po_history={"ALFA": {"Proj\\S27": 3, S28: None, S29: 2, "Proj\\S30": 1}},
         )
         t = run(b, "ALFA", "S29", notes=notes)
-        self.assertEqual(t["po_satisfaction"],
-                         {"score": 5, "comment": "Great demo", "before": 3, "before_sprint": "S27"})
-        self.assertEqual([(r["sprint"], r["po_satisfaction"]) for r in t["trend"]],
-                         [("S27", 3), ("S28", None), ("S29", 5)])
+        self.assertEqual(
+            t["po_satisfaction"], {"score": 5, "comment": "Great demo", "before": 3, "before_sprint": "S27"}
+        )
+        self.assertEqual(
+            [(r["sprint"], r["po_satisfaction"]) for r in t["trend"]], [("S27", 3), ("S28", None), ("S29", 5)]
+        )
 
         # Current blank overrides duplicate folder score in po_history.
         blank_notes = Notes(po_history={"ALFA": {"Proj\\S27": 3, S28: None, S29: 4}})
         t_blank = run(b, "ALFA", "S29", notes=blank_notes)
         self.assertIsNone(t_blank["po_satisfaction"])
-        self.assertEqual([(r["sprint"], r["po_satisfaction"]) for r in t_blank["trend"]],
-                         [("S27", 3), ("S28", None), ("S29", None)])
+        self.assertEqual(
+            [(r["sprint"], r["po_satisfaction"]) for r in t_blank["trend"]],
+            [("S27", 3), ("S28", None), ("S29", None)],
+        )
 
         # Rated current sprint with no prior rated sprint in window.
         first_rated = Notes(po_satisfaction={"ALFA": (4, "")})
         t_first = run(b, "ALFA", "S29", notes=first_rated)
-        self.assertEqual(t_first["po_satisfaction"],
-                         {"score": 4, "comment": "", "before": None, "before_sprint": None})
+        self.assertEqual(
+            t_first["po_satisfaction"], {"score": 4, "comment": "", "before": None, "before_sprint": None}
+        )
 
 
 if __name__ == "__main__":

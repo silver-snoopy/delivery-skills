@@ -105,4 +105,15 @@ Scope changes and carry-over appear in one Scope line below the figures. Where t
 - Status (DM file only) is GREEN at 80% delivered or more with no old, unagreed carry-over; AMBER if one condition is missed; RED if both are, or on a long wait. You can override it in the `## Status` section of `notes.md`.
 - Thresholds are fixed local conventions, not industry standards, and the footnote says so. Every figure depends on the board being kept up to date.
 
+## Development
+
+Running `bin/ledger` requires only the Python 3.9+ standard library. Contributors who modify the codebase can install the optional `pre-push` static analysis hook (requires `pre-commit` on Python 3.11+ and initial network access to build hook environments; works offline afterwards):
+
+```sh
+pre-commit install --install-hooks
+pre-commit run --all-files --hook-stage pre-push
+```
+
+This runs Ruff linting and formatting (`ruff`, `ruff-format --check`), `mypy` (`ledger/`), the `no-explaining-comments` (`NEC001`) check (`ledger/` and `scripts/`), and `unittest`.
+
 Per-person reporting on employees may be subject to local law, data protection rules and works-council agreements; the operator is responsible for checking what is allowed. A licence has not been chosen yet; until one is added, this project must not be redistributed.

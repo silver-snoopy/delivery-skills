@@ -1,0 +1,33 @@
+[tool.ruff]
+target-version = "py39"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "ERA", "PGH", "RUF", "S"]
+# E501 is delegated to `ruff format` per Ruff's formatter compatibility guidance.
+ignore = ["E501"]
+# Intentional report punctuation (en-dash, minus, curly quotes) used in rendered output.
+allowed-confusables = ["–", "−", "’", "“", "”"]
+
+[tool.ruff.lint.per-file-ignores]
+# _request validates https/http schemes before calling urlopen/Request (S310).
+# WIQL has no bind parameters; interpolated values are single-quote-escaped via lit() (S608).
+"ledger/ado.py" = ["S310", "S608"]
+# xml.etree.ElementTree reads local vacations.xlsx files; defusedxml would violate the
+# stdlib-only zero-runtime-dependency requirement.
+"ledger/xlsx.py" = ["S314"]
+# Test assertions are standard in unittest suites.
+"tests/*.py" = ["S101"]
+# Invokes [sys.executable, check_comments.py, ...] to test the checker CLI end-to-end.
+"tests/test_comments.py" = ["S603"]
+# Invokes ["git", "ls-files"] to scan tracked repository files.
+"tests/test_docs.py" = ["S603", "S607"]
+
+[tool.mypy]
+python_version = "3.9"
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+no_implicit_optional = true
+show_error_codes = true

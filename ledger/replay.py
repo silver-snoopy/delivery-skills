@@ -1,7 +1,9 @@
 """Replay a work item's revision rows: when it became active, was done, waited or moved."""
+
 import re
+from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta, timezone, tzinfo
-from typing import Callable, Dict, List, Optional, Sequence, Set
+from typing import Optional
 
 ACTIVE = ("InProgress", "Resolved")
 _TS = re.compile(r"^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.(\d+))?(Z|[+-]\d\d:?\d\d)?$")
@@ -10,18 +12,21 @@ _TS = re.compile(r"^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.(\d+))?(Z|
 def local_tz(name: str) -> tzinfo:
     """The named IANA time zone; ValueError when it is unknown (or tz data is missing)."""
     from zoneinfo import ZoneInfo
+
     try:
         return ZoneInfo(name)
-    except (ValueError, KeyError, OSError):
-        raise ValueError("unknown time zone '%s'; set \"timezone\" in config.json to a name such "
-                         "as Europe/Zurich (on Windows, install the tzdata package)" % name)
+    except (ValueError, KeyError, OSError) as err:
+        raise ValueError(
+            f"unknown time zone '{name}'; set \"timezone\" in config.json to a name such "
+            "as Europe/Zurich (on Windows, install the tzdata package)"
+        ) from err
 
 
 def parse_ts(text: str) -> datetime:
     """ISO timestamp (Z, offset or none; any fraction length) as an aware UTC datetime."""
     m = _TS.match(text.strip())
     if not m:
-        raise ValueError("bad timestamp: %r" % text)
+        raise ValueError(f"bad timestamp: {text!r}")
     y, mo, d, h, mi, s, frac, zone = m.groups()
     micro = int((frac or "0")[:6].ljust(6, "0"))
     dt = datetime(int(y), int(mo), int(d), int(h), int(mi), int(s), micro, tzinfo=timezone.utc)
@@ -53,7 +58,7 @@ def day_end(d: date, tz: tzinfo) -> datetime:
 
 
 class History:
-    def __init__(self, rows: List[dict], not_delivered: Sequence[str]):
+    def __init__(self, rows: list[dict], not_delivered: Sequence[str]):
         self.rows = sorted(rows, key=lambda r: r["rev"])
         self.times = [parse_ts(r["changed"]) for r in self.rows]
         self.not_delivered = {r.lower() for r in not_delivered}
@@ -80,7 +85,8 @@ class History:
     def cut(self, row: dict) -> bool:
         """Closed without delivery: category Removed, or a not-delivered reason (any case)."""
         return row["category"] == "Removed" or (
-            row["category"] == "Completed" and (row["reason"] or "").lower() in self.not_delivered)
+            row["category"] == "Completed" and (row["reason"] or "").lower() in self.not_delivered
+        )
 
     @property
     def done_at(self) -> Optional[datetime]:
@@ -93,21 +99,32 @@ class History:
     def reopened(self) -> bool:
         done = self.done_at
         return done is not None and any(
-            row["category"] in ACTIVE and ts > done for row, ts in zip(self.rows, self.times))
+            row["category"] in ACTIVE and ts > done for row, ts in zip(self.rows, self.times)
+        )
 
     def returned(self, test_states: Sequence[str]) -> bool:
         """Any test return or reopen in the whole history, regardless of tags."""
         return any(
-            (prev["state"] in test_states and new["state"] not in test_states
-             and new["category"] not in ("Completed", "Removed"))
-            or (prev["category"] == "Completed" and not self.cut(prev)
-                and new["category"] in ("Proposed", "InProgress", "Resolved"))
-            for prev, new in zip(self.rows, self.rows[1:]))
+            (
+                prev["state"] in test_states
+                and new["state"] not in test_states
+                and new["category"] not in ("Completed", "Removed")
+            )
+            or (
+                prev["category"] == "Completed"
+                and not self.cut(prev)
+                and new["category"] in ("Proposed", "InProgress", "Resolved")
+            )
+            for prev, new in zip(self.rows, self.rows[1:])
+        )
 
-    def assignees_active(self, until: datetime) -> Set[str]:
+    def assignees_active(self, until: datetime) -> set[str]:
         """Assignees recorded on revisions up to `until` while the item was active."""
-        return {row["assigned"] for row, ts in zip(self.rows, self.times)
-                if ts <= until and row["category"] in ACTIVE and row["assigned"]}
+        return {
+            row["assigned"]
+            for row, ts in zip(self.rows, self.times)
+            if ts <= until and row["category"] in ACTIVE and row["assigned"]
+        }
 
     def waiting_seconds(self, start: datetime, end: datetime, waiting_states: Sequence[str]) -> float:
         return self.seconds_where(start, end, lambda row: is_waiting(row, waiting_states))

@@ -4,27 +4,54 @@ import tempfile
 import unittest
 from datetime import date
 
-from ledger.config import (DEFAULT_MANAGER_METRICS, KNOWN_METRICS, Config, Person, email_index,
-                           load_config, merge_staff, parse_notes, parse_staff, read_team, save_config,
-                           write_team)
+from ledger.config import (
+    DEFAULT_MANAGER_METRICS,
+    KNOWN_METRICS,
+    Config,
+    Person,
+    email_index,
+    load_config,
+    merge_staff,
+    parse_notes,
+    parse_staff,
+    read_team,
+    save_config,
+    write_team,
+)
 from ledger.metrics import metrics_of, show_flow_of
 from ledger.replay import local_tz
 
 
 class ConfigTest(unittest.TestCase):
     def test_parse_staff_list_formats(self):
-        pairs = parse_staff('Maya R. <Maya.R@vendor.example>; "Doe, John" <john.doe@vendor.example>;\nann@vendor.example')
-        self.assertEqual(pairs, [("Maya R.", "maya.r@vendor.example"), ("John Doe", "john.doe@vendor.example"),
-                                 ("ann", "ann@vendor.example")])
+        pairs = parse_staff(
+            'Maya R. <Maya.R@vendor.example>; "Doe, John" <john.doe@vendor.example>;\nann@vendor.example'
+        )
+        self.assertEqual(
+            pairs,
+            [
+                ("Maya R.", "maya.r@vendor.example"),
+                ("John Doe", "john.doe@vendor.example"),
+                ("ann", "ann@vendor.example"),
+            ],
+        )
 
     def test_same_name_two_emails_is_one_person(self):
         m = merge_staff([("Tom H.", "tom.h@vendor.example"), ("Tom H.", "tom.h2@vendor.example")])
         self.assertEqual(m, {"Tom H.": ["tom.h@vendor.example", "tom.h2@vendor.example"]})
 
     def test_team_csv_round_trip_and_case_insensitive_index(self):
-        people = [Person("Tom H.", ["tom.h@vendor.example", "tom.h2@vendor.example"], "ALFA",
-                         date(2024, 11, 4), None, 0.5),
-                  Person("Ann", ["ann@vendor.example"], "BETA", None, date(2026, 1, 5))]
+        people = [
+            Person(
+                "Tom H.",
+                ["tom.h@vendor.example", "tom.h2@vendor.example"],
+                "ALFA",
+                date(2024, 11, 4),
+                None,
+                0.5,
+            ),
+            Person("Ann", ["ann@vendor.example"], "BETA", None, date(2026, 1, 5)),
+        ]
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "sub", "team.csv")
             write_team(path, people)
@@ -33,9 +60,11 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(idx["TOM.H2@VENDOR.EXAMPLE".lower()].name, "Tom H.")
 
     def test_markdown_notes_and_legacy_rejection(self):
-        n = parse_notes("\ufeff# ALFA\n## Summary\n- Delivered upload\nIn progress: retries\n"
-                        "## Exec note\nPilot live\n## Note\nfirst\nsecond\n"
-                        "## Status\namber - QA slot lost\n")
+        n = parse_notes(
+            "\ufeff# ALFA\n## Summary\n- Delivered upload\nIn progress: retries\n"
+            "## Exec note\nPilot live\n## Note\nfirst\nsecond\n"
+            "## Status\namber - QA slot lost\n"
+        )
         self.assertEqual(n.summary["ALFA"], "Delivered upload\nIn progress: retries")
         self.assertEqual(n.exec_note["ALFA"], "Pilot live")
         self.assertEqual(n.note["ALFA"], "first\nsecond")
@@ -52,12 +81,20 @@ class ConfigTest(unittest.TestCase):
 
     def test_config_round_trip_defaults(self):
         with tempfile.TemporaryDirectory() as d:
-            save_config(d, Config(organization="https://dev.azure.com/ORG", teams={"ALFA": {"count": "tasks"}},
-                                  name_aliases={"Maya Rao": "Maya R."}))
+            save_config(
+                d,
+                Config(
+                    organization="https://dev.azure.com/ORG",
+                    teams={"ALFA": {"count": "tasks"}},
+                    name_aliases={"Maya Rao": "Maya R."},
+                ),
+            )
             cfg = load_config(d)
         self.assertEqual(cfg.onboarding_sprints, 2)
-        self.assertEqual(cfg.not_delivered_reasons, ["Removed", "Won't Fix", "Won't Do", "Cut",
-                                                     "Duplicate", "Obsolete", "Deferred", "Abandoned"])
+        self.assertEqual(
+            cfg.not_delivered_reasons,
+            ["Removed", "Won't Fix", "Won't Do", "Cut", "Duplicate", "Obsolete", "Deferred", "Abandoned"],
+        )
         self.assertEqual(cfg.teams["ALFA"]["count"], "tasks")
         self.assertEqual(cfg.name_aliases, {"Maya Rao": "Maya R."})
 
@@ -94,7 +131,9 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(read_team(path), people)
 
     def test_parse_staff_drops_trailing_tag_in_parentheses(self):
-        pairs = parse_staff('Maya Rao (external) <maya@vendor.example>; "Doe, John (ext)" <jd@vendor.example>')
+        pairs = parse_staff(
+            'Maya Rao (external) <maya@vendor.example>; "Doe, John (ext)" <jd@vendor.example>'
+        )
         self.assertEqual(pairs, [("Maya Rao", "maya@vendor.example"), ("John Doe", "jd@vendor.example")])
 
     def test_count_accepts_a_type_list(self):
@@ -128,12 +167,18 @@ class ConfigTest(unittest.TestCase):
             local_tz("Nowhere/City")
 
     def test_manager_metrics_and_show_flow_defaults_and_resolution(self):
-        cfg, warnings = self.load({"teams": {"alfa": {"count": "stories"},
-                                             "BETA": {"count": "tasks", "metrics": [], "show_flow": False},
-                                             "GAMMA": {"metrics": ["po_satisfaction", "planned"], "show_flow": True}}})
+        cfg, warnings = self.load(
+            {
+                "teams": {
+                    "alfa": {"count": "stories"},
+                    "BETA": {"count": "tasks", "metrics": [], "show_flow": False},
+                    "GAMMA": {"metrics": ["po_satisfaction", "planned"], "show_flow": True},
+                }
+            }
+        )
         self.assertEqual(warnings, [])
         self.assertEqual(cfg.manager_metrics, list(DEFAULT_MANAGER_METRICS))
-        self.assertEqual(KNOWN_METRICS, DEFAULT_MANAGER_METRICS + ("po_satisfaction",))
+        self.assertEqual(KNOWN_METRICS, (*DEFAULT_MANAGER_METRICS, "po_satisfaction"))
         self.assertTrue(cfg.show_flow)
         # Case-insensitive lookup + inheritance
         self.assertEqual(metrics_of(cfg, "ALFA"), list(DEFAULT_MANAGER_METRICS))
@@ -148,15 +193,29 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(metrics_of(cfg, "GAMMA"), ["po_satisfaction", "planned"])
         self.assertTrue(show_flow_of(cfg, "GAMMA"))
         # Global overrides inherited by teams without explicit overrides
-        cfg2, _ = self.load({"manager_metrics": ["delivered", "build_time"], "show_flow": False,
-                             "teams": {"ALFA": {"count": "stories"}, "BETA": {"show_flow": True}}})
+        cfg2, _ = self.load(
+            {
+                "manager_metrics": ["delivered", "build_time"],
+                "show_flow": False,
+                "teams": {"ALFA": {"count": "stories"}, "BETA": {"show_flow": True}},
+            }
+        )
         self.assertEqual(metrics_of(cfg2, "ALFA"), ["delivered", "build_time"])
         self.assertFalse(show_flow_of(cfg2, "ALFA"))
         self.assertTrue(show_flow_of(cfg2, "BETA"))
 
     def test_invalid_metrics_and_show_flow_raise_value_error(self):
-        bad_metrics = [None, "planned", 123, {"planned": True}, [123], [{"x": 1}], [None],
-                       ["planned", "bogus"], ["planned", "delivered", "planned"]]
+        bad_metrics = [
+            None,
+            "planned",
+            123,
+            {"planned": True},
+            [123],
+            [{"x": 1}],
+            [None],
+            ["planned", "bogus"],
+            ["planned", "delivered", "planned"],
+        ]
         for bad in bad_metrics:
             with self.assertRaises(ValueError):
                 self.load({"manager_metrics": bad})

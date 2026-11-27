@@ -1,0 +1,39 @@
+default_install_hook_types: [pre-push]
+default_stages: [pre-push]
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.0  # pin exact tested revision; hook IDs match that revision
+    hooks:
+      - id: ruff
+        args: [ledger, scripts, tests]
+        pass_filenames: false
+        always_run: true
+      - id: ruff-format
+        args: [--check, ledger, scripts, tests]
+        pass_filenames: false
+        always_run: true
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0  # pinned <2.0 to retain --python-version 3.9 support
+    hooks:
+      - id: mypy
+        args: [--config-file=pyproject.toml, ledger]
+        pass_filenames: false
+        always_run: true
+
+  - repo: local
+    hooks:
+      - id: no-explaining-comments
+        name: no-explaining-comments (NEC001)
+        entry: python3 scripts/check_comments.py ledger scripts
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: unittest
+        name: unittest
+        entry: python3 -m unittest discover -s tests
+        language: system
+        pass_filenames: false
+        always_run: true

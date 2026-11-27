@@ -254,7 +254,7 @@ def _carry(t: dict) -> str:
     if not rows:
         return _tag("div", _tag("h3", "Carried over items (0)")
                     + _tag("p", "No work items carried over.", "note"), "carry-empty")
-    table = _table(["Work item", "Title", "Sprints carried", "Now in", "On Hold", "Reason",
+    table = _table(["Work item", "Title", "Sprints carried", "At sprint end", "On Hold", "Reason",
                     "Agreed with PO"], rows)
     return _fold("Carried over items (%d)%s" % (len(rows), " (%d On Hold)" % held if held else ""),
                  table)

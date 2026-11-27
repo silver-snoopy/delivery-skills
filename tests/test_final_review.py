@@ -128,62 +128,54 @@ class FinalReviewTest(unittest.TestCase):
         self.report()
         self.assertNotIn("private running context", self.pages["manager"])
 
-    def test_c1_unprefixed_carry_answer_stays_private(self):
+    def test_c1_carry_reason_uses_existing_name_warning(self):
         self.item(carry=True)
         self.report()
-        self.answer("Nia will check privately")
-        self.report()
-        self.assertNotIn("Nia will check", self.pages["manager"])
-        self.assertEqual(self.team["carry"][0]["agreed"], "unknown")
-
-    def test_c1_prefixed_carry_reason_uses_existing_name_warning(self):
-        self.item(carry=True)
-        self.report()
-        self.answer("unknown: Nia Birch will confirm")
+        self.answer("Nia Birch will confirm")
         out = self.report()
         self.assertEqual(self.team["carry"][0]["reason"], "Nia Birch will confirm")
         self.assertIn("Nia Birch will confirm", self.pages["manager"])
         self.assertIn("warning: manager file mentions Nia Birch", out)
 
-    def test_i1_resolved_open_carry_answer_survives_new_folder(self):
+    def test_i1_resolved_open_answer_survives_new_folder(self):
         carried = self.item(carry=True, active=True)
         carried.at("2026-11-07 09:00", iteration="Proj\\Cedar").at("2026-11-12 09:00")
         self.report()
-        self.answer("agreed: split after planning")
-        self.report()
-        self.assertEqual(self.saved()[0], "Resolved")
-        self.next_sprint(carried)
-        self.report("2026-11-24")
-        self.assertEqual(self.saved()[1]["answer"], "agreed: split after planning")
-        self.assertTrue(self.action()["worse"])
-        self.assertEqual(self.team["carry"][0]["agreed"], "unknown")
-
-    def test_i1_actions_open_carry_answer_survives_new_folder(self):
-        carried = self.item(carry=True, active=True).at("2026-11-07 09:00", iteration="Proj\\Cedar")
-        self.report()
-        self.answer("unknown: awaiting product decision")
+        self.answer("split after planning")
         self.report()
         self.assertEqual(self.saved()[0], "Actions")
         self.next_sprint(carried)
         self.report("2026-11-24")
-        self.assertEqual(self.saved()[1]["answer"], "unknown: awaiting product decision")
+        self.assertEqual(self.saved()[1]["answer"], "split after planning")
+        self.assertTrue(self.action()["worse"])
+        self.assertEqual(self.team["carry"][0]["reason"], "")
+
+    def test_i1_actions_open_carry_answer_survives_new_folder(self):
+        carried = self.item(carry=True, active=True).at("2026-11-07 09:00", iteration="Proj\\Cedar")
+        self.report()
+        self.answer("awaiting product decision")
+        self.report()
+        self.assertEqual(self.saved()[0], "Actions")
+        self.next_sprint(carried)
+        self.report("2026-11-24")
+        self.assertEqual(self.saved()[1]["answer"], "awaiting product decision")
         self.assertTrue(self.action()["worse"])
 
-    def test_minor_resolved_carry_preserves_answered_problem(self):
+    def test_minor_answered_carry_preserves_problem(self):
         self.item(carry=True, active=True).at("2026-11-07 09:00", iteration="Proj\\Cedar").at(
             "2026-11-12 09:00"
         )
         self.report()
         problem = self.saved()[1]["problem"]
-        self.answer("agreed: split after planning")
+        self.answer("split after planning")
         self.report()
-        self.assertEqual(self.saved()[0], "Resolved")
+        self.assertEqual(self.saved()[0], "Actions")
         self.assertEqual(self.saved()[1]["problem"], problem)
 
-    def test_i2_copied_carry_prints_action_and_agreement_question(self):
+    def test_i2_copied_carry_prints_action_and_carry_question(self):
         carried = self.item(carry=True, active=True).at("2026-11-07 09:00", iteration="Proj\\Cedar")
         self.report()
-        self.answer("agreed: continue after planning")
+        self.answer("continue after planning")
         self.report()
         self.next_sprint(carried)
         out = self.report("2026-11-24")
@@ -201,32 +193,31 @@ class FinalReviewTest(unittest.TestCase):
         self.assertIn("ALFA action: Nia Birch #202 On Hold ↑ -", out)
         self.assertEqual(self.saved()[1]["answer"], "supplier review booked")
 
-    def test_i3_padding_copied_answer_never_renews_agreement(self):
+    def test_i3_padding_copied_answer_never_renews_reason(self):
         carried = self.item(carry=True, active=True).at("2026-11-07 09:00", iteration="Proj\\Cedar")
         self.report()
-        self.answer("agreed: continue after planning")
+        self.answer("continue after planning")
         self.report()
         self.next_sprint(carried)
         self.report("2026-11-24")
         baseline = self.saved()[1]["answered"]
-        for padded in ("agreed: continue after planning    ", "  agreed:  continue\t after   planning    "):
+        for padded in ("continue after planning    ", "  continue\t after   planning    "):
             with self.subTest(padded=padded):
                 self.answer(padded)
                 self.report("2026-11-24")
-                self.assertEqual(self.team["carry"][0]["agreed"], "unknown")
+                self.assertEqual(self.team["carry"][0]["reason"], "")
                 self.assertTrue(self.action()["worse"])
                 self.assertEqual(self.saved()[1]["answered"], baseline)
                 self.assertEqual(self.saved()[1]["answer"], padded)
                 state = json.loads((self.notes_path.parent / ".notes-state.json").read_text())
-                self.assertEqual(state["teams"]["ALFA"]["i:202"]["answer"], "agreed: continue after planning")
+                self.assertEqual(state["teams"]["ALFA"]["i:202"]["answer"], "continue after planning")
 
-    def test_i3_whitespace_prefix_parses_without_changing_dm_text(self):
+    def test_i3_whitespace_collapses_for_reason_without_changing_dm_text(self):
         self.item(carry=True)
         self.report()
-        answer = "  not   agreed:  dependency\t review   pending   "
+        answer = "  dependency\t review   pending   "
         self.answer(answer)
         self.report()
-        self.assertEqual(self.team["carry"][0]["agreed"], "not agreed")
         self.assertEqual(self.team["carry"][0]["reason"], "dependency review pending")
         self.assertEqual(self.saved()[1]["answer"], answer)
 
@@ -292,22 +283,21 @@ class FinalReviewTest(unittest.TestCase):
         self.assertNotIn("#202 None", self.pages["dm"])
         self.assertNotIn("#202 None", self.notes_path.read_text(encoding="utf-8"))
 
-    def test_c1_same_closed_sprint_copy_keeps_agreement_but_no_manager_reason(self):
+    def test_c1_same_closed_sprint_copy_supplies_no_manager_reason(self):
         self.item(carry=True)
         self.report()
-        self.answer("agreed: defer until supplier delivery")
+        self.answer("defer until supplier delivery")
         self.report()
         (self.root / "reports" / "maple").rename(self.root / "reports" / "archive")
         self.report()
-        self.assertEqual(self.team["carry"][0]["agreed"], "agreed")
         self.assertEqual(self.team["carry"][0]["reason"], "")
         self.assertNotIn("defer until supplier delivery", self.pages["manager"])
-        self.assertEqual(self.saved()[1]["answer"], "agreed: defer until supplier delivery")
+        self.assertEqual(self.saved()[1]["answer"], "defer until supplier delivery")
 
     def test_c1_unchanged_now_answer_cannot_gain_carry_provenance(self):
         current = self.item()
         self.report()
-        self.answer("agreed: private checkpoint")
+        self.answer("private checkpoint")
         self.report()
         # Corrected board history makes the existing item a closed-sprint carry.
         # The DM has not changed the answer in response to that carry-over.
@@ -315,23 +305,22 @@ class FinalReviewTest(unittest.TestCase):
         current.rows[0]["iteration"] = "Proj\\Maple"
         current.at("2026-11-07 10:00", iteration="Proj\\Cedar")
         self.report()
-        self.assertEqual(self.team["carry"][0]["agreed"], "unknown")
         self.assertEqual(self.team["carry"][0]["reason"], "")
         self.assertNotIn("private checkpoint", self.pages["manager"])
-        self.answer("agreed: checkpoint renewed for carry-over")
+        self.answer("checkpoint renewed for carry-over")
         self.report()
         self.assertEqual(self.team["carry"][0]["reason"], "checkpoint renewed for carry-over")
 
     def test_c1_missing_state_does_not_infer_local_reason_from_visible_baseline(self):
         self.item(carry=True)
         self.report()
-        self.answer("unknown: private provenance uncertain")
+        self.answer("private provenance uncertain")
         self.report()
         (self.notes_path.parent / ".notes-state.json").unlink()
         self.report()
         self.assertEqual(self.team["carry"][0]["reason"], "")
         self.assertNotIn("provenance uncertain", self.pages["manager"])
-        self.assertEqual(self.saved()[1]["answer"], "unknown: private provenance uncertain")
+        self.assertEqual(self.saved()[1]["answer"], "private provenance uncertain")
 
     def test_minor_predecessor_warning_identifies_its_source_file(self):
         self.item(carry=True)
@@ -351,11 +340,11 @@ class FinalReviewTest(unittest.TestCase):
         self.board.items[0].rows[0]["changed"] = "2026-10-26T08:00:00Z"
         carried = self.item(carry=True, active=True).at("2026-11-07 09:00", iteration="Proj\\Cedar")
         self.report()
-        self.answer("agreed: split at supplier boundary")
+        self.answer("split at supplier boundary")
         self.report()
         self.next_sprint(carried)
         out = self.report("2026-11-24")
-        self.assertEqual(self.saved()[1]["answer"], "agreed: split at supplier boundary")
-        self.assertEqual(self.team["carry"][0]["agreed"], "unknown")
+        self.assertEqual(self.saved()[1]["answer"], "split at supplier boundary")
+        self.assertEqual(self.team["carry"][0]["reason"], "")
         self.assertIn("ALFA action: Nia Birch #202 Stuck ↑ -", out)
         self.assertIn("ALFA carry-over without note: #202 Retry manifest", out)

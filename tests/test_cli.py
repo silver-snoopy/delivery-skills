@@ -221,7 +221,7 @@ class CliTest(unittest.TestCase):
             notes_path = root / "reports" / "current" / "notes.md"
             inherited = saved_row("Actions")
             self.assertEqual(inherited["answer"], renewed)
-            next_answer = "unknown: review planned"
+            next_answer = "review planned"
             notes_path.write_text(
                 notes_path.read_text(encoding="utf-8").replace(renewed.replace("|", "\\|"), next_answer),
                 encoding="utf-8",
@@ -231,7 +231,7 @@ class CliTest(unittest.TestCase):
             self.assertTrue(pages["item"]["handled"])
             self.assertFalse(pages["item"]["worse"])
             self.assertIn('class="chip grey">Handled</span>', pages["dm"])
-            self.assertEqual(pages["item"]["kinds"], ["agreed"])
+            self.assertEqual(pages["item"]["kinds"], ["carry"])
             self.assertEqual(pages["item"]["level"], "amber")
             self.assertEqual(pages["item"]["sprint_path"], "Proj\\Current")
             next_baseline = saved_row("Actions")["answered"]
@@ -243,7 +243,7 @@ class CliTest(unittest.TestCase):
             self.assertFalse(pages["item"]["handled"])
             self.assertTrue(pages["item"]["worse"])
             self.assertEqual(pages["item"]["sprint_path"], "Proj\\Next")
-            self.assertEqual(pages["item"]["kinds"], ["agreed"])
+            self.assertEqual(pages["item"]["kinds"], ["carry"])
             self.assertEqual(pages["item"]["level"], "amber")
             self.assertIn("Carry-over ↑", pages["dm"])
             item_row = next(

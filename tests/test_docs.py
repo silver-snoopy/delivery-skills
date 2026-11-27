@@ -75,9 +75,6 @@ class DocsTest(unittest.TestCase):
                 "no names in them",
                 "Actions and Resolved",
                 "whitespace",
-                "agreed:",
-                "not agreed:",
-                "unknown:",
                 "Handled",
                 "↑",
                 "start of `--today`",
@@ -89,20 +86,20 @@ class DocsTest(unittest.TestCase):
                     self.assertIn(term, text, "Missing operator contract: " + term)
             self.assertNotRegex(text, r"T (?:summary|exec note|status|note):")
             self.assertNotIn("worsen do not print another action prompt", text)
+            for removed in ("`agreed:`", "`not agreed:`", "`unknown:`", "Agreed with PO", "PO agreement"):
+                with self.subTest(path=path.relative_to(ROOT), removed=removed):
+                    self.assertNotIn(removed, text)
 
     def test_carry_over_console_line_has_one_answer(self):
         for path in (ROOT / "AGENTS.md", SKILL, ROOT / "README.md", ROOT / "docs/design-v3.md"):
             text = path.read_text(encoding="utf-8")
             for term in (
                 "TEAM carry-over without note: #ID TITLE",
-                "no agreement answer yet",
+                "no reason answer yet",
                 "same item also has an `action:` line",
                 "Ask about it once",
                 "one answer",
                 "Answer cell",
-                "agreed:",
-                "not agreed:",
-                "unknown:",
             ):
                 with self.subTest(path=path.relative_to(ROOT), term=term):
                     self.assertIn(term, text, "Missing carry-over prompt rule: " + term)
@@ -122,7 +119,7 @@ class DocsTest(unittest.TestCase):
                 "confirm",
                 "summary bullets",
                 "For each printed action",
-                "Was carrying #ID over agreed with the PO?",
+                "Why was #ID carried over?",
                 "Anything to add for team",
                 "Answer cell",
                 "person EMAIL",

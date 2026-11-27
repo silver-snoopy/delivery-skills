@@ -31,7 +31,7 @@ bin/ledger person EMAIL                                                  # one e
 
 Without `--sprint`, `report` takes each team's own last ended sprint. When the teams' sprints have different names, the report is called `Sprints ended by DATE`. Reports go to `.delivery-skills/reports/<name>/`, with the name in kebab case (`sprint-29`, `sprints-ended-by-2026-11-07`). After editing `notes.md`, run `report --offline`: it re-renders from the cache in seconds, so only your notes change. Each run prints `data: cached board from TIME` or `data: fetched board at TIME`. A team with no sprint gets a card that says why. The private dm_ file is for the DM and team leads, never the customer. It shows the closed-sprint status and ours-vs-rest comparison, then running-sprint actions.
 
-Report prints the notes path and action prompts. Ask about each action and put the DM's answer in its Answer cell. For a carry-over, ask whether the PO agreed and why. Ask for optional notes per team. Add an executive note only if the DM asks for it. Propose summary bullets from the printed worked-on titles and have the DM confirm them. Rerun report, show every warning, and give the DM the two HTML paths. The DM reads manager_ before sending it.
+Report prints the notes path and action prompts. Ask about each action and put the DM's answer in its Answer cell. For a carry-over, ask why it was carried over. Ask for optional notes per team. Add an executive note only if the DM asks for it. Propose summary bullets from the printed worked-on titles and have the DM confirm them. Rerun report, show every warning, and give the DM the two HTML paths. The DM reads manager_ before sending it.
 
 ## Working with notes.md
 
@@ -64,23 +64,23 @@ Each team has a `# TEAM` heading and these sections, in this order:
 |---|---|---|---|---|
 ```
 
-Summary supplies Delivery highlights. Exec note appears in manager_ only. Note appears only in dm_. Status is blank for the computed closed-sprint status, or `GREEN|AMBER|RED - reason` for a manual override in dm_. Keep names out of Summary, Exec note and Status. Carry-over answers reach the manager_ file, so no names in them. A reason is shown only from a prefixed answer entered or changed in this folder on a carry-over row for the current closed sprint. Copied answers and running-only answers supply no manager reason. The reason is the text after the prefix and still passes through the manager name warning.
+Summary supplies Delivery highlights. Exec note appears in manager_ only. Note appears only in dm_. Status is blank for the computed closed-sprint status, or `GREEN|AMBER|RED - reason` for a manual override in dm_. Keep names out of Summary, Exec note and Status. Carry-over answers reach the manager_ file as Reason, so no names in them. A reason is shown only from an answer entered or changed in this folder on a carry-over row for the current closed sprint. Copied answers and running-only answers supply no manager reason. The reason still passes through the manager name warning.
 
 Answer is the only DM-owned cell in either table. Answered is tool-owned, as are Person, Work item and Problem. The tool rewrites those cells. Answered records the date, severity level and every signal kind present when the answer was observed. It uses display labels, for example `2026-11-16 amber Chase, Waiting`.
 
 Actions holds red and amber problems, including answered ones. On track, Done and grey rows are not listed there. When a problem goes away, an answered row moves to Resolved. If it returns, the row returns to Actions with its answer. The tool keeps the DM's Answer text and text sections. Malformed lines and unknown sections are kept with warnings. In table cells, escape a pipe as `\|` and a backslash as `\\`.
 
-Carry-over answers start with `agreed:`, `not agreed:` or `unknown:`, followed by the reason. Without a prefix, the answer counts as unknown for PO agreement. Other answers record what the DM agreed to do.
+Carry-over answers record why the item was carried over (no engineer names). Other answers record what the DM agreed to do.
 
-On rerun, an answered problem shows Handled unless it got worse. A higher level, a new signal kind or a new sprint while the item stays open makes it worse. Its badge then shows `↑`. Editing Answer resets its baseline on the next run. Editing Answered does not reset it; the tool repairs that cell. Answers change presentation, not figures, except that `agreed:` changes the closed-sprint PO agreement rule and status.
+On rerun, an answered problem shows Handled unless it got worse. A higher level, a new signal kind or a new sprint while the item stays open makes it worse. Its badge then shows `↑`. Editing Answer resets its baseline on the next run. Editing Answered does not reset it; the tool repairs that cell. Answers change presentation, not figures or status.
 
-A new folder carries notes forward per team. If the closed sprint is unchanged, all sections survive. If it changed, only answers for rows still open carry forward from Actions and Resolved; the other sections start empty. Copied answers do not renew PO agreement for a new closed sprint. They must be changed or re-entered. To re-enter identical text, clear Answer, run report, then enter the answer and run report again. Replacing it with identical text before a run does not renew it. Comparisons and prefix parsing strip and collapse whitespace; changing only whitespace does not renew agreement or reset the baseline. The DM's Answer text in the file is preserved.
+A new folder carries notes forward per team. If the closed sprint is unchanged, all sections survive. If it changed, only answers for rows still open carry forward from Actions and Resolved; the other sections start empty. Copied answers do not supply a carry-over reason for a new closed sprint. They must be changed or re-entered. To re-enter identical text, clear Answer, run report, then enter the answer and run report again. Replacing it with identical text before a run does not renew it. Comparisons strip and collapse whitespace; changing only whitespace does not renew a reason or reset the baseline. The DM's Answer text in the file is preserved.
 
 `--sprint` must name an ended sprint: its end must be before `--today`. A named past sprint suppresses the running view. Otherwise dm_ also shows each team's running sprint, if any. Its snapshot is the start of `--today` in the configured time zone (end of yesterday). The first-day planned snapshot is clamped to that instant. There is no running-sprint carry-over, forecast, burndown or RAG status. Manager_ contains only closed-sprint results and no per-person cells.
 
-Unanswered red and amber problems print as `TEAM action: PERSON #ID BADGE - PROBLEM`. Person-only actions omit `#ID`. Answered problems that worsen print `TEAM action: PERSON #ID BADGE ↑ - PROBLEM`. Carry-over rows with copied answers also print an action line because they have no agreement for this closed sprint. For each printed action, ask the DM again and write only their answer into the Answer cell.
+Unanswered red and amber problems print as `TEAM action: PERSON #ID BADGE - PROBLEM`. Person-only actions omit `#ID`. Answered problems that worsen print `TEAM action: PERSON #ID BADGE ↑ - PROBLEM`. Carry-over rows with copied answers also print an action line because they have no reason recorded for this closed sprint. For each printed action, ask the DM again and write only their answer into the Answer cell.
 
-`TEAM carry-over without note: #ID TITLE` names a carry-over with no agreement answer yet for this closed sprint, including one with a copied answer. The same item also has an `action:` line. Ask about it once and write one answer in that row's Answer cell. Start it with `agreed:`, `not agreed:` or `unknown:`, followed by the reason.
+`TEAM carry-over without note: #ID TITLE` names a carry-over with no reason answer yet for this closed sprint, including one with a copied answer. The same item also has an `action:` line. Ask about it once and write one answer in that row's Answer cell (no engineer names).
 
 ## Manager card
 
@@ -102,7 +102,7 @@ Scope changes and carry-over appear in one Scope line below the figures. Where t
 - Waiting is time in states you mark as waiting (or with the Blocked tag). More than 3 working days is a DM flag; more than 10 makes the status RED.
 - On Hold is the number of working days an item spent in a hold state (`hold_states`) or with the Blocked tag during the sprint. It is shown for context and never changes a figure.
 - Board history covers the last `history_days` days (default 200) and is kept in the cache. Every run fetches the cached items again, so an item that left the query keeps its real latest state; an item that is deleted or no longer readable is dropped, with a warning.
-- Status (DM file only) is GREEN at 80% delivered or more with no old, unagreed carry-over; AMBER if one condition is missed; RED if both are, or on a long wait. You can override it in the `## Status` section of `notes.md`.
+- Status (DM file only) is GREEN at 80% delivered or more with no carry-over older than P85 (or any carry-over when P85 is unavailable); AMBER if one condition is missed; RED if both are, or on a long wait. You can override it in the `## Status` section of `notes.md`.
 - Thresholds are fixed local conventions, not industry standards, and the footnote says so. Every figure depends on the board being kept up to date.
 
 ## Development

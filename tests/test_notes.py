@@ -175,7 +175,7 @@ class NotesTest(unittest.TestCase):
                 self.assertEqual(out["handled"], not expected)
 
     def test_resolved_grey_green_restore_and_reassignment(self):
-        self.save_text(markdown("agreed: split next sprint"))
+        self.save_text(markdown("split next sprint"))
         self.cycle(self.load())
         for level in ("green", "grey"):
             out = self.cycle(self.load(), [row(level=level, kinds=[], badge="OK")])[0]
@@ -183,30 +183,26 @@ class NotesTest(unittest.TestCase):
             n = self.load()
             self.assertFalse(n.teams["ALFA"]["Actions"])
             self.assertEqual(len(n.teams["ALFA"]["Resolved"]), 1)
-            self.assertEqual(
-                notes_for_team(n, "ALFA").items.get(81, ("unknown", "")), ("agreed", "split next sprint")
-            )
+            self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ""), "split next sprint")
         self.cycle(self.load(), [])
         out = self.cycle(self.load(), [row(person="Ben Example")])[0]
-        self.assertEqual(out["answer"], "agreed: split next sprint")
+        self.assertEqual(out["answer"], "split next sprint")
         self.assertTrue(out["handled"])
         self.assertFalse(self.load().teams["ALFA"]["Resolved"])
 
-    def test_agreement_prefixes_and_team_isolation(self):
+    def test_carry_reasons_and_team_isolation(self):
         for answer, expected in [
-            ("agreed: split", ("agreed", "split")),
-            ("not agreed: late", ("not agreed", "late")),
-            ("unknown: ask", ("unknown", "ask")),
-            ("chased: ask", ("unknown", "")),
+            ("split in refinement", "split in refinement"),
+            ("  blocked   on\tAPI  ", "blocked on API"),
         ]:
             with self.subTest(answer=answer):
-                n = parse_notes(markdown(answer) + markdown("unknown: other", team="BETA"))
+                n = parse_notes(markdown(answer) + markdown("other team reason", team="BETA"))
                 selected = {"ALFA": NEW, "BETA": NEW}
                 result = reconcile_notes(
                     n, dict(actions(row()), BETA=actions(row())["ALFA"]), selected, TODAY
                 )
-                self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", "")), expected)
-                self.assertEqual(notes_for_team(n, "BETA").items[81], ("unknown", "other"))
+                self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ""), expected)
+                self.assertEqual(notes_for_team(n, "BETA").items[81], "other team reason")
                 self.assertTrue(result["ALFA"]["rows"][0]["handled"])
 
     def test_person_identity_includes_badge(self):
@@ -251,24 +247,24 @@ class NotesTest(unittest.TestCase):
 
     def test_changed_sprint_only_open_action_answers_no_renewal_until_edit(self):
         old_folder = os.path.join(self.root, "old")
-        self.save_text(markdown("agreed: split", marker=OLD["path"]), old_folder)
+        self.save_text(markdown("split", marker=OLD["path"]), old_folder)
         old = load_report_notes(self.root, old_folder, {"ALFA": OLD}, [OLD, NEW], self.warnings.append)
         reconcile_notes(old, actions(row(sprint_path=OLD["path"])), {"ALFA": OLD}, date(2026, 11, 2))
         write_report_notes(old_folder, old)
         n = self.load()
         out = self.cycle(n)[0]
-        self.assertEqual(out["answer"], "agreed: split")
+        self.assertEqual(out["answer"], "split")
         self.assertTrue(out["worse"])
         self.assertFalse(out["handled"])
         self.assertFalse(n.summary.get("ALFA"))
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", ""))[0], "unknown")
+        self.assertNotIn(81, notes_for_team(n, "ALFA").items)
         out = self.cycle(self.load())[0]
         self.assertFalse(out["handled"])
-        self.assertEqual(notes_for_team(self.load(), "ALFA").items.get(81, ("unknown", ""))[0], "unknown")
-        self.save_text(self.read().replace("agreed: split", "agreed: renewed split"))
+        self.assertNotIn(81, notes_for_team(self.load(), "ALFA").items)
+        self.save_text(self.read().replace("split", "renewed split"))
         n = self.load()
         self.assertTrue(self.cycle(n)[0]["handled"])
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", ""))[0], "agreed")
+        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ""), "renewed split")
 
     def test_changed_sprint_copies_open_resolved_but_drops_closed_and_empty_rows(self):
         source = parse_notes(markdown("closed answer", marker=OLD["path"]))
@@ -405,29 +401,29 @@ class NotesTest(unittest.TestCase):
         self.assertTrue(out["handled"])
         self.assertEqual(out["answered"], "2026-11-17 red Chase, Waiting")
 
-    def test_edit_or_import_answer_when_row_is_absent_keeps_scoped_agreement(self):
-        self.save_text(markdown("agreed: split"))
+    def test_edit_or_import_answer_when_row_is_absent_keeps_scoped_reason(self):
+        self.save_text(markdown("split"))
         self.cycle(self.load(), [row(kinds=["carry"])])
         self.cycle(self.load(), [])
-        self.save_text(self.read().replace("agreed: split", "not agreed: revised"))
+        self.save_text(self.read().replace("split", "revised reason"))
         n = self.load()
         self.cycle(n, [])
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", "")), ("not agreed", "revised"))
-        # Loss of the sidecar still imports a valid visible baseline for a resolved carry.
+        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ""), "revised reason")
+        # Loss of the sidecar imports non-locally, so no manager reason is inferred.
         os.unlink(os.path.join(self.folder, ".notes-state.json"))
         n = self.load()
         self.cycle(n, [])
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", "")), ("not agreed", ""))
+        self.assertNotIn(81, notes_for_team(n, "ALFA").items)
 
-    def test_unknown_team_is_preserved_but_cannot_contribute_agreement(self):
-        self.save_text(markdown("agreed: unknown team", team="UNLISTED"))
+    def test_unknown_team_is_preserved_but_cannot_contribute_reason(self):
+        self.save_text(markdown("unknown team reason", team="UNLISTED"))
         n = load_report_notes(self.root, self.folder, {"UNLISTED": NEW}, [OLD, NEW], self.warnings.append)
         reconcile_notes(n, {"UNLISTED": actions(row())["ALFA"]}, {"UNLISTED": NEW}, TODAY)
         write_report_notes(self.folder, n)
         n = self.load()
         self.assertFalse(n.items)
         self.assertFalse(notes_for_team(n, "UNLISTED").items)
-        self.assertIn("agreed: unknown team", self.read())
+        self.assertIn("unknown team reason", self.read())
 
     def test_person_answer_survives_tool_owned_problem_edits(self):
         rows = [row(None, badge="No work", kinds=["none"], problem="No work")]
@@ -675,13 +671,13 @@ class NotesTest(unittest.TestCase):
                 self.assertEqual(result["ALFA"]["rows"][0]["answer"], "lent to spike")
                 self.assertTrue(result["ALFA"]["rows"][0]["handled"])
 
-    def test_current_unresolvable_marker_warns_preserves_text_and_does_not_grant_agreement(self):
-        self.save_text(markdown("agreed: imported", marker="unknown/path"))
+    def test_current_unresolvable_marker_warns_preserves_text_and_does_not_grant_reason(self):
+        self.save_text(markdown("imported reason", marker="unknown/path"))
         n = self.load()
         self.assertTrue(any("unknown/path" in w for w in self.warnings))
         self.assertEqual(n.note["ALFA"], "Private text")
         self.cycle(n)
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", ""))[0], "unknown")
+        self.assertNotIn(81, notes_for_team(n, "ALFA").items)
 
     def test_unknown_and_malformed_content_roundtrip_without_reconciliation(self):
         text = "# ALFA\n## Note\ntext  \n\nnext\n## Mystery\nline | raw\\x\n## Actions\n" + HEADER
@@ -694,18 +690,16 @@ class NotesTest(unittest.TestCase):
         self.assertEqual(n.note["ALFA"], "text  \n\nnext")
         self.assertIn("| Ada Example | invalid reference | raw | keep | data |", first)
 
-    def test_clear_then_reenter_same_copied_answer_renews_agreement(self):
-        self.save_text(markdown("agreed: split", marker=OLD["path"]), os.path.join(self.root, "old"))
+    def test_clear_then_reenter_same_copied_answer_renews_reason(self):
+        self.save_text(markdown("split", marker=OLD["path"]), os.path.join(self.root, "old"))
         n = self.load()
         self.assertTrue(self.cycle(n)[0]["worse"])
-        self.save_text(self.read().replace("agreed: split", ""))
+        self.save_text(self.read().replace("split", ""))
         self.assertFalse(self.cycle(self.load())[0]["handled"])
-        self.save_text(
-            self.read().replace("| Waiting for a slot |  |", "| Waiting for a slot | agreed: split |")
-        )
+        self.save_text(self.read().replace("| Waiting for a slot |  |", "| Waiting for a slot | split |"))
         n = self.load()
         self.assertTrue(self.cycle(n)[0]["handled"])
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", "")), ("agreed", "split"))
+        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ""), "split")
 
     def test_unmatched_prior_state_is_retained(self):
         self.save_text(markdown("answer"))
@@ -784,7 +778,6 @@ class NotesTest(unittest.TestCase):
     def test_answered_display_labels_roundtrip_all_distinct_signal_kinds(self):
         labels = {
             "old": "Chase",
-            "agreed": "PO agreement",
             "waiting": "Waiting",
             "stale": "No movement",
             "none": "No work",
@@ -866,8 +859,8 @@ class NotesTest(unittest.TestCase):
                 write_report_notes(folder, n)
                 self.assertEqual(result["ALFA"]["rows"][0]["answer"], "agreed: keep old agreement")
                 self.assertFalse(result["ALFA"]["rows"][0]["handled"])
-                self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", ""))[0], "unknown")
-                self.assertEqual(notes_for_team(n, "ALFA").items.get(82, ("unknown", ""))[0], "unknown")
+                self.assertNotIn(81, notes_for_team(n, "ALFA").items)
+                self.assertNotIn(82, notes_for_team(n, "ALFA").items)
                 self.assertEqual(
                     {r["answer"] for r in n.teams["ALFA"]["Resolved"]},
                     {"agreed: keep resolved", "keep person answer", "keep unmatched answer"},

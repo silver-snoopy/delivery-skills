@@ -237,7 +237,7 @@ def show_flow_of(cfg: Config, team: str) -> bool:
 
 @dataclass
 class Notes:
-    items: dict[int, tuple[str, str]] = field(default_factory=dict)
+    items: dict[int, str] = field(default_factory=dict)
     summary: dict[str, str] = field(default_factory=dict)
     note: dict[str, str] = field(default_factory=dict)
     exec_note: dict[str, str] = field(default_factory=dict)
@@ -270,16 +270,15 @@ _SECTION_GUIDE = {
     'minor UAT delay"',
     "Note": 'DM report only; names are fine. Example: "Agreed pairing on the payment flow next sprint."',
     "Status": 'Leave empty for the computed status. To override: "AMBER - reason" (GREEN, AMBER or RED).',
-    "Actions": "Open red and amber problems. Write only in Answer; the tool fills Answered. Carry-over: "
-    'start with "agreed:", "not agreed:" or "unknown:". Example: "agreed: PO moved it to next '
-    'sprint".',
+    "Actions": "Open red and amber problems. Write only in Answer; the tool fills Answered. "
+    'Carry-over answers reach the manager report as Reason (no engineer names). Example: "Waiting on '
+    'external API".',
     "Resolved": "Answered problems that went away. A row moves back to Actions if its problem returns.",
 }
 _STATUS = re.compile(r"^(GREEN|AMBER|RED)\s*(?:-\s*(.*))?$", re.I)
 _PO_SAT = re.compile(r"^([1-5])(?:\s*/\s*5)?(?:\s*[-–—]\s*(.*))?$")
 _KIND_LABELS = {
     "old": "Chase",
-    "agreed": "PO agreement",
     "waiting": "Waiting",
     "stale": "No movement",
     "none": "No work",
@@ -486,10 +485,10 @@ def _normal_answer(answer):
     return " ".join(answer.split())
 
 
-def _agreements(notes):
-    """Populate per-team and unambiguous global PO-agreement maps; ambiguous ids require notes_for_team."""
+def _reasons(notes):
+    """Populate per-team and unambiguous global carry-over reason maps; ambiguous ids require notes_for_team."""
     notes.items.clear()
-    owners: dict[int, list[tuple[str, str]]] = {}
+    owners: dict[int, list[str]] = {}
     for team, sec in notes.teams.items():
         sec["_items"] = {}
         if notes.reported is not None and team not in notes.reported:
@@ -499,19 +498,17 @@ def _agreements(notes):
             if row["id"] is None or not row["answer"]:
                 continue
             answer = _normal_answer(row["answer"])
-            match = re.match(r"^(agreed|not agreed|unknown):\s*(.*)$", answer, re.I | re.S)
             valid = (
                 meta.get("closed") == notes.markers.get(team)
                 and meta.get("date")
                 and _normal_answer(meta.get("answer", "")) == answer
                 and meta.get("carry")
+                and meta.get("local")
             )
             if not valid:
                 continue
-            reason = match[2] if match and meta.get("local") else ""
-            value = (match[1].lower() if match else "unknown", reason)
-            sec["_items"][row["id"]] = value
-            owners.setdefault(row["id"], []).append(value)
+            sec["_items"][row["id"]] = answer
+            owners.setdefault(row["id"], []).append(answer)
     notes.items.update({i: values[0] for i, values in owners.items() if len(values) == 1})
 
 
@@ -631,7 +628,7 @@ def load_report_notes(directory: str, folder: str, selected: dict, iterations: l
     notes.reported = set(selected)
     notes.po_history = po_history
     _values(notes)
-    _agreements(notes)
+    _reasons(notes)
     for message in notes.warnings:
         warn(message)
     return notes
@@ -663,7 +660,7 @@ def _observe(notes, team, key, saved, row, closed, today, copied):
         sprint_scope = (row or previous or {}).get("sprint_path", (previous or {}).get("sprint", closed))
     carry = (row or previous or {}).get("carry", False)
     if imported and baseline is not None:
-        carry = bool(set(baseline["kinds"]) & {"carry", "agreed"})
+        carry = "carry" in baseline["kinds"]
     return dict(
         baseline or {},
         answer=answer,
@@ -757,7 +754,7 @@ def reconcile_notes(
         if closed:
             notes.markers[team] = closed
     _values(notes)
-    _agreements(notes)
+    _reasons(notes)
     return actions
 
 

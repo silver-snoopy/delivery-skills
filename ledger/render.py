@@ -72,9 +72,9 @@ text-transform:uppercase;padding:6px 10px;border-bottom:1px solid var(--line)}
 td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 .id{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--accent);white-space:nowrap}
 .chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
-.GREEN,.yes{background:var(--good-soft);color:var(--good)}
-.AMBER,.unk{background:var(--warn-soft);color:var(--warn)}
-.RED,.no{background:var(--bad-soft);color:var(--bad)}.wait,.track{background:var(--accent-soft);color:var(--accent)}
+.GREEN{background:var(--good-soft);color:var(--good)}
+.AMBER{background:var(--warn-soft);color:var(--warn)}
+.RED{background:var(--bad-soft);color:var(--bad)}.wait,.track{background:var(--accent-soft);color:var(--accent)}
 .hot{color:var(--bad);font-weight:600}
 .red{background:var(--bad-soft);color:var(--bad)}.amber{background:var(--warn-soft);color:var(--warn)}
 .grey{background:var(--bg);color:var(--muted)}.green{background:var(--good-soft);color:var(--good)}
@@ -365,32 +365,31 @@ def _summary(text: str) -> str:
 
 
 def _carry(t: dict) -> str:
-    agreed = {"agreed": ("Yes", "yes"), "not agreed": ("No", "no")}
+    held = sum(1 for c in t["carry"] if c["held"])
     rows = []
     for c in t["carry"]:
-        word, cls = agreed.get(c["agreed"], ("Unknown", "unk"))
-        rows.append(
-            [
-                _tag("span", f"#{c['id']}", "id"),
-                escape(c["title"] or ""),
-                _tag("span", str(c["sprints"]), "hot" if c["sprints"] >= CARRIED_FLAG else ""),
-                _tag("span", escape(c["state"]), "chip wait") if c["waiting"] else escape(c["state"]),
-                _days(c["held"]) if c["held"] else "–",
-                escape(c["reason"]) or "–",
-                _tag("span", word, "chip " + cls),
-            ]
-        )
-    held = sum(1 for c in t["carry"] if c["held"])
+        row = [
+            _tag("span", f"#{c['id']}", "id"),
+            escape(c["title"] or ""),
+            _tag("span", str(c["sprints"]), "hot" if c["sprints"] >= CARRIED_FLAG else ""),
+            _tag("span", escape(c["state"]), "chip wait") if c["waiting"] else escape(c["state"]),
+        ]
+        if held:
+            row.append(_days(c["held"]) if c["held"] else "–")
+        row.append(escape(c["reason"]) or "–")
+        rows.append(row)
     if not rows:
         return _tag(
             "div",
             _tag("h3", "Carried over items (0)") + _tag("p", "No work items carried over.", "note"),
             "carry-empty",
         )
-    table = _table(
-        ["Work item", "Title", "Sprints carried", "At sprint end", "On Hold", "Reason", "Agreed with PO"],
-        rows,
+    head = (
+        ["Work item", "Title", "Sprints carried", "At sprint end"]
+        + (["On Hold"] if held else [])
+        + ["Reason"]
     )
+    table = _table(head, rows)
     held_suffix = f" ({held} On Hold)" if held else ""
     return _fold(f"Carried over items ({len(rows)}){held_suffix}", table)
 
@@ -471,7 +470,7 @@ def _footnote(dm: bool, teams: list[dict] | None = None) -> str:
         lines.append(
             f"<b>Status rule</b> (our convention, not an industry standard): GREEN = at least {round(GREEN_SHARE * 100)}% of "
             "planned work items delivered, not counting removed ones, and no carry-over older than the "
-            "team's P85 without PO agreement; AMBER = one condition missed; RED = both missed, or a "
+            "team's P85; AMBER = one condition missed; RED = both missed, or a "
             f"work item waiting (in a waiting state or blocked) for more than {WAIT_RED_DAYS} working days."
         )
         lines.append(
@@ -485,14 +484,14 @@ def _footnote(dm: bool, teams: list[dict] | None = None) -> str:
             f"over {WAIT_RED_DAYS} working days, or older than P85 and carried in; Waiting = waiting or Blocked "
             f"over {WAIT_FLAG_DAYS} working days; On Hold = in a hold state; Chase = older than P85; No movement "
             f"= no board change for {STALE_DAYS} working days; Not started = still Proposed after working "
-            f"day {NOT_STARTED_DAY}. Carry-over = no PO agreement or carried {CARRIED_FLAG}+ sprints (red when also older "
-            "than P85). No work = available, not onboarding, no open assignment; Too much WIP = "
-            f"over {WIP_FLAG} in progress; Nothing delivered = no delivery in the closed sprint. Check = "
-            "never active, reopened or shared; On track = open without a signal; Done = delivered "
+            f"day {NOT_STARTED_DAY}. Carry-over = planned item not delivered by sprint end (red when carried "
+            f"{CARRIED_FLAG}+ sprints and older than P85). No work = available, not onboarding, no open assignment; "
+            f"Too much WIP = over {WIP_FLAG} in progress; Nothing delivered = no delivery in the closed sprint. "
+            "Check = never active, reopened or shared; On track = open without a signal; Done = delivered "
             "in the running sprint. Handled = answered "
             "without worsening; ↑ = higher severity, a new signal kind or a new sprint since "
-            "the answer. Copied answers do not renew PO agreement; change or clear and re-enter "
-            "the Answer to renew it."
+            "the answer. Copied answers do not supply a carry-over reason for a new closed sprint; "
+            "change or clear and re-enter the Answer to update it."
         )
     else:
         enabled = (
@@ -927,8 +926,8 @@ def _pick(data, cfg, people, team_names, today, wanted) -> tuple:
 
 
 def run_report(args, client: Client | None, out) -> int:
-    """Generate manager_ and dm_ reports; always reconcile source signals without PO agreement
-    first so agreed rows keep a stable baseline across reruns."""
+    """Generate manager_ and dm_ reports; reconcile raw signals first so carry-over reasons stay
+    scoped to answers entered or changed in this folder."""
     cfg, people, data, vac, today, team_names = _load(args, client, out)
     if not cfg.test_states and any("first_pass" in metrics_of(cfg, team) for team in team_names):
         _warn(out, "no test states in config.json; first-time pass counts reopens only")

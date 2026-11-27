@@ -70,16 +70,14 @@ class ActionTests(unittest.TestCase):
         row = self.row(self.actions(b, prior=prior), 7101)
         self.assertEqual(
             row["problem"],
-            "waited in Ready for QA 29 working days; "
-            "carried over 3 sprints; 48 days old, squad P85 11 days; "
-            "no PO agreement recorded",
+            "waited in Ready for QA 29 working days; carried over 3 sprints; 48 days old, squad P85 11 days",
         )
         self.assertNotIn("#7101", row["problem"])
         self.assertNotIn(".;", row["problem"])
         self.assertEqual(row["problem"].count("P85"), 1)
         self.assertEqual(
             (row["level"], row["badge"], row["kinds"], row["age"]),
-            ("red", "Stuck", ["agreed", "carry", "old", "waiting"], 48),
+            ("red", "Stuck", ["carry", "old", "waiting"], 48),
         )
 
     def test_person_problems_omit_names_and_preserve_other_item_ids(self):
@@ -103,18 +101,14 @@ class ActionTests(unittest.TestCase):
             self.assertNotIn(row["person"], row["problem"])
             self.assertFalse(row["problem"].endswith("."))
 
-    def test_carry_agreement_fragments_preserve_explicit_po_answers(self):
-        for agreement, reason, expected in [
-            ("unknown", "", "carried over, no PO agreement recorded"),
-            ("unknown", "ask tomorrow", "carried over, PO agreement unknown"),
-            ("not agreed", "scope changed", "carried over, not agreed with the PO"),
-        ]:
-            with self.subTest(agreement=agreement, reason=reason):
-                b = board()
-                b.item(1).at("2026-10-19 09:00", iteration=OLD, assigned=ADA)
-                prior = closed(b, Notes(items={1: (agreement, reason)}))
-                row = self.row(self.actions(b, prior=prior, running=False), 1)
-                self.assertEqual(row["problem"], expected)
+    def test_single_sprint_carry_problem_wording(self):
+        b = board()
+        b.item(1).at("2026-10-19 09:00", iteration=OLD, assigned=ADA)
+        prior = closed(b)
+        row = self.row(self.actions(b, prior=prior, running=False), 1)
+        self.assertEqual(row["problem"], "carried over")
+        self.assertEqual(row["badge"], "Carry-over")
+        self.assertEqual(row["kinds"], ["carry"])
 
     def test_singular_counts_in_action_fragments(self):
         cases = [
@@ -165,19 +159,6 @@ class ActionTests(unittest.TestCase):
         b = board()
         item(b, 1, state="On Hold", category="InProgress")
         self.assertEqual(self.row(self.actions(b, "2026-11-04"), 1)["problem"], "On Hold 1 working day")
-
-    def test_changed_agreement_template_keeps_detail_without_crashing(self):
-        self.assertEqual(
-            metrics._action_problem(
-                dict(
-                    id=1,
-                    person="Ada Vale",
-                    kinds=["agreed"],
-                    problem="#1 was carried over pending a new PO decision.",
-                )
-            ),
-            "carried over, pending a new PO decision",
-        )
 
     def test_shared_fragment_preserves_team_names(self):
         self.assertEqual(
@@ -441,7 +422,7 @@ class ActionTests(unittest.TestCase):
         item(b, 2, state="Active").at("2026-11-09 09:00")
         # A running delivery must not raise the closed-window threshold.
         item(b, 3, state="Active").at("2026-11-09 09:00", state="Closed")
-        prior = closed(b, Notes(items={1: ("agreed", "split")}))
+        prior = closed(b, Notes(items={1: "split"}))
         a = self.actions(b, prior=prior)
         self.assertEqual((self.row(a, 1)["level"], self.row(a, 1)["badge"]), ("red", "Stuck"))
         self.assertEqual(self.row(a, 2)["badge"], "Chase")
@@ -463,15 +444,15 @@ class ActionTests(unittest.TestCase):
         r = self.row(self.actions(b, prior=prior), 1)
         self.assertEqual((r["level"], r["badge"], r["carry"]), ("red", "Stuck", False))
 
-    def test_quiet_agreed_carry_keeps_membership_without_a_signal(self):
+    def test_single_sprint_carry_merges_into_running_action_table(self):
         b = board()
         b.item(1).at("2026-10-19 09:00", iteration=OLD, assigned=ADA).at(
             "2026-11-09 09:00", iteration=NOW, state="Active"
         )
-        prior = closed(b, Notes(items={1: ("agreed", "continue")}))
+        prior = closed(b, Notes(items={1: "continue"}))
         self.assertEqual([c["id"] for c in prior["carry"]], [1])
         r = self.row(self.actions(b, prior=prior), 1)
-        self.assertEqual((r["badge"], r["kinds"], r["carry"]), ("On track", [], True))
+        self.assertEqual((r["badge"], r["kinds"], r["carry"]), ("Carry-over", ["carry"], True))
 
     def test_earlier_outside_work_does_not_make_new_ours_item_stuck(self):
         b = board()
@@ -484,7 +465,7 @@ class ActionTests(unittest.TestCase):
         r = self.row(self.actions(b, prior=closed(b)), 1)
         self.assertEqual((r["level"], r["badge"]), ("amber", "Chase"))
 
-    def test_merge_unagreed_carry_and_retention_of_all_kinds(self):
+    def test_merge_carry_and_retention_of_all_kinds(self):
         b = board()
         b.item(1).at("2026-10-19 09:00", iteration=OLD, assigned=ADA, state="Active").at(
             "2026-11-02 09:00", iteration=NOW, state="Ready for QA"
@@ -492,11 +473,11 @@ class ActionTests(unittest.TestCase):
         a = self.actions(b, prior=closed(b))
         rows = [r for r in a["rows"] if r["id"] == 1]
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["kinds"], ["agreed", "waiting"])
+        self.assertEqual(rows[0]["kinds"], ["carry", "waiting"])
         self.assertTrue(rows[0]["carry"])
         self.assertIn("; ", rows[0]["problem"])
         self.assertIn("Raise it with the PO.", rows[0]["ask"])
-        self.assertIn("Confirm with the PO", rows[0]["ask"])
+        self.assertIn("Record why it was carried over", rows[0]["ask"])
 
     def test_closed_only_maps_flags_and_retains_people_without_rows(self):
         b = board()
@@ -612,7 +593,7 @@ class ActionTests(unittest.TestCase):
             "2026-10-19 09:00", iteration=OLD
         )
         prior = metrics.team_sprint(
-            b.cache(), config(), PEOPLE, "ALFA", b.sprints[-1], Notes(items={1: ("agreed", "split")}), {}
+            b.cache(), config(), PEOPLE, "ALFA", b.sprints[-1], Notes(items={1: "split"}), {}
         )
         a = self.actions(b, prior=prior, running=False)
         self.assertEqual(self.row(a, 1)["badge"], "Carry-over")
@@ -620,7 +601,7 @@ class ActionTests(unittest.TestCase):
             "2026-10-07 09:00", state="Closed"
         )
         prior = metrics.team_sprint(
-            b.cache(), config(), PEOPLE, "ALFA", b.sprints[-1], Notes(items={1: ("agreed", "split")}), {}
+            b.cache(), config(), PEOPLE, "ALFA", b.sprints[-1], Notes(items={1: "split"}), {}
         )
         a = self.actions(b, prior=prior, running=False)
         self.assertEqual((self.row(a, 1)["level"], self.row(a, 1)["badge"]), ("red", "Carry-over"))

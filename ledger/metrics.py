@@ -566,7 +566,7 @@ ASK = {
     "old": "Ask what is blocking it.",
     "held": "Ask what is blocking it.",
     "not_started": "Ask what is blocking it.",
-    "agreed": "Confirm with the PO and record it in notes.md.",
+    "carry": "Record why it was carried over in notes.md.",
     "waiting": "Raise it with the PO.",
     "stale": "Ask whether it is moving and the board is behind, or it is stuck.",
     "none": "Find out what they worked on; if it was off-board work, add it to notes.md.",
@@ -580,7 +580,6 @@ _LEVELS = ("red", "amber", "grey", "green")
 _BADGES = {
     "old": "Chase",
     "carry": "Carry-over",
-    "agreed": "Carry-over",
     "waiting": "Waiting",
     "held": "On Hold",
     "stale": "No movement",
@@ -660,12 +659,8 @@ def _attention(
                 c["id"],
                 kind="carry",
             )
-        if c["agreed"] != "agreed":
-            if c["agreed"] == "not agreed":
-                why = "and was not agreed with the PO"
-            else:
-                why = "and whether the PO agreed is unknown" if c["reason"] else "with no note in notes.md"
-            add("amber", "agreed", f"#{c['id']} was carried over {why}.", c["id"])
+        else:
+            add("amber", "carry", f"#{c['id']} was carried over.", c["id"])
     for i, age in sorted(open_ages.items()):
         if old(age) and i not in red_carry:
             add("amber", "old", f"#{i} is {age} days old, older than the squad's P85 of {p85} days.", i)
@@ -712,7 +707,7 @@ def _attention(
 def _status(
     f: dict, carry: list[dict], p85: int | None, waits: dict[int, tuple], manual: tuple | None
 ) -> dict:
-    """GREEN/AMBER/RED by planned delivery share and unagreed carry-overs (all carry-overs when P85 is unavailable)."""
+    """GREEN/AMBER/RED by planned delivery share and old carry-overs (all carry-overs when P85 is unavailable)."""
     if manual is not None:
         return {"colour": manual[0], "reason": manual[1], "manual": True}
     denom = len(f["planned"]) - len(f["removed"])
@@ -729,35 +724,25 @@ def _status(
         ]
     if p85 is None:
         parts.append(f"too few finished work items in the last {TREND} sprints to judge age")
-        old, kind = [c["id"] for c in carry], "carry-over"
+        old = [c["id"] for c in carry]
     else:
         old = [c["id"] for c in carry if c["age"] is not None and c["age"] > p85]
-        kind = "old carry-over"
-    bad = [c["id"] for c in carry if c["id"] in old and c["agreed"] != "agreed"]
     many = len(old) > 1
     if not old:
         if p85 is not None:
             parts.append("no carry-over is older than the squad's P85")
-    elif not bad:
+    elif p85 is None:
         qty = len(old) if many else "one"
-        verb = "were" if many else "was"
-        parts.append(f"the {qty} {kind}{'s' if many else ''} ({_ids(old)}) {verb} agreed with the PO")
-    elif len(bad) == len(old):
+        parts.append(f"{qty} carry-over{'s' if many else ''} ({_ids(old)})")
+    else:
         qty = len(old) if many else "one"
         verb = "are" if many else "is"
-        parts.append(
-            f"the {qty} {kind}{'s' if many else ''} ({_ids(old)}) {verb} not recorded as agreed with the PO"
-        )
-    else:
-        verb = "are" if len(bad) > 1 else "is"
-        parts.append(
-            f"{len(bad)} of {len(old)} {kind}s ({_ids(bad)}) {verb} not recorded as agreed with the PO"
-        )
+        parts.append(f"{qty} carry-over{'s' if many else ''} ({_ids(old)}) {verb} older than the squad's P85")
     long_waits = [(i, d) for i, (_, d) in sorted(waits.items()) if d > WAIT_RED_DAYS]
     parts += [
         f"#{i} has been waiting (in a waiting state or blocked) for {d} working days" for i, d in long_waits
     ]
-    met = (share >= GREEN_SHARE) + (not bad)
+    met = (share >= GREEN_SHARE) + (not old)
     colour = "RED" if long_waits or met == 0 else ("GREEN" if met == 2 else "AMBER")
     return {"colour": colour, "reason": "; ".join(parts) + ".", "manual": False}
 
@@ -799,7 +784,6 @@ def team_sprint(
         if row is None:
             continue
         fa = h.first_active
-        agreed, reason = notes.items.get(i, ("unknown", ""))
         carry.append(
             {
                 "id": i,
@@ -808,8 +792,7 @@ def team_sprint(
                 "sprints": sum(1 for g in figs.values() if i in g["open"]),
                 "state": row["state"],
                 "waiting": row["state"] in cfg.waiting_states,
-                "agreed": agreed,
-                "reason": reason,
+                "reason": notes.items.get(i, ""),
                 "held": t.held_days(h, sprint),
             }
         )
@@ -1134,18 +1117,6 @@ def _action_problem(row: dict) -> str:
     subject = f"#{row['id']} " if row["id"] is not None else row["person"] + " "
     for sentence in str(row["problem"]).split("; "):
         text: str = sentence.removeprefix(subject).removesuffix(".")
-        if text.startswith("was carried over "):
-            agreement = {
-                "with no note in notes.md": "no PO agreement recorded",
-                "and whether the PO agreed is unknown": "PO agreement unknown",
-                "and was not agreed with the PO": "not agreed with the PO",
-            }
-            detail = text.removeprefix("was carried over ")
-            text = agreement.get(detail, detail)
-            if "carry" not in row["kinds"]:
-                text = "carried over, " + text
-            fragments.append((3, text))
-            continue
         if row["id"] is None and row["kinds"] in (["none"], ["nothing"]):
             available = text.split(" available days", 1)[0].split(" ", 1)[1]
             if row["kinds"] == ["nothing"]:
@@ -1169,7 +1140,7 @@ def _action_problem(row: dict) -> str:
         for fragment in filter(None, text.split("; ")):
             rank = (
                 1
-                if fragment.startswith("carried over ")
+                if fragment == "carried over" or fragment.startswith("carried over ")
                 else 2
                 if re.match(r"\d+ days? old,", fragment)
                 else 0
@@ -1273,13 +1244,8 @@ def team_actions(
     )
     open_ids = {h.id for h in opened}
     if closed:
-        eligible = {
-            i
-            for i, c in carry.items()
-            if c["agreed"] != "agreed" or (p85 is not None and c["age"] is not None and c["age"] > p85)
-        }
         for signal in closed["attention"]:
-            if not running or (signal["id"] in eligible and signal["kind"] in ("carry", "agreed", "old")):
+            if not running or (signal["id"] in carry and signal["kind"] in ("carry", "old")):
                 value = dict(signal)
                 if running and signal["id"] in open_ids and signal["kind"] in ("old", "carry"):
                     i = signal["id"]

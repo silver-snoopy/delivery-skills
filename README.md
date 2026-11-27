@@ -114,6 +114,6 @@ pre-commit install --install-hooks
 pre-commit run --all-files --hook-stage pre-push
 ```
 
-This runs Ruff linting and formatting (`ruff`, `ruff-format --check`), `mypy` (`ledger/`), the `no-explaining-comments` (`NEC001`) check (`ledger/` and `scripts/`), and `unittest`.
+This runs Ruff linting and formatting (`ruff`, `ruff-format --check`), `mypy` (`ledger/`), and `unittest`.
 
 Per-person reporting on employees may be subject to local law, data protection rules and works-council agreements; the operator is responsible for checking what is allowed. A licence has not been chosen yet; until one is added, this project must not be redistributed.

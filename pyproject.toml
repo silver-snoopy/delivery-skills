@@ -18,8 +18,6 @@ allowed-confusables = ["–", "−", "’", "“", "”"]
 "ledger/xlsx.py" = ["S314"]
 # Test assertions are standard in unittest suites.
 "tests/*.py" = ["S101"]
-# Invokes [sys.executable, check_comments.py, ...] to test the checker CLI end-to-end.
-"tests/test_comments.py" = ["S603"]
 # Invokes ["git", "ls-files"] to scan tracked repository files.
 "tests/test_docs.py" = ["S603", "S607"]
 

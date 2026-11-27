@@ -146,7 +146,7 @@ class SprintFigureTests(unittest.TestCase):
         ).at("2026-10-26 09:00", iteration=S29).at("2026-11-04 09:00", state="Ready for QA")
         b.item(602).at("2026-10-27 09:00", iteration=S29, assigned=IVAN)
         notes = Notes(
-            items={601: ("agreed", "QA environment down")},
+            items={601: "QA environment down"},
             summary={"Alfa": "Upload work"},
             exec_note={"ALFA": "On track"},
         )
@@ -161,7 +161,6 @@ class SprintFigureTests(unittest.TestCase):
                     "sprints": 2,
                     "state": "Ready for QA",
                     "waiting": True,
-                    "agreed": "agreed",
                     "reason": "QA environment down",
                     "held": 0,
                 },
@@ -172,7 +171,6 @@ class SprintFigureTests(unittest.TestCase):
                     "sprints": 1,
                     "state": "New",
                     "waiting": False,
-                    "agreed": "unknown",
                     "reason": "",
                     "held": 0,
                 },
@@ -496,7 +494,7 @@ class SprintFigureTests(unittest.TestCase):
         )
         self.assertEqual(first["rest"]["delivered"], 1)
         self.assertEqual([p["delivered"] for p in first["people"]], [[], [1, 10]])
-        self.assertEqual([a["level"] for a in first["attention"]], ["red"] + ["amber"] * 3)
+        self.assertEqual([a["level"] for a in first["attention"]], ["red"] + ["amber"] * 2)
         self.assertEqual(first["status"]["colour"], "RED")
         # a later close on S29's path would change the figures (credit by iteration at close,
         # see test_credit_by_iteration_at_close_and_late); nothing else after the end does

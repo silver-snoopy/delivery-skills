@@ -261,7 +261,9 @@ class ManagerWindowTest(unittest.TestCase):
             ],
         )
         self.assertIn('<div class="fig key"><span class="n">', page)
-        trend_html = page.split("<summary>Last 2 sprints</summary>")[1].split("</details>")[0]
+        trend_html = page.split("<summary>Delivery stats per sprint (last 2 sprints)</summary>")[1].split(
+            "</details>"
+        )[0]
         row_labels = re.findall(r"<tr><td>([^<]+)</td>", trend_html)
         self.assertEqual(
             row_labels,
@@ -618,7 +620,7 @@ class RenderTest(unittest.TestCase):
         page = text(render_manager("Sprint 29", teams(NOTES), GEN))
         self.assertNotIn("AMBER", page)
         self.assertIn("build time, median (last 3 sprints)", page)
-        self.assertIn("Last 2 sprints Sprint 28 Sprint 29", page)
+        self.assertIn("Delivery stats per sprint (last 2 sprints) Sprint 28 Sprint 29", page)
 
     def test_dm_starts_with_internal_marker_and_notes_before_comparison(self):
         page = render_dm("Sprint 29", teams(NOTES), GEN)
@@ -665,15 +667,25 @@ class RenderTest(unittest.TestCase):
             "1 work item carried over",
             "<summary>Delivered items (2)</summary>",
             "<summary>Carried over items (1)</summary>",
-            "<summary>Last 2 sprints</summary>",
+            "<summary>Delivery stats per sprint (last 2 sprints)</summary>",
         ]
         self.assertEqual([card.index(o) for o in order], sorted(card.index(o) for o in order))
         self.assertIn(
             '<span class="cap">Sprint 29 (27 Oct – 7 Nov 2026)<br>2 engineers (18 PD capacity)</span>', card
         )
-        for absent in ("Counts:", "GREEN", "AMBER", "RED", "Worked on", "worked on", "Age", "Now in"):
+        for absent in (
+            "Counts:",
+            "GREEN",
+            "AMBER",
+            "RED",
+            "Worked on",
+            "worked on",
+            "Age",
+            "Now in",
+            "Agreed with PO",
+        ):
             self.assertNotIn(absent, card)
-        self.assertIn("<th>At sprint end</th>", card)
+        self.assertIn("<th>Times carried</th><th>At sprint end</th><th>On Hold</th><th>Reason</th>", card)
         self.assertIn("<td>Planned</td>", card)
 
     def test_manager_card_without_summary_has_no_highlights(self):
@@ -708,17 +720,45 @@ class RenderTest(unittest.TestCase):
             "Upload is live.",
             '<div class="figs">',
             "Carried over",
-            "Last 2 sprints",
+            "Delivery stats per sprint",
         ):
             self.assertNotIn(absent, card)
 
     def test_carry_and_person_show_days_on_hold(self):
         t = teams()
+        page_without_hold = render_manager("Sprint 29", t, GEN)
+        self.assertNotIn("Agreed with PO", page_without_hold)
+        self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", page_without_hold)
+        self.assertIn("<td>Active</td><td>–</td><td>–</td></tr>", page_without_hold)
         t[0]["carry"][0]["held"] = 3
-        t[0]["people"][0]["held"] = [[103, 3], [7, 1]]
-        self.assertIn(
-            "<summary>Carried over items (1) (1 On Hold)</summary>", render_manager("Sprint 29", t, GEN)
+        t[0]["carry"][0]["sprints"] = 2
+        t[0]["carry"].append(
+            dict(
+                t[0]["carry"][0],
+                id=109,
+                title="Sibling carry",
+                state="Ready for QA",
+                waiting=True,
+                held=0,
+                reason="API delay",
+            )
         )
+        t[0]["people"][0]["held"] = [[103, 3], [7, 1]]
+        page_with_hold = render_manager("Sprint 29", t, GEN)
+        self.assertIn("<summary>Carried over items (2) (1 On Hold)</summary>", page_with_hold)
+        alfa_card = self.card(page_with_hold, "ALFA")
+        beta_card = self.card(page_with_hold, "BETA")
+        self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", alfa_card)
+        self.assertIn("<td>2</td><td>Active</td><td>3 d</td><td>–</td>", alfa_card)
+        self.assertIn("<td>Ready for QA</td><td>–</td><td>API delay</td>", alfa_card)
+        self.assertNotIn("chip wait", alfa_card)
+        self.assertNotIn('class="hot"', alfa_card)
+        self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", beta_card)
+        self.assertNotIn("Agreed with PO", page_with_hold)
+        dm_page = render_dm("Sprint 29", t, GEN)
+        self.assertIn("(or no carry-over when P85 is unavailable)", dm_page)
+        self.assertIn("unfinished planned item still on a sprint at sprint end", dm_page)
+        self.assertNotIn("PO agreement", dm_page)
         for render in (render_manager, render_dm):
             self.assertIn(
                 "On Hold = days the work item spent in a hold state or tagged Blocked",
@@ -757,7 +797,11 @@ class RenderTest(unittest.TestCase):
             self.assertIn("Retry &amp; reconcile", page)
         t = teams()
         t[0]["worked_on"] = [["<b>x</b>", 1]]
-        self.assertIn("&lt;b&gt;x&lt;/b&gt;", render_manager("Sprint 29", t, GEN))
+        t[0]["carry"][0]["reason"] = "<script>x</script> & delay"
+        escaped_manager = render_manager("Sprint 29", t, GEN)
+        self.assertIn("&lt;b&gt;x&lt;/b&gt;", escaped_manager)
+        self.assertIn("&lt;script&gt;x&lt;/script&gt; &amp; delay", escaped_manager)
+        self.assertNotIn("<script>x</script>", escaped_manager)
 
     def test_no_script_tags_or_external_urls(self):
         for render in (render_manager, render_dm):
@@ -881,7 +925,7 @@ class RenderTest(unittest.TestCase):
         )
         row = next(r for r in t["actions"]["rows"] if r["id"] == 7101)
         expected = (
-            "Raise it with the PO. Ask what is blocking it. Confirm with the PO and record it in notes.md."
+            "Raise it with the PO. Ask what is blocking it. Record why it was carried over in notes.md."
         )
         self.assertEqual(row["ask"], expected)
         page = render_dm("Old", [t], GEN).split('<div class="foot">')[0]
@@ -1079,23 +1123,24 @@ class RunReportTest(unittest.TestCase):
         self.assertEqual(state, self.read_report(".notes-state.json", "sprint-28"))
         self.assertIn("Handled", second)
 
-    def test_duplicate_item_ids_use_each_teams_agreement(self):
+    def test_duplicate_item_ids_use_each_teams_carry_reason(self):
         b = Board().sprint("Sprint 29", "2026-10-27", "2026-11-07")
         b.item(10).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active")
         b.item(11, "Task", parent=10).at("2026-10-27 09:00", iteration=S29, assigned=LENA, state="Active")
         self.edit(CACHE_FILE, lambda t: json.dumps(b.cache()))
         self.edit("config.json", lambda t: t.replace('"tasks"', '"stories"'))
         self.write_notes(
-            "# ALFA\n## Actions\n| Maya Brook | #10 Item | carry | agreed: split | |\n"
-            "# BETA\n## Actions\n| Lena Ford | #10 Item | carry | not agreed: chase | |\n"
+            "# ALFA\n## Actions\n| Maya Brook | #10 Item | carry | split in refinement | |\n"
+            "# BETA\n## Actions\n| Lena Ford | #10 Item | carry | blocked on pricing API | |\n"
         )
         code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
         self.assertEqual(code, 0, out)
         page = self.read_report("manager_2026-11-13.html")
         alfa = next(a for a in re.findall(r"(?s)<article.*?</article>", page) if "<h2>ALFA</h2>" in a)
         beta = next(a for a in re.findall(r"(?s)<article.*?</article>", page) if "<h2>BETA</h2>" in a)
-        self.assertIn('class="chip yes">Yes', alfa)
-        self.assertIn('class="chip no">No', beta)
+        self.assertIn("<td>split in refinement</td>", alfa)
+        self.assertIn("<td>blocked on pricing API</td>", beta)
+        self.assertNotIn("Agreed with PO", page)
         self.assertNotIn("carry-over without note: #10", out)
 
     def test_missing_closed_team_keeps_existing_note_and_running_answer(self):
@@ -1139,10 +1184,8 @@ class RunReportTest(unittest.TestCase):
         self.assertNotIn("Legacy highlights.", self.read_report("manager_2026-11-13.html"))
         self.assertIn("notes.md", out)
 
-    def test_agreement_refresh_does_not_rebase_or_loop_on_rerun(self):
-        self.write_notes(
-            "# BETA\n## Actions\n| Lena Ford | #304 Item 304 | carry | agreed: split later | |\n"
-        )
+    def test_carry_reason_refresh_does_not_rebase_or_loop_on_rerun(self):
+        self.write_notes("# BETA\n## Actions\n| Lena Ford | #304 Item 304 | carry | split later | |\n")
         results = []
         for _ in range(3):
             code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
@@ -1150,15 +1193,14 @@ class RunReportTest(unittest.TestCase):
             dm = self.read_report("dm_2026-11-13.html")
             action_card = dm.split('<div class="foot">')[0]
             beta = action_card.split("<h2>BETA")[1]
-            self.assertNotIn("no PO answer", beta)
-            self.assertNotIn("not recorded as agreed", text(dm).split("BETA")[-1])
+            self.assertIn('class="chip grey">Handled</span>', beta)
             self.assertNotIn("BETA action:", out)
             results.append((self.read_report("notes.md"), self.read_report(".notes-state.json")))
         self.assertEqual(results[0], results[1])
         self.assertEqual(results[1], results[2])
-        self.assertIn("agreed: split later", results[0][0])
+        self.assertIn("split later", results[0][0])
 
-    def test_agreement_only_signal_resolves_and_copied_answer_cannot_renew_it(self):
+    def test_carry_reason_handled_and_copied_answer_cannot_supply_next_sprint_reason(self):
         b = Board().sprint("Sprint 29", "2026-10-27", "2026-11-07")
         carry = (
             b.item(10)
@@ -1169,38 +1211,36 @@ class RunReportTest(unittest.TestCase):
             "2026-11-04 09:00", state="Closed"
         )
         self.edit(CACHE_FILE, lambda t: json.dumps(b.cache()))
-        self.write_notes("# ALFA\n## Actions\n| Maya Brook | #10 Item 10 | carry | agreed: split | |\n")
+        self.write_notes("# ALFA\n## Actions\n| Maya Brook | #10 Item 10 | carry | split in refinement | |\n")
         results = []
         for _ in range(3):
             code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
             self.assertEqual(code, 0, out)
             dm = self.read_report("dm_2026-11-13.html")
-            self.assertNotIn("#10", dm.split('<div class="foot">')[0])
+            self.assertIn('class="chip grey">Handled</span>', dm.split('<div class="foot">')[0])
             self.assertNotIn("carry-over without note: #10", out)
+            self.assertIn("<td>split in refinement</td>", self.read_report("manager_2026-11-13.html"))
             saved = parse_notes(self.read_report("notes.md"))
-            self.assertFalse(any(r["id"] == 10 for r in saved.teams["ALFA"]["Actions"]))
             self.assertTrue(
-                any(r["id"] == 10 and r["answer"] == "agreed: split" for r in saved.teams["ALFA"]["Resolved"])
+                any(
+                    r["id"] == 10 and r["answer"] == "split in refinement"
+                    for r in saved.teams["ALFA"]["Actions"]
+                )
             )
             results.append((self.read_report("notes.md"), self.read_report(".notes-state.json")))
         self.assertEqual(results[0], results[1])
         self.assertEqual(results[1], results[2])
-        # Changed closed sprint copies open Actions answers. Bring back an independent
-        # signal in the old folder first, so the agreement answer remains an Action there.
-        for row in carry.rows:
-            row["tags"] = ["Blocked"]
-        self.edit(CACHE_FILE, lambda t: json.dumps(b.cache()))
-        self.run_cli("report", "--offline", "--today", "2026-11-13")
         b.sprint("Sprint 30", "2026-11-10", "2026-11-21")
         carry.at("2026-11-10 09:00", iteration="Proj\\Sprint 30")
         self.edit(CACHE_FILE, lambda t: json.dumps(b.cache()))
         code, out = self.run_cli("report", "--offline", "--today", "2026-11-23")
         self.assertEqual(code, 0, out)
         dm = self.read_report("dm_2026-11-23.html", "sprint-30")
-        self.assertIn("agreed: split", dm)
+        self.assertIn("split in refinement", dm)
         self.assertIn('title="worse since your answer"', dm)
         manager = self.read_report("manager_2026-11-23.html", "sprint-30")
-        self.assertIn('class="chip unk">Unknown', manager)
+        self.assertNotIn("split in refinement", manager)
+        self.assertIn("carry-over without note: #10", out)
 
     def test_all_note_warnings_are_printed_once(self):
         self.write_notes(

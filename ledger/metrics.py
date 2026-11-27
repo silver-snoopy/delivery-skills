@@ -8,9 +8,11 @@ from statistics import median
 from typing import Any
 
 from ledger.config import (
+    SEVERITY,
     Config,
     Notes,
     Person,
+    carry_reasons,
     count_of,
     metrics_of,
     show_flow_of,
@@ -566,7 +568,7 @@ ASK = {
     "old": "Ask what is blocking it.",
     "held": "Ask what is blocking it.",
     "not_started": "Ask what is blocking it.",
-    "agreed": "Confirm with the PO and record it in notes.md.",
+    "carry": "Record why it was carried over in notes.md.",
     "waiting": "Raise it with the PO.",
     "stale": "Ask whether it is moving and the board is behind, or it is stuck.",
     "none": "Find out what they worked on; if it was off-board work, add it to notes.md.",
@@ -576,11 +578,9 @@ ASK = {
     "never_active": "Ask them to move items through Active on the board.",
     "shared": "Check that both teams should count it.",
 }
-_LEVELS = ("red", "amber", "grey", "green")
 _BADGES = {
     "old": "Chase",
     "carry": "Carry-over",
-    "agreed": "Carry-over",
     "waiting": "Waiting",
     "held": "On Hold",
     "stale": "No movement",
@@ -620,7 +620,7 @@ def _attention(
     def add(level, ask, text, item=None, name="", kind=None, badge=None):
         found.append(
             (
-                _LEVELS.index(level),
+                SEVERITY[level],
                 item is None,
                 item or 0,
                 name,
@@ -646,26 +646,20 @@ def _attention(
             red_carry.add(c["id"])
             add(
                 "red",
-                "old",
+                "carry",
                 f"#{c['id']} has been carried over for {c['sprints']} sprints and is "
                 f"{c['age']} days old, older than the squad's P85 of {p85} days.",
                 c["id"],
-                kind="carry",
             )
         elif c["sprints"] >= CARRIED_FLAG:
             add(
                 "amber",
-                "old",
+                "carry",
                 f"#{c['id']} has been carried over for {c['sprints']} sprints.",
                 c["id"],
-                kind="carry",
             )
-        if c["agreed"] != "agreed":
-            if c["agreed"] == "not agreed":
-                why = "and was not agreed with the PO"
-            else:
-                why = "and whether the PO agreed is unknown" if c["reason"] else "with no note in notes.md"
-            add("amber", "agreed", f"#{c['id']} was carried over {why}.", c["id"])
+        else:
+            add("amber", "carry", f"#{c['id']} was carried over.", c["id"])
     for i, age in sorted(open_ages.items()):
         if old(age) and i not in red_carry:
             add("amber", "old", f"#{i} is {age} days old, older than the squad's P85 of {p85} days.", i)
@@ -712,7 +706,7 @@ def _attention(
 def _status(
     f: dict, carry: list[dict], p85: int | None, waits: dict[int, tuple], manual: tuple | None
 ) -> dict:
-    """GREEN/AMBER/RED by planned delivery share and unagreed carry-overs (all carry-overs when P85 is unavailable)."""
+    """GREEN/AMBER/RED by planned delivery share and old carry-overs (all carry-overs when P85 is unavailable)."""
     if manual is not None:
         return {"colour": manual[0], "reason": manual[1], "manual": True}
     denom = len(f["planned"]) - len(f["removed"])
@@ -729,35 +723,21 @@ def _status(
         ]
     if p85 is None:
         parts.append(f"too few finished work items in the last {TREND} sprints to judge age")
-        old, kind = [c["id"] for c in carry], "carry-over"
+        old = [c["id"] for c in carry]
     else:
         old = [c["id"] for c in carry if c["age"] is not None and c["age"] > p85]
-        kind = "old carry-over"
-    bad = [c["id"] for c in carry if c["id"] in old and c["agreed"] != "agreed"]
-    many = len(old) > 1
     if not old:
         if p85 is not None:
             parts.append("no carry-over is older than the squad's P85")
-    elif not bad:
-        qty = len(old) if many else "one"
-        verb = "were" if many else "was"
-        parts.append(f"the {qty} {kind}{'s' if many else ''} ({_ids(old)}) {verb} agreed with the PO")
-    elif len(bad) == len(old):
-        qty = len(old) if many else "one"
-        verb = "are" if many else "is"
-        parts.append(
-            f"the {qty} {kind}{'s' if many else ''} ({_ids(old)}) {verb} not recorded as agreed with the PO"
-        )
     else:
-        verb = "are" if len(bad) > 1 else "is"
-        parts.append(
-            f"{len(bad)} of {len(old)} {kind}s ({_ids(bad)}) {verb} not recorded as agreed with the PO"
-        )
+        noun = f"{len(old)} carry-overs" if len(old) > 1 else "one carry-over"
+        suffix = "" if p85 is None else f" {'are' if len(old) > 1 else 'is'} older than the squad's P85"
+        parts.append(f"{noun} ({_ids(old)}){suffix}")
     long_waits = [(i, d) for i, (_, d) in sorted(waits.items()) if d > WAIT_RED_DAYS]
     parts += [
         f"#{i} has been waiting (in a waiting state or blocked) for {d} working days" for i, d in long_waits
     ]
-    met = (share >= GREEN_SHARE) + (not bad)
+    met = (share >= GREEN_SHARE) + (not old)
     colour = "RED" if long_waits or met == 0 else ("GREEN" if met == 2 else "AMBER")
     return {"colour": colour, "reason": "; ".join(parts) + ".", "manual": False}
 
@@ -793,23 +773,22 @@ def team_sprint(
         }
 
     passes = {path: first_pass(g["delivered"]) for path, g in figs.items()}
+    reasons = carry_reasons(notes, team)
     carry = []
     for i in f["carry"]:
         h, row = t.hist[i], t.hist[i].at(t1)
         if row is None:
             continue
         fa = h.first_active
-        agreed, reason = notes.items.get(i, ("unknown", ""))
         carry.append(
             {
                 "id": i,
-                "title": row["title"],
+                "title": row["title"] or "",
                 "age": (end - t.local(fa)).days + 1 if fa is not None and fa <= t1 else None,
                 "sprints": sum(1 for g in figs.values() if i in g["open"]),
                 "state": row["state"],
                 "waiting": row["state"] in cfg.waiting_states,
-                "agreed": agreed,
-                "reason": reason,
+                "reason": reasons.get(i, ""),
                 "held": t.held_days(h, sprint),
             }
         )
@@ -1134,18 +1113,6 @@ def _action_problem(row: dict) -> str:
     subject = f"#{row['id']} " if row["id"] is not None else row["person"] + " "
     for sentence in str(row["problem"]).split("; "):
         text: str = sentence.removeprefix(subject).removesuffix(".")
-        if text.startswith("was carried over "):
-            agreement = {
-                "with no note in notes.md": "no PO agreement recorded",
-                "and whether the PO agreed is unknown": "PO agreement unknown",
-                "and was not agreed with the PO": "not agreed with the PO",
-            }
-            detail = text.removeprefix("was carried over ")
-            text = agreement.get(detail, detail)
-            if "carry" not in row["kinds"]:
-                text = "carried over, " + text
-            fragments.append((3, text))
-            continue
         if row["id"] is None and row["kinds"] in (["none"], ["nothing"]):
             available = text.split(" available days", 1)[0].split(" ", 1)[1]
             if row["kinds"] == ["nothing"]:
@@ -1161,15 +1128,11 @@ def _action_problem(row: dict) -> str:
         )
         text = re.sub(r"^(?:has |is |was )", "", text)
         text = re.sub(r" for (\d+) working days$", r" \1 working days", text)
-
-        def _singular(m: re.Match[str]) -> str:
-            return "1 " + m.group(1)[:-1]
-
-        text = re.sub(r"(?<![\d.])1 ((?:working |available )?days|sprints|items)\b", _singular, text)
+        text = re.sub(r"(?<![\d.])1 ((?:working |available )?day|sprint|item)s\b", r"1 \1", text)
         for fragment in filter(None, text.split("; ")):
             rank = (
                 1
-                if fragment.startswith("carried over ")
+                if fragment == "carried over" or fragment.startswith("carried over ")
                 else 2
                 if re.match(r"\d+ days? old,", fragment)
                 else 0
@@ -1249,7 +1212,7 @@ def team_actions(
         i = signal["id"]
         name = t.owner(t.hist[i], at) if i in t.hist and t.hist[i].at(at) else signal["person"]
         row = row_for(i, name, signal)
-        if _LEVELS.index(signal["level"]) < _LEVELS.index(row["level"]):
+        if SEVERITY[signal["level"]] < SEVERITY[row["level"]]:
             row.update(level=signal["level"], badge=signal["badge"])
         row["kinds"] = sorted(set(row["kinds"] + [signal["kind"]]))
         for key, value in (("problem", signal["text"]), ("ask", signal["ask"])):
@@ -1273,22 +1236,17 @@ def team_actions(
     )
     open_ids = {h.id for h in opened}
     if closed:
-        eligible = {
-            i
-            for i, c in carry.items()
-            if c["agreed"] != "agreed" or (p85 is not None and c["age"] is not None and c["age"] > p85)
-        }
         for signal in closed["attention"]:
-            if not running or (signal["id"] in eligible and signal["kind"] in ("carry", "agreed", "old")):
+            if not running or (signal["id"] in carry and signal["kind"] in ("carry", "old")):
                 value = dict(signal)
-                if running and signal["id"] in open_ids and signal["kind"] in ("old", "carry"):
+                if running and signal["id"] in open_ids:
                     i = signal["id"]
                     age = t.open_age(t.hist[i], at, t.local(at - timedelta(microseconds=1)))
                     previous = carry[i]["age"]
                     if previous is not None and age is not None:
                         value["text"] = value["text"].replace(f"{previous} days old", f"{age} days old")
                 signals.append(value)
-    signals.sort(key=lambda s: (_LEVELS.index(s["level"]), priority.index(s["badge"])))
+    signals.sort(key=lambda s: (SEVERITY[s["level"]], priority.index(s["badge"])))
     for signal in signals:
         row = merge(signal)
         if running and closed is not None and signal["id"] in carry and signal["id"] not in open_ids:
@@ -1305,8 +1263,8 @@ def team_actions(
         persons.append({"name": name, "available": 0, "nominal": 0, "onboarding": False})
     worst = {
         p["name"]: min(
-            (_LEVELS.index(r["level"]) for r in rows.values() if r["person"] == p["name"]),
-            default=_LEVELS.index("green"),
+            (SEVERITY[r["level"]] for r in rows.values() if r["person"] == p["name"]),
+            default=SEVERITY["green"],
         )
         for p in persons
     }
@@ -1316,7 +1274,7 @@ def team_actions(
         rows.values(),
         key=lambda r: (
             order[r["person"]],
-            _LEVELS.index(r["level"]),
+            SEVERITY[r["level"]],
             not r["open"],
             r["id"] is None,
             r["id"] or 0,

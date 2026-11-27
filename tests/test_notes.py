@@ -7,7 +7,7 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
-from ledger.config import load_report_notes, notes_for_team, parse_notes, reconcile_notes, write_report_notes
+from ledger.config import carry_reasons, load_report_notes, parse_notes, reconcile_notes, write_report_notes
 
 OLD = {"path": "Project/One", "name": "One", "start": "2026-10-19", "end": "2026-10-30"}
 NEW = {"path": "Project/Two", "name": "Two", "start": "2026-11-02", "end": "2026-11-13"}
@@ -30,7 +30,7 @@ def row(item=81, person="Ada Example", **kw):
         ask="Ask for a slot",
         age=12,
         open=True,
-        carry=True,
+        carry=item is not None,
     )
     value.update(kw)
     return value
@@ -175,7 +175,7 @@ class NotesTest(unittest.TestCase):
                 self.assertEqual(out["handled"], not expected)
 
     def test_resolved_grey_green_restore_and_reassignment(self):
-        self.save_text(markdown("agreed: split next sprint"))
+        self.save_text(markdown("split next sprint"))
         self.cycle(self.load())
         for level in ("green", "grey"):
             out = self.cycle(self.load(), [row(level=level, kinds=[], badge="OK")])[0]
@@ -183,30 +183,26 @@ class NotesTest(unittest.TestCase):
             n = self.load()
             self.assertFalse(n.teams["ALFA"]["Actions"])
             self.assertEqual(len(n.teams["ALFA"]["Resolved"]), 1)
-            self.assertEqual(
-                notes_for_team(n, "ALFA").items.get(81, ("unknown", "")), ("agreed", "split next sprint")
-            )
+            self.assertEqual(carry_reasons(n, "ALFA").get(81, ""), "split next sprint")
         self.cycle(self.load(), [])
         out = self.cycle(self.load(), [row(person="Ben Example")])[0]
-        self.assertEqual(out["answer"], "agreed: split next sprint")
+        self.assertEqual(out["answer"], "split next sprint")
         self.assertTrue(out["handled"])
         self.assertFalse(self.load().teams["ALFA"]["Resolved"])
 
-    def test_agreement_prefixes_and_team_isolation(self):
+    def test_carry_reasons_and_team_isolation(self):
         for answer, expected in [
-            ("agreed: split", ("agreed", "split")),
-            ("not agreed: late", ("not agreed", "late")),
-            ("unknown: ask", ("unknown", "ask")),
-            ("chased: ask", ("unknown", "")),
+            ("split in refinement", "split in refinement"),
+            ("  blocked   on\tAPI  ", "blocked on API"),
         ]:
             with self.subTest(answer=answer):
-                n = parse_notes(markdown(answer) + markdown("unknown: other", team="BETA"))
+                n = parse_notes(markdown(answer) + markdown("other team reason", team="BETA"))
                 selected = {"ALFA": NEW, "BETA": NEW}
                 result = reconcile_notes(
                     n, dict(actions(row()), BETA=actions(row())["ALFA"]), selected, TODAY
                 )
-                self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", "")), expected)
-                self.assertEqual(notes_for_team(n, "BETA").items[81], ("unknown", "other"))
+                self.assertEqual(carry_reasons(n, "ALFA").get(81, ""), expected)
+                self.assertEqual(carry_reasons(n, "BETA")[81], "other team reason")
                 self.assertTrue(result["ALFA"]["rows"][0]["handled"])
 
     def test_person_identity_includes_badge(self):
@@ -234,7 +230,7 @@ class NotesTest(unittest.TestCase):
         ]:
             with self.subTest(meta=meta):
                 n = parse_notes(markdown("chased: promise", meta))
-                out = self.cycle(n, [row(sprint_path=NEW["path"])])[0]
+                out = self.cycle(n, [row(sprint_path=NEW["path"], carry=False)])[0]
                 self.assertEqual(out["handled"], handled)
                 self.assertEqual(out["answer"], "chased: promise")
                 if not handled:
@@ -251,24 +247,24 @@ class NotesTest(unittest.TestCase):
 
     def test_changed_sprint_only_open_action_answers_no_renewal_until_edit(self):
         old_folder = os.path.join(self.root, "old")
-        self.save_text(markdown("agreed: split", marker=OLD["path"]), old_folder)
+        self.save_text(markdown("split", marker=OLD["path"]), old_folder)
         old = load_report_notes(self.root, old_folder, {"ALFA": OLD}, [OLD, NEW], self.warnings.append)
         reconcile_notes(old, actions(row(sprint_path=OLD["path"])), {"ALFA": OLD}, date(2026, 11, 2))
         write_report_notes(old_folder, old)
         n = self.load()
         out = self.cycle(n)[0]
-        self.assertEqual(out["answer"], "agreed: split")
+        self.assertEqual(out["answer"], "split")
         self.assertTrue(out["worse"])
         self.assertFalse(out["handled"])
         self.assertFalse(n.summary.get("ALFA"))
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", ""))[0], "unknown")
+        self.assertNotIn(81, carry_reasons(n, "ALFA"))
         out = self.cycle(self.load())[0]
         self.assertFalse(out["handled"])
-        self.assertEqual(notes_for_team(self.load(), "ALFA").items.get(81, ("unknown", ""))[0], "unknown")
-        self.save_text(self.read().replace("agreed: split", "agreed: renewed split"))
+        self.assertNotIn(81, carry_reasons(self.load(), "ALFA"))
+        self.save_text(self.read().replace("split", "renewed split"))
         n = self.load()
         self.assertTrue(self.cycle(n)[0]["handled"])
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", ""))[0], "agreed")
+        self.assertEqual(carry_reasons(n, "ALFA").get(81, ""), "renewed split")
 
     def test_changed_sprint_copies_open_resolved_but_drops_closed_and_empty_rows(self):
         source = parse_notes(markdown("closed answer", marker=OLD["path"]))
@@ -361,14 +357,14 @@ class NotesTest(unittest.TestCase):
         prior = os.path.join(self.root, "prior")
         self.save_text(markdown("chased: baseline"), prior)
         n = load_report_notes(self.root, prior, self.selected, [OLD, NEW], self.warnings.append)
-        reconcile_notes(n, actions(row()), self.selected, date(2026, 11, 15))
+        reconcile_notes(n, actions(row(carry=False)), self.selected, date(2026, 11, 15))
         reconcile_notes(n, actions(), self.selected, TODAY)
         write_report_notes(prior, n)
         n = self.load()
         self.assertEqual(n.summary["ALFA"], "Delivered a fixture.")
         self.assertEqual(n.note["ALFA"], "Private text")
         self.assertEqual(n.exec_note["ALFA"], "External text")
-        out = self.cycle(n)[0]
+        out = self.cycle(n, [row(carry=False)])[0]
         self.assertTrue(out["handled"])
         self.assertEqual(out["answered"], "2026-11-15 amber Chase, Waiting")
 
@@ -405,29 +401,29 @@ class NotesTest(unittest.TestCase):
         self.assertTrue(out["handled"])
         self.assertEqual(out["answered"], "2026-11-17 red Chase, Waiting")
 
-    def test_edit_or_import_answer_when_row_is_absent_keeps_scoped_agreement(self):
-        self.save_text(markdown("agreed: split"))
+    def test_edit_or_import_answer_when_row_is_absent_keeps_scoped_reason(self):
+        self.save_text(markdown("split"))
         self.cycle(self.load(), [row(kinds=["carry"])])
         self.cycle(self.load(), [])
-        self.save_text(self.read().replace("agreed: split", "not agreed: revised"))
+        self.save_text(self.read().replace("split", "revised reason"))
         n = self.load()
         self.cycle(n, [])
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", "")), ("not agreed", "revised"))
-        # Loss of the sidecar still imports a valid visible baseline for a resolved carry.
+        self.assertEqual(carry_reasons(n, "ALFA").get(81, ""), "revised reason")
+        # Loss of the sidecar imports non-locally, so no manager reason is inferred.
         os.unlink(os.path.join(self.folder, ".notes-state.json"))
         n = self.load()
         self.cycle(n, [])
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", "")), ("not agreed", ""))
+        self.assertNotIn(81, carry_reasons(n, "ALFA"))
 
-    def test_unknown_team_is_preserved_but_cannot_contribute_agreement(self):
-        self.save_text(markdown("agreed: unknown team", team="UNLISTED"))
+    def test_unknown_team_is_preserved_but_cannot_contribute_reason(self):
+        self.save_text(markdown("unknown team reason", team="UNLISTED"))
         n = load_report_notes(self.root, self.folder, {"UNLISTED": NEW}, [OLD, NEW], self.warnings.append)
         reconcile_notes(n, {"UNLISTED": actions(row())["ALFA"]}, {"UNLISTED": NEW}, TODAY)
         write_report_notes(self.folder, n)
         n = self.load()
         self.assertFalse(n.items)
-        self.assertFalse(notes_for_team(n, "UNLISTED").items)
-        self.assertIn("agreed: unknown team", self.read())
+        self.assertFalse(carry_reasons(n, "UNLISTED"))
+        self.assertIn("unknown team reason", self.read())
 
     def test_person_answer_survives_tool_owned_problem_edits(self):
         rows = [row(None, badge="No work", kinds=["none"], problem="No work")]
@@ -442,11 +438,11 @@ class NotesTest(unittest.TestCase):
             with self.subTest(answer=answer):
                 n = parse_notes(markdown(answer, answered, item="–", problem="No work: previous wording"))
                 original = actions(row(None, badge="No work", kinds=["none"], problem="Awaiting allocation"))
-                observed = reconcile_notes(n, original, self.selected, TODAY)
+                reconcile_notes(n, original, self.selected, TODAY)
                 saved = n.teams["ALFA"]["Actions"][0]
                 self.assertEqual(saved["answered"], "")
                 refreshed = actions(row(None, badge="No work", kinds=["none"], problem="Awaiting allocation"))
-                out = reconcile_notes(n, refreshed, self.selected, TODAY, observed=observed)
+                out = reconcile_notes(n, refreshed, self.selected, TODAY)
                 self.assertEqual(saved["badge"], "No work")
                 self.assertEqual(out["ALFA"]["rows"][0]["answer"], answer)
                 self.assertFalse(n.teams["ALFA"]["Resolved"])
@@ -675,13 +671,13 @@ class NotesTest(unittest.TestCase):
                 self.assertEqual(result["ALFA"]["rows"][0]["answer"], "lent to spike")
                 self.assertTrue(result["ALFA"]["rows"][0]["handled"])
 
-    def test_current_unresolvable_marker_warns_preserves_text_and_does_not_grant_agreement(self):
-        self.save_text(markdown("agreed: imported", marker="unknown/path"))
+    def test_current_unresolvable_marker_warns_preserves_text_and_does_not_grant_reason(self):
+        self.save_text(markdown("imported reason", marker="unknown/path"))
         n = self.load()
         self.assertTrue(any("unknown/path" in w for w in self.warnings))
         self.assertEqual(n.note["ALFA"], "Private text")
         self.cycle(n)
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", ""))[0], "unknown")
+        self.assertNotIn(81, carry_reasons(n, "ALFA"))
 
     def test_unknown_and_malformed_content_roundtrip_without_reconciliation(self):
         text = "# ALFA\n## Note\ntext  \n\nnext\n## Mystery\nline | raw\\x\n## Actions\n" + HEADER
@@ -694,18 +690,16 @@ class NotesTest(unittest.TestCase):
         self.assertEqual(n.note["ALFA"], "text  \n\nnext")
         self.assertIn("| Ada Example | invalid reference | raw | keep | data |", first)
 
-    def test_clear_then_reenter_same_copied_answer_renews_agreement(self):
-        self.save_text(markdown("agreed: split", marker=OLD["path"]), os.path.join(self.root, "old"))
+    def test_clear_then_reenter_same_copied_answer_renews_reason(self):
+        self.save_text(markdown("split", marker=OLD["path"]), os.path.join(self.root, "old"))
         n = self.load()
         self.assertTrue(self.cycle(n)[0]["worse"])
-        self.save_text(self.read().replace("agreed: split", ""))
+        self.save_text(self.read().replace("split", ""))
         self.assertFalse(self.cycle(self.load())[0]["handled"])
-        self.save_text(
-            self.read().replace("| Waiting for a slot |  |", "| Waiting for a slot | agreed: split |")
-        )
+        self.save_text(self.read().replace("| Waiting for a slot |  |", "| Waiting for a slot | split |"))
         n = self.load()
         self.assertTrue(self.cycle(n)[0]["handled"])
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", "")), ("agreed", "split"))
+        self.assertEqual(carry_reasons(n, "ALFA").get(81, ""), "split")
 
     def test_unmatched_prior_state_is_retained(self):
         self.save_text(markdown("answer"))
@@ -784,7 +778,6 @@ class NotesTest(unittest.TestCase):
     def test_answered_display_labels_roundtrip_all_distinct_signal_kinds(self):
         labels = {
             "old": "Chase",
-            "agreed": "PO agreement",
             "waiting": "Waiting",
             "stale": "No movement",
             "none": "No work",
@@ -803,14 +796,14 @@ class NotesTest(unittest.TestCase):
         self.assertEqual(len(set(labels.values())), len(labels))
         os.unlink(os.path.join(self.folder, ".notes-state.json"))
         n = self.load()
-        out = self.cycle(n, [row(kinds=sorted(labels), sprint_path=NEW["path"])])[0]
+        out = self.cycle(n, [row(kinds=sorted(labels), sprint_path=NEW["path"], carry=False)])[0]
         self.assertTrue(out["handled"])
         self.assertEqual(n.state["ALFA"]["i:81"]["kinds"], sorted(labels))
         self.assertEqual(out["kinds"], sorted(labels))
         self.assertEqual(self.load().state["ALFA"]["i:81"]["kinds"], sorted(labels))
         # The example's label order parses to the same complete token set.
         n = parse_notes(markdown("answer", "2026-11-23 amber Waiting, Chase"))
-        out = self.cycle(n, [row(sprint_path=NEW["path"])])[0]
+        out = self.cycle(n, [row(sprint_path=NEW["path"], carry=False)])[0]
         self.assertTrue(out["handled"])
         self.assertEqual(n.state["ALFA"]["i:81"]["kinds"], ["old", "waiting"])
 
@@ -866,8 +859,8 @@ class NotesTest(unittest.TestCase):
                 write_report_notes(folder, n)
                 self.assertEqual(result["ALFA"]["rows"][0]["answer"], "agreed: keep old agreement")
                 self.assertFalse(result["ALFA"]["rows"][0]["handled"])
-                self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ("unknown", ""))[0], "unknown")
-                self.assertEqual(notes_for_team(n, "ALFA").items.get(82, ("unknown", ""))[0], "unknown")
+                self.assertNotIn(81, carry_reasons(n, "ALFA"))
+                self.assertNotIn(82, carry_reasons(n, "ALFA"))
                 self.assertEqual(
                     {r["answer"] for r in n.teams["ALFA"]["Resolved"]},
                     {"agreed: keep resolved", "keep person answer", "keep unmatched answer"},
@@ -1025,13 +1018,205 @@ class NotesTest(unittest.TestCase):
         # Selected predecessor f2's state loaded for ALFA.
         self.assertIn("i:81", n.state["ALFA"])
 
-        # Survives reconcile_notes, notes_for_team, and rerun when destination exists.
+        # Survives reconcile_notes and rerun when destination exists.
         reconcile_notes(n, actions(row()), {"ALFA": NEW, "BETA": NEW}, TODAY)
-        self.assertEqual(notes_for_team(n, "BETA").po_history["BETA"][OLD["path"]], 5)
+        self.assertEqual(n.po_history["BETA"][OLD["path"]], 5)
         write_report_notes(dest, n)
         rerun = self.load(dest, selected={"ALFA": NEW, "BETA": NEW})
         self.assertIsNone(rerun.po_history["ALFA"][OLD["path"]])
         self.assertEqual(rerun.po_history["BETA"][OLD["path"]], 5)
+
+    def test_legacy_agreed_state_and_po_agreement_label_migrate_safely(self):
+        legacy_folder = os.path.join(self.root, "legacy")
+        text = markdown("private note", "2026-11-16 amber PO agreement", marker=OLD["path"]) + markdown(
+            "beta waiting", "2026-11-16 amber Waiting", item="#82 Beta task", team="BETA", marker=NEW["path"]
+        )
+        self.save_text(text, legacy_folder)
+        state = {
+            "version": 1,
+            "teams": {
+                "ALFA": {
+                    "i:81": {
+                        "date": "2026-11-16",
+                        "level": "amber",
+                        "kinds": ["agreed", "carry"],
+                        "answer": "private note",
+                        "closed": OLD["path"],
+                        "sprint": RUN,
+                        "carry": True,
+                        "local": True,
+                    }
+                },
+                "BETA": {
+                    "i:82": {
+                        "date": "2026-11-16",
+                        "level": "amber",
+                        "kinds": ["waiting"],
+                        "answer": "beta waiting",
+                        "closed": NEW["path"],
+                        "sprint": RUN,
+                        "carry": False,
+                        "local": True,
+                    }
+                },
+            },
+        }
+        with open(os.path.join(legacy_folder, ".notes-state.json"), "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        # Predecessor inheritance from a legacy folder preserves unrelated teams and does not warn.
+        self.warnings.clear()
+        inherited = self.load(os.path.join(self.root, "next_folder"), selected={"ALFA": NEW, "BETA": NEW})
+        self.assertFalse(any("malformed .notes-state.json" in w for w in self.warnings))
+        self.assertFalse(any("migrated legacy carry-over state" in w for w in self.warnings))
+        self.assertEqual(inherited.state["ALFA"]["i:81"]["kinds"], ["carry"])
+        self.assertIn("i:82", inherited.state["BETA"])
+        inh_out = reconcile_notes(
+            inherited,
+            {
+                "ALFA": {"people": [], "rows": [row(kinds=["carry"], badge="Carry-over")], "current": None},
+                "BETA": {
+                    "people": [],
+                    "rows": [row(82, kinds=["waiting"], badge="Waiting", carry=False)],
+                    "current": None,
+                },
+            },
+            {"ALFA": NEW, "BETA": NEW},
+            TODAY,
+        )
+        self.assertTrue(inh_out["ALFA"]["rows"][0]["worse"])
+        self.assertFalse(inh_out["ALFA"]["rows"][0]["handled"])
+        self.assertTrue(inh_out["BETA"]["rows"][0]["handled"])
+        self.assertNotIn(81, carry_reasons(inherited, "ALFA"))
+        self.assertFalse(inherited.copied)
+        self.assertFalse(inherited.unscoped)
+        self.assertTrue({"_items", "_copied", "_unscoped"}.isdisjoint(inherited.teams["ALFA"]))
+        # Existing folder rerun migrates legacy state in place without losing unrelated team state.
+        self.warnings.clear()
+        selected_old = {"ALFA": OLD, "BETA": NEW}
+        n = self.load(legacy_folder, selected=selected_old)
+        self.assertFalse(any("malformed .notes-state.json" in w for w in self.warnings))
+        self.assertTrue(any("migrated legacy carry-over state" in w for w in self.warnings))
+        self.assertEqual(n.state["ALFA"]["i:81"]["kinds"], ["carry"])
+        self.assertFalse(n.state["ALFA"]["i:81"]["local"])
+        self.assertTrue(n.state["BETA"]["i:82"]["local"])
+        out = reconcile_notes(
+            n,
+            {
+                "ALFA": {"people": [], "rows": [row(kinds=["carry"], badge="Carry-over")], "current": None},
+                "BETA": {
+                    "people": [],
+                    "rows": [row(82, kinds=["waiting"], badge="Waiting", carry=False)],
+                    "current": None,
+                },
+            },
+            selected_old,
+            TODAY,
+        )
+        write_report_notes(legacy_folder, n)
+        alfa_row = out["ALFA"]["rows"][0]
+        beta_row = out["BETA"]["rows"][0]
+        self.assertEqual(alfa_row["answered"], "2026-11-16 amber Carry-over")
+        self.assertEqual(alfa_row["answer"], "private note")
+        self.assertFalse(alfa_row["worse"])
+        self.assertFalse(alfa_row["handled"])
+        self.assertTrue(beta_row["handled"])
+        self.assertNotIn(81, carry_reasons(n, "ALFA"))
+        # Second load does not repeat migration warning or rebase.
+        self.warnings.clear()
+        self.load(legacy_folder, selected=selected_old)
+        self.assertFalse(any("migrated legacy carry-over state" in w for w in self.warnings))
+        # Non-local legacy entry normalizes silently without a migration warning.
+        non_local_folder = os.path.join(self.root, "legacy_non_local")
+        self.save_text(
+            markdown("copied note", "2026-11-16 amber PO agreement", marker=OLD["path"]), non_local_folder
+        )
+        non_local_state = {
+            "version": 1,
+            "teams": {
+                "ALFA": {
+                    "i:81": {
+                        "date": "2026-11-16",
+                        "level": "amber",
+                        "kinds": ["agreed", "carry"],
+                        "answer": "copied note",
+                        "closed": OLD["path"],
+                        "sprint": RUN,
+                        "carry": True,
+                        "local": False,
+                    }
+                }
+            },
+        }
+        with open(os.path.join(non_local_folder, ".notes-state.json"), "w", encoding="utf-8") as f:
+            json.dump(non_local_state, f)
+        self.warnings.clear()
+        nl = self.load(non_local_folder, selected={"ALFA": OLD})
+        self.assertFalse(any("migrated legacy carry-over state" in w for w in self.warnings))
+        self.assertEqual(nl.state["ALFA"]["i:81"]["kinds"], ["carry"])
+        self.assertFalse(nl.state["ALFA"]["i:81"]["local"])
+        # Deliberate edit publishes the carry-over reason and marks Handled.
+        self.save_text(
+            self.read(folder=legacy_folder).replace("private note", "confirmed API wait"), legacy_folder
+        )
+        edited = self.load(legacy_folder, selected=selected_old)
+        res = reconcile_notes(
+            edited,
+            {"ALFA": {"people": [], "rows": [row(kinds=["carry"], badge="Carry-over")], "current": None}},
+            selected_old,
+            TODAY,
+        )
+        self.assertTrue(res["ALFA"]["rows"][0]["handled"])
+        self.assertEqual(carry_reasons(edited, "ALFA").get(81), "confirmed API wait")
+        # Standalone Markdown import without sidecar accepts legacy PO agreement label.
+        md_only = parse_notes(markdown("agreed: split", "2026-11-16 amber PO agreement"))
+        res_md = reconcile_notes(
+            md_only,
+            actions(row(kinds=["carry"], badge="Carry-over", sprint_path=NEW["path"])),
+            self.selected,
+            TODAY,
+        )
+        self.assertFalse(md_only.warnings)
+        self.assertEqual(md_only.state["ALFA"]["i:81"]["kinds"], ["carry"])
+        self.assertTrue(md_only.state["ALFA"]["i:81"]["carry"])
+        self.assertFalse(res_md["ALFA"]["rows"][0]["handled"])
+        self.assertNotIn(81, carry_reasons(md_only, "ALFA"))
+
+    def test_non_local_carry_is_not_handled_and_none_closed_never_publishes(self):
+        prior = os.path.join(self.root, "prior_carry")
+        self.save_text(markdown("agreed: split"), prior)
+        n = load_report_notes(self.root, prior, self.selected, [OLD, NEW], self.warnings.append)
+        first = reconcile_notes(n, actions(row(kinds=["carry"], badge="Carry-over")), self.selected, TODAY)
+        write_report_notes(prior, n)
+        # Local plain text including legacy prefix is preserved verbatim as Reason.
+        self.assertEqual(carry_reasons(n, "ALFA").get(81), "agreed: split")
+        self.assertTrue(first["ALFA"]["rows"][0]["handled"])
+        # Same-closed-sprint inheritance clears local -> not Handled and no Reason published.
+        copied = self.load(os.path.join(self.root, "same_sprint_copy"))
+        out = reconcile_notes(
+            copied, actions(row(kinds=["carry"], badge="Carry-over")), self.selected, TODAY
+        )["ALFA"]["rows"][0]
+        self.assertFalse(out["worse"])
+        self.assertFalse(out["handled"])
+        self.assertNotIn(81, carry_reasons(copied, "ALFA"))
+        # Missing closed sprint marker never matches meta["closed"] == None.
+        markerless = parse_notes(markdown("should not publish"))
+        markerless.markers.clear()
+        markerless.state = {
+            "ALFA": {
+                "i:81": {
+                    "date": "2026-11-16",
+                    "level": "amber",
+                    "kinds": ["carry"],
+                    "answer": "should not publish",
+                    "closed": None,
+                    "carry": True,
+                    "local": True,
+                }
+            }
+        }
+        reconcile_notes(markerless, actions(), {"ALFA": None}, TODAY)
+        self.assertFalse(markerless.items)
+        self.assertNotIn(81, carry_reasons(markerless, "ALFA"))
 
 
 if __name__ == "__main__":

@@ -762,9 +762,11 @@ class RenderTest(unittest.TestCase):
         alfa_card = self.card(page_with_hold, "ALFA")
         self.assertNotIn("<th>On Hold</th>", page_with_hold)
         self.assertIn("<th>At sprint end</th><th>Reason</th>", alfa_card)
-        self.assertIn("<td>On Hold (3d)</td><td>–</td>", alfa_card)
+        self.assertIn('<td><span class="nw">On Hold (3d)</span></td><td>–</td>', alfa_card)
         self.assertIn(
-            '<td><span class="chip wait">Ready for QA</span> (2d on hold)</td><td>QA wait</td>', alfa_card
+            '<td><span class="chip wait">Ready for QA</span><span class="sub">2d on hold</span></td>'
+            "<td>QA wait</td>",
+            alfa_card,
         )
         self.assertIn("<td>Active</td><td>API delay</td>", alfa_card)
         self.assertNotIn("Agreed with PO", page_with_hold)

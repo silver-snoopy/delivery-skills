@@ -88,6 +88,8 @@ details{border:1px solid var(--line);border-radius:6px;padding:8px 12px}summary{
 
 MANAGER_CSS = (
     ".d{font-size:12px;font-weight:600;margin-top:2px}.d.up{color:var(--good)}.d.down{color:var(--bad)}"
+    ".nw{white-space:nowrap}"
+    ".sub{display:block;font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap}"
 )
 
 
@@ -369,7 +371,9 @@ def _carry_state(c: dict) -> str:
     if not c["held"]:
         return state
     days = f"{int(c['held'])}d"
-    return f"{state} ({days})" if c.get("on_hold") else f"{state} ({days} on hold)"
+    if c.get("on_hold"):
+        return _tag("span", f"{state} ({days})", "nw")
+    return state + _tag("span", f"{days} on hold", "sub")
 
 
 def _carry(t: dict) -> str:

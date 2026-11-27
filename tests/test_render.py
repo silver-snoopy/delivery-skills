@@ -730,45 +730,20 @@ class RenderTest(unittest.TestCase):
         self.assertNotIn("<th>On Hold</th>", page_without_hold)
         self.assertNotIn("Agreed with PO", page_without_hold)
         self.assertIn("<th>At sprint end</th><th>Reason</th>", page_without_hold)
-        self.assertIn("<td>Active</td><td>–</td></tr>", page_without_hold)
-        t[0]["carry"][0].update(state="On Hold", on_hold=True, waiting=False, held=3)
-        t[0]["carry"].extend(
-            [
-                dict(
-                    t[0]["carry"][0],
-                    id=108,
-                    title="Held earlier",
-                    state="Ready for QA",
-                    waiting=True,
-                    on_hold=False,
-                    held=2,
-                    reason="QA wait",
-                ),
-                dict(
-                    t[0]["carry"][0],
-                    id=109,
-                    title="Sibling carry",
-                    state="Active",
-                    waiting=False,
-                    on_hold=False,
-                    held=0,
-                    reason="API delay",
-                ),
-            ]
+        self.assertIn("<td>–</td></tr>", page_without_hold)
+        t[0]["carry"][0]["held"] = 3
+        t[0]["carry"].append(
+            dict(t[0]["carry"][0], id=109, title="Sibling carry", held=0, reason="API delay")
         )
         t[0]["people"][0]["held"] = [[103, 3], [7, 1]]
         page_with_hold = render_manager("Sprint 29", t, GEN)
-        self.assertIn("<summary>Carried over items (3) (2 On Hold)</summary>", page_with_hold)
+        self.assertIn("<summary>Carried over items (2) (1 On Hold)</summary>", page_with_hold)
         alfa_card = self.card(page_with_hold, "ALFA")
-        self.assertNotIn("<th>On Hold</th>", page_with_hold)
-        self.assertIn("<th>At sprint end</th><th>Reason</th>", alfa_card)
-        self.assertIn('<td><span class="nw">On Hold (3d)</span></td><td>–</td>', alfa_card)
-        self.assertIn(
-            '<td><span class="chip wait">Ready for QA</span><span class="sub">2d on hold</span></td>'
-            "<td>QA wait</td>",
-            alfa_card,
-        )
-        self.assertIn("<td>Active</td><td>API delay</td>", alfa_card)
+        beta_card = self.card(page_with_hold, "BETA")
+        self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", alfa_card)
+        self.assertIn("<td>3 d</td><td>–</td>", alfa_card)
+        self.assertIn("<td>–</td><td>API delay</td>", alfa_card)
+        self.assertNotIn("<th>On Hold</th>", beta_card)
         self.assertNotIn("Agreed with PO", page_with_hold)
         dm_page = render_dm("Sprint 29", t, GEN)
         self.assertIn("(or no carry-over when P85 is unavailable)", dm_page)

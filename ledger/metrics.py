@@ -788,7 +788,6 @@ def team_sprint(
                 "sprints": sum(1 for g in figs.values() if i in g["open"]),
                 "state": row["state"],
                 "waiting": row["state"] in cfg.waiting_states,
-                "on_hold": row["state"] in cfg.hold_states,
                 "reason": reasons.get(i, ""),
                 "held": t.held_days(h, sprint),
             }

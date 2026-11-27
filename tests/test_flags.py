@@ -277,7 +277,7 @@ class ItemFlagTests(unittest.TestCase):
                     "level": "red",
                     "text": "#1 has been carried over for 2 sprints and is 26 days "
                     "old, older than the squad's P85 of 3 days.",
-                    "ask": "Ask what is blocking it.",
+                    "ask": "Record why it was carried over in notes.md.",
                 },
                 {
                     "id": 2,
@@ -433,6 +433,27 @@ class StatusTests(unittest.TestCase):
             },
         )
         self.assertEqual(self.status(4, 0, old_carry=True, wait_from="2026-10-26 10:00")["colour"], "AMBER")
+        # Wait > 10 working days turns a GREEN sprint (met == 2) RED; <= 10 keeps GREEN.
+        green_f = {"planned": [1, 2, 3, 4, 5], "delivered_planned": [1, 2, 3, 4], "removed": []}
+        self.assertEqual(_status(green_f, [], 3, {50: ("in Ready for QA", 11)}, None)["colour"], "RED")
+        self.assertEqual(_status(green_f, [], 3, {50: ("in Ready for QA", 10)}, None)["colour"], "GREEN")
+        # Multiple old carry-overs use plural phrasing; age == p85 is not old.
+        self.assertEqual(
+            _status(green_f, [{"id": 50, "age": 3}], 3, {}, None)["colour"],
+            "GREEN",
+        )
+        self.assertEqual(
+            _status(green_f, [{"id": 50, "age": 4}, {"id": 51, "age": 6}], 3, {}, None),
+            {
+                "colour": "AMBER",
+                "manual": False,
+                "reason": "80% of planned work items delivered; 2 carry-overs (#50, #51) are older than the squad's P85.",
+            },
+        )
+        # Carry-over notes do not change computed status.
+        b, notes = self._board(4, 0, old_carry=True)
+        notes.items[50] = "agreed: split"
+        self.assertEqual(run(b, "ALFA", "S29", people=GONE, notes=notes)["status"]["colour"], "AMBER")
         b, notes = self._board(3, 1)
         notes.status["alfa"] = ("AMBER", "PO moved the release; agreed scope cut.")
         self.assertEqual(
@@ -489,6 +510,16 @@ class StatusTests(unittest.TestCase):
             },
         )
         self.assertEqual([a["text"] for a in flags(t) if "old" in a["text"]], [])
+        green_f = {"planned": [1, 2, 3, 4, 5], "delivered_planned": [1, 2, 3, 4], "removed": []}
+        self.assertEqual(
+            _status(green_f, [{"id": 1, "age": None}], None, {}, None),
+            {
+                "colour": "AMBER",
+                "manual": False,
+                "reason": "80% of planned work items delivered; too few finished work items in the "
+                "last 6 sprints to judge age; one carry-over (#1).",
+            },
+        )
 
 
 if __name__ == "__main__":

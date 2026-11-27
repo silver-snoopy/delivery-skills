@@ -291,7 +291,7 @@ _KIND_LABELS = {
     "held": "On Hold",
     "not_started": "Not started",
 }
-_LABEL_KINDS = {label: kind for kind, label in _KIND_LABELS.items()}
+_LABEL_KINDS = {**{label: kind for kind, label in _KIND_LABELS.items()}, "PO agreement": "carry"}
 _LEVELS = ("green", "grey", "amber", "red")
 
 
@@ -485,6 +485,17 @@ def _normal_answer(answer):
     return " ".join(answer.split())
 
 
+def _publishable_reason(meta: dict, closed: str | None, answer: str) -> bool:
+    return bool(
+        closed
+        and meta.get("closed") == closed
+        and meta.get("date")
+        and _normal_answer(meta.get("answer", "")) == answer
+        and meta.get("carry")
+        and meta.get("local")
+    )
+
+
 def _reasons(notes):
     """Populate per-team and unambiguous global carry-over reason maps; ambiguous ids require notes_for_team."""
     notes.items.clear()
@@ -493,19 +504,16 @@ def _reasons(notes):
         sec["_items"] = {}
         if notes.reported is not None and team not in notes.reported:
             continue
+        closed = notes.markers.get(team)
+        team_state = notes.state.get(team, {})
         for row in sec["Actions"] + sec["Resolved"]:
-            meta = notes.state.get(team, {}).get(_key(row), {})
             if row["id"] is None or not row["answer"]:
                 continue
             answer = _normal_answer(row["answer"])
-            valid = (
-                meta.get("closed") == notes.markers.get(team)
-                and meta.get("date")
-                and _normal_answer(meta.get("answer", "")) == answer
-                and meta.get("carry")
-                and meta.get("local")
-            )
-            if not valid:
+            if not answer:
+                continue
+            meta = team_state.get(_key(row), {})
+            if not _publishable_reason(meta, closed, answer):
                 continue
             sec["_items"][row["id"]] = answer
             owners.setdefault(row["id"], []).append(answer)
@@ -522,6 +530,7 @@ def _read_notes(folder):
                 saved = json.load(f)
             if saved.get("version") != 1 or not isinstance(saved.get("teams"), dict):
                 raise ValueError("invalid state structure")
+            migrated = False
             for entries in saved["teams"].values():
                 if not isinstance(entries, dict):
                     raise ValueError("invalid team state")
@@ -530,9 +539,23 @@ def _read_notes(folder):
                         raise ValueError("invalid answer state")
                     meta.pop("section", None)
                     meta.pop("position", None)
+                    kinds = meta.get("kinds")
+                    if (
+                        isinstance(kinds, list)
+                        and all(isinstance(k, str) for k in kinds)
+                        and "agreed" in kinds
+                    ):
+                        meta["kinds"] = sorted({"carry" if k == "agreed" else k for k in kinds})
+                        meta["local"] = False
+                        migrated = True
                     if meta.get("date") and _metadata(_answered(meta)) is None:
                         raise ValueError("invalid baseline")
             notes.state = saved["teams"]
+            if migrated:
+                _warning(
+                    notes,
+                    "notes.md migrated legacy carry-over state; review carry-over answers before sharing manager_",
+                )
         except (ValueError, TypeError, KeyError, AttributeError):
             _warning(notes, "notes.md has malformed .notes-state.json; importing Answered conservatively")
     _bind(notes)
@@ -671,10 +694,8 @@ def _observe(notes, team, key, saved, row, closed, today, copied):
     )
 
 
-def reconcile_notes(
-    notes: Notes, actions: dict, selected: dict, today: date, observed: dict | None = None
-) -> dict:
-    """Own section membership; `observed` reuses raw baselines for the final signal view."""
+def reconcile_notes(notes: Notes, actions: dict, selected: dict, today: date) -> dict:
+    """Own section membership and reconcile DM answers against current action rows."""
     _bind(notes)
     notes.reported = set(selected)
     for team, result in actions.items():
@@ -692,7 +713,6 @@ def reconcile_notes(
                 _warning(notes, f"notes.md {team} has duplicate row {key}; preserved")
             else:
                 old[key] = saved
-        observed_rows = {_key(r): r for r in observed[team]["rows"]} if observed else None
         active, resolved = [], []
         for row in result["rows"]:
             key = _key(row)
@@ -700,36 +720,28 @@ def reconcile_notes(
             if sec.get("_copied") and row["id"] is not None and not row["open"]:
                 saved = {}
             answer = saved.get("answer", "")
-            if observed_rows is None:
-                meta = _observe(
-                    notes, team, key, saved, row, closed, today, sec.get("_copied") or sec.get("_unscoped")
+            meta = _observe(
+                notes, team, key, saved, row, closed, today, sec.get("_copied") or sec.get("_unscoped")
+            )
+            valid = bool(meta.get("date"))
+            worse = False
+            if answer and valid:
+                higher = _LEVELS.index(row["level"]) > _LEVELS.index(meta["level"])
+                new_kind = bool(set(row["kinds"]) - set(meta["kinds"]))
+                ongoing = row["open"] or row["id"] is None
+                new_sprint = ongoing and (
+                    meta.get("sprint") != row["sprint_path"] or meta.get("closed") != closed
                 )
-                valid = bool(meta.get("date"))
-                worse = False
-                if answer and valid:
-                    higher = _LEVELS.index(row["level"]) > _LEVELS.index(meta["level"])
-                    new_kind = bool(set(row["kinds"]) - set(meta["kinds"]))
-                    ongoing = row["open"] or row["id"] is None
-                    new_sprint = ongoing and (
-                        meta.get("sprint") != row["sprint_path"] or meta.get("closed") != closed
-                    )
-                    worse = higher or new_kind or new_sprint
-                row.update(
-                    answer=answer,
-                    answered=_answered(meta),
-                    worse=worse,
-                    handled=bool(answer and valid and not worse),
-                )
-                meta.update(person=row["person"], badge=row["badge"], problem=row["problem"])
-                state[key] = meta
-            else:
-                source = observed_rows.get(key, {})
-                row.update(
-                    answer=answer,
-                    answered=source.get("answered", ""),
-                    worse=source.get("worse", False),
-                    handled=source.get("handled", False),
-                )
+                worse = higher or new_kind or new_sprint
+            reason_ready = not row["carry"] or _publishable_reason(meta, closed, _normal_answer(answer))
+            row.update(
+                answer=answer,
+                answered=_answered(meta),
+                worse=worse,
+                handled=bool(answer and valid and not worse and reason_ready),
+            )
+            meta.update(person=row["person"], badge=row["badge"], problem=row["problem"])
+            state[key] = meta
             value = dict(row, work=f"#{row['id']} {row['title']}" if row["id"] is not None else "–")
             if answer and not value["problem"]:
                 value["problem"] = saved.get("problem", "")
@@ -739,13 +751,10 @@ def reconcile_notes(
                 resolved.append(value)
         for key, saved in old.items():
             if not sec.get("_copied"):
-                if observed_rows is None:
-                    meta = _observe(notes, team, key, saved, None, closed, today, sec.get("_unscoped"))
-                    meta.update(
-                        person=saved["person"], badge=saved.get("badge", ""), problem=saved["problem"]
-                    )
-                    state[key] = meta
-                    saved["answered"] = _answered(meta)
+                meta = _observe(notes, team, key, saved, None, closed, today, sec.get("_unscoped"))
+                meta.update(person=saved["person"], badge=saved.get("badge", ""), problem=saved["problem"])
+                state[key] = meta
+                saved["answered"] = _answered(meta)
                 if saved["answer"]:
                     resolved.append(saved)
         sec["Actions"], sec["Resolved"] = active, resolved + duplicates

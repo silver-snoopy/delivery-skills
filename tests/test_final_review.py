@@ -137,17 +137,22 @@ class FinalReviewTest(unittest.TestCase):
         self.assertIn("Nia Birch will confirm", self.pages["manager"])
         self.assertIn("warning: manager file mentions Nia Birch", out)
 
-    def test_i1_resolved_open_answer_survives_new_folder(self):
-        carried = self.item(carry=True, active=True)
-        carried.at("2026-11-07 09:00", iteration="Proj\\Cedar").at("2026-11-12 09:00")
-        self.report()
-        self.answer("split after planning")
-        self.report()
-        self.assertEqual(self.saved()[0], "Actions")
-        self.next_sprint(carried)
+    def test_i1_resolved_open_non_carry_answer_survives_new_folder_and_preserves_problem(self):
+        current = self.item(active=True).at("2026-11-10 09:00", state="On Hold", category="InProgress")
+        self.report("2026-11-12")
+        problem = self.saved()[1]["problem"]
+        self.answer("supplier fix scheduled")
+        self.report("2026-11-12")
+        current.at("2026-11-13 09:00", state="Active")
+        self.report("2026-11-16")
+        self.assertEqual(self.saved()[0], "Resolved")
+        self.assertEqual(self.saved()[1]["problem"], problem)
+        self.next_sprint(current)
         self.report("2026-11-24")
-        self.assertEqual(self.saved()[1]["answer"], "split after planning")
+        self.assertEqual(self.saved()[0], "Actions")
+        self.assertEqual(self.saved()[1]["answer"], "supplier fix scheduled")
         self.assertTrue(self.action()["worse"])
+        self.assertFalse(self.action()["handled"])
         self.assertEqual(self.team["carry"][0]["reason"], "")
 
     def test_i1_actions_open_carry_answer_survives_new_folder(self):
@@ -160,17 +165,8 @@ class FinalReviewTest(unittest.TestCase):
         self.report("2026-11-24")
         self.assertEqual(self.saved()[1]["answer"], "awaiting product decision")
         self.assertTrue(self.action()["worse"])
-
-    def test_minor_answered_carry_preserves_problem(self):
-        self.item(carry=True, active=True).at("2026-11-07 09:00", iteration="Proj\\Cedar").at(
-            "2026-11-12 09:00"
-        )
-        self.report()
-        problem = self.saved()[1]["problem"]
-        self.answer("split after planning")
-        self.report()
-        self.assertEqual(self.saved()[0], "Actions")
-        self.assertEqual(self.saved()[1]["problem"], problem)
+        self.assertFalse(self.action()["handled"])
+        self.assertEqual(self.team["carry"][0]["reason"], "")
 
     def test_i2_copied_carry_prints_action_and_carry_question(self):
         carried = self.item(carry=True, active=True).at("2026-11-07 09:00", iteration="Proj\\Cedar")
@@ -289,10 +285,22 @@ class FinalReviewTest(unittest.TestCase):
         self.answer("defer until supplier delivery")
         self.report()
         (self.root / "reports" / "maple").rename(self.root / "reports" / "archive")
-        self.report()
+        out = self.report()
         self.assertEqual(self.team["carry"][0]["reason"], "")
         self.assertNotIn("defer until supplier delivery", self.pages["manager"])
         self.assertEqual(self.saved()[1]["answer"], "defer until supplier delivery")
+        self.assertFalse(self.action()["handled"])
+        self.assertFalse(self.action()["worse"])
+        self.assertIn("ALFA carry-over without note: #202 Retry manifest", out)
+        self.assertIn("ALFA action: Nia Birch #202 Carry-over - carried over", out)
+        self.assertNotIn("Carry-over ↑", out)
+        self.answer("confirmed supplier delivery delay")
+        out_edited = self.report()
+        self.assertTrue(self.action()["handled"])
+        self.assertEqual(self.team["carry"][0]["reason"], "confirmed supplier delivery delay")
+        self.assertIn("confirmed supplier delivery delay", self.pages["manager"])
+        self.assertNotIn("carry-over without note: #202", out_edited)
+        self.assertNotIn("ALFA action: Nia Birch #202", out_edited)
 
     def test_c1_unchanged_now_answer_cannot_gain_carry_provenance(self):
         current = self.item()
@@ -348,3 +356,60 @@ class FinalReviewTest(unittest.TestCase):
         self.assertEqual(self.team["carry"][0]["reason"], "")
         self.assertIn("ALFA action: Nia Birch #202 Stuck ↑ -", out)
         self.assertIn("ALFA carry-over without note: #202 Retry manifest", out)
+
+    def test_invalid_non_carry_baseline_prints_action_prompt(self):
+        self.item()
+        self.report()
+        text = self.notes_path.read_text(encoding="utf-8")
+        text = text.replace("|  |  |", "| chased privately | nonsense |")
+        self.notes_path.write_text(text, encoding="utf-8")
+        (self.notes_path.parent / ".notes-state.json").unlink()
+        out = self.report()
+        self.assertFalse(self.action()["handled"])
+        self.assertFalse(self.action()["worse"])
+        self.assertIn("ALFA action: Nia Birch #202 Not started -", out)
+
+    def test_legacy_upgraded_folder_requires_review_without_leaking_reason(self):
+        self.item(carry=True)
+        self.report()
+        self.answer("private internal context")
+        self.report()
+        state_path = self.notes_path.parent / ".notes-state.json"
+        saved = json.loads(state_path.read_text(encoding="utf-8"))
+        saved["teams"]["ALFA"]["i:202"]["kinds"] = ["agreed"]
+        state_path.write_text(json.dumps(saved), encoding="utf-8")
+        self.notes_path.write_text(
+            self.notes_path.read_text(encoding="utf-8").replace("Carry-over", "PO agreement"),
+            encoding="utf-8",
+        )
+        out = self.report()
+        self.assertNotIn("malformed .notes-state.json", out)
+        self.assertIn("migrated legacy carry-over state", out)
+        self.assertNotIn("private internal context", self.pages["manager"])
+        self.assertFalse(self.action()["handled"])
+        self.assertFalse(self.action()["worse"])
+        self.assertIn("ALFA carry-over without note: #202 Retry manifest", out)
+        self.assertIn("ALFA action: Nia Birch #202 Carry-over - carried over", out)
+        self.assertEqual(self.saved()[1]["answered"], "2026-11-13 amber Carry-over")
+        self.answer("confirmed external dependency")
+        out_edited = self.report()
+        self.assertTrue(self.action()["handled"])
+        self.assertIn("confirmed external dependency", self.pages["manager"])
+        self.assertNotIn("carry-over without note: #202", out_edited)
+
+    def test_carry_closed_during_running_sprint_keeps_historical_carry_row(self):
+        carried = self.item(carry=True, active=True)
+        carried.at("2026-11-09 09:00", iteration="Proj\\Cedar").at("2026-11-11 09:00", state="Closed")
+        out = self.report("2026-11-13")
+        row = self.action()
+        self.assertEqual(
+            (row["sprint"], row["badge"], row["open"], row["carry"]), ("Maple", "Carry-over", False, True)
+        )
+        self.assertIn("ALFA carry-over without note: #202 Retry manifest", out)
+        self.assertIn("ALFA action: Nia Birch #202 Carry-over - carried over", out)
+        self.assertNotIn('class="chip green">Done', self.pages["dm"])
+        self.answer("finished early in next sprint")
+        out_answered = self.report("2026-11-13")
+        self.assertTrue(self.action()["handled"])
+        self.assertIn("finished early in next sprint", self.pages["manager"])
+        self.assertNotIn("carry-over without note: #202", out_answered)

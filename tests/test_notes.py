@@ -30,7 +30,7 @@ def row(item=81, person="Ada Example", **kw):
         ask="Ask for a slot",
         age=12,
         open=True,
-        carry=True,
+        carry=item is not None,
     )
     value.update(kw)
     return value
@@ -230,7 +230,7 @@ class NotesTest(unittest.TestCase):
         ]:
             with self.subTest(meta=meta):
                 n = parse_notes(markdown("chased: promise", meta))
-                out = self.cycle(n, [row(sprint_path=NEW["path"])])[0]
+                out = self.cycle(n, [row(sprint_path=NEW["path"], carry=False)])[0]
                 self.assertEqual(out["handled"], handled)
                 self.assertEqual(out["answer"], "chased: promise")
                 if not handled:
@@ -357,14 +357,14 @@ class NotesTest(unittest.TestCase):
         prior = os.path.join(self.root, "prior")
         self.save_text(markdown("chased: baseline"), prior)
         n = load_report_notes(self.root, prior, self.selected, [OLD, NEW], self.warnings.append)
-        reconcile_notes(n, actions(row()), self.selected, date(2026, 11, 15))
+        reconcile_notes(n, actions(row(carry=False)), self.selected, date(2026, 11, 15))
         reconcile_notes(n, actions(), self.selected, TODAY)
         write_report_notes(prior, n)
         n = self.load()
         self.assertEqual(n.summary["ALFA"], "Delivered a fixture.")
         self.assertEqual(n.note["ALFA"], "Private text")
         self.assertEqual(n.exec_note["ALFA"], "External text")
-        out = self.cycle(n)[0]
+        out = self.cycle(n, [row(carry=False)])[0]
         self.assertTrue(out["handled"])
         self.assertEqual(out["answered"], "2026-11-15 amber Chase, Waiting")
 
@@ -438,11 +438,11 @@ class NotesTest(unittest.TestCase):
             with self.subTest(answer=answer):
                 n = parse_notes(markdown(answer, answered, item="–", problem="No work: previous wording"))
                 original = actions(row(None, badge="No work", kinds=["none"], problem="Awaiting allocation"))
-                observed = reconcile_notes(n, original, self.selected, TODAY)
+                reconcile_notes(n, original, self.selected, TODAY)
                 saved = n.teams["ALFA"]["Actions"][0]
                 self.assertEqual(saved["answered"], "")
                 refreshed = actions(row(None, badge="No work", kinds=["none"], problem="Awaiting allocation"))
-                out = reconcile_notes(n, refreshed, self.selected, TODAY, observed=observed)
+                out = reconcile_notes(n, refreshed, self.selected, TODAY)
                 self.assertEqual(saved["badge"], "No work")
                 self.assertEqual(out["ALFA"]["rows"][0]["answer"], answer)
                 self.assertFalse(n.teams["ALFA"]["Resolved"])
@@ -796,14 +796,14 @@ class NotesTest(unittest.TestCase):
         self.assertEqual(len(set(labels.values())), len(labels))
         os.unlink(os.path.join(self.folder, ".notes-state.json"))
         n = self.load()
-        out = self.cycle(n, [row(kinds=sorted(labels), sprint_path=NEW["path"])])[0]
+        out = self.cycle(n, [row(kinds=sorted(labels), sprint_path=NEW["path"], carry=False)])[0]
         self.assertTrue(out["handled"])
         self.assertEqual(n.state["ALFA"]["i:81"]["kinds"], sorted(labels))
         self.assertEqual(out["kinds"], sorted(labels))
         self.assertEqual(self.load().state["ALFA"]["i:81"]["kinds"], sorted(labels))
         # The example's label order parses to the same complete token set.
         n = parse_notes(markdown("answer", "2026-11-23 amber Waiting, Chase"))
-        out = self.cycle(n, [row(sprint_path=NEW["path"])])[0]
+        out = self.cycle(n, [row(sprint_path=NEW["path"], carry=False)])[0]
         self.assertTrue(out["handled"])
         self.assertEqual(n.state["ALFA"]["i:81"]["kinds"], ["old", "waiting"])
 
@@ -1025,6 +1025,165 @@ class NotesTest(unittest.TestCase):
         rerun = self.load(dest, selected={"ALFA": NEW, "BETA": NEW})
         self.assertIsNone(rerun.po_history["ALFA"][OLD["path"]])
         self.assertEqual(rerun.po_history["BETA"][OLD["path"]], 5)
+
+    def test_legacy_agreed_state_and_po_agreement_label_migrate_safely(self):
+        legacy_folder = os.path.join(self.root, "legacy")
+        text = markdown("private note", "2026-11-16 amber PO agreement", marker=OLD["path"]) + markdown(
+            "beta waiting", "2026-11-16 amber Waiting", item="#82 Beta task", team="BETA", marker=NEW["path"]
+        )
+        self.save_text(text, legacy_folder)
+        state = {
+            "version": 1,
+            "teams": {
+                "ALFA": {
+                    "i:81": {
+                        "date": "2026-11-16",
+                        "level": "amber",
+                        "kinds": ["agreed", "carry"],
+                        "answer": "private note",
+                        "closed": OLD["path"],
+                        "sprint": RUN,
+                        "carry": True,
+                        "local": True,
+                    }
+                },
+                "BETA": {
+                    "i:82": {
+                        "date": "2026-11-16",
+                        "level": "amber",
+                        "kinds": ["waiting"],
+                        "answer": "beta waiting",
+                        "closed": NEW["path"],
+                        "sprint": RUN,
+                        "carry": False,
+                        "local": True,
+                    }
+                },
+            },
+        }
+        with open(os.path.join(legacy_folder, ".notes-state.json"), "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        # Predecessor inheritance from a legacy folder preserves unrelated teams and marks carry worse.
+        self.warnings.clear()
+        inherited = self.load(os.path.join(self.root, "next_folder"), selected={"ALFA": NEW, "BETA": NEW})
+        self.assertFalse(any("malformed .notes-state.json" in w for w in self.warnings))
+        self.assertEqual(inherited.state["ALFA"]["i:81"]["kinds"], ["carry"])
+        self.assertIn("i:82", inherited.state["BETA"])
+        inh_out = reconcile_notes(
+            inherited,
+            {
+                "ALFA": {"people": [], "rows": [row(kinds=["carry"], badge="Carry-over")], "current": None},
+                "BETA": {
+                    "people": [],
+                    "rows": [row(82, kinds=["waiting"], badge="Waiting", carry=False)],
+                    "current": None,
+                },
+            },
+            {"ALFA": NEW, "BETA": NEW},
+            TODAY,
+        )
+        self.assertTrue(inh_out["ALFA"]["rows"][0]["worse"])
+        self.assertFalse(inh_out["ALFA"]["rows"][0]["handled"])
+        self.assertTrue(inh_out["BETA"]["rows"][0]["handled"])
+        self.assertNotIn(81, notes_for_team(inherited, "ALFA").items)
+        # Existing folder rerun migrates legacy state in place without losing unrelated team state.
+        self.warnings.clear()
+        selected_old = {"ALFA": OLD, "BETA": NEW}
+        n = self.load(legacy_folder, selected=selected_old)
+        self.assertFalse(any("malformed .notes-state.json" in w for w in self.warnings))
+        self.assertTrue(any("migrated legacy carry-over state" in w for w in self.warnings))
+        self.assertEqual(n.state["ALFA"]["i:81"]["kinds"], ["carry"])
+        self.assertFalse(n.state["ALFA"]["i:81"]["local"])
+        self.assertTrue(n.state["BETA"]["i:82"]["local"])
+        out = reconcile_notes(
+            n,
+            {
+                "ALFA": {"people": [], "rows": [row(kinds=["carry"], badge="Carry-over")], "current": None},
+                "BETA": {
+                    "people": [],
+                    "rows": [row(82, kinds=["waiting"], badge="Waiting", carry=False)],
+                    "current": None,
+                },
+            },
+            selected_old,
+            TODAY,
+        )
+        write_report_notes(legacy_folder, n)
+        alfa_row = out["ALFA"]["rows"][0]
+        beta_row = out["BETA"]["rows"][0]
+        self.assertEqual(alfa_row["answered"], "2026-11-16 amber Carry-over")
+        self.assertEqual(alfa_row["answer"], "private note")
+        self.assertFalse(alfa_row["worse"])
+        self.assertFalse(alfa_row["handled"])
+        self.assertTrue(beta_row["handled"])
+        self.assertNotIn(81, notes_for_team(n, "ALFA").items)
+        # Second load does not repeat migration warning or rebase.
+        self.warnings.clear()
+        self.load(legacy_folder, selected=selected_old)
+        self.assertFalse(any("migrated legacy carry-over state" in w for w in self.warnings))
+        # Deliberate edit publishes the carry-over reason and marks Handled.
+        self.save_text(
+            self.read(folder=legacy_folder).replace("private note", "confirmed API wait"), legacy_folder
+        )
+        edited = self.load(legacy_folder, selected=selected_old)
+        res = reconcile_notes(
+            edited,
+            {"ALFA": {"people": [], "rows": [row(kinds=["carry"], badge="Carry-over")], "current": None}},
+            selected_old,
+            TODAY,
+        )
+        self.assertTrue(res["ALFA"]["rows"][0]["handled"])
+        self.assertEqual(notes_for_team(edited, "ALFA").items.get(81), "confirmed API wait")
+        # Standalone Markdown import without sidecar accepts legacy PO agreement label.
+        md_only = parse_notes(markdown("agreed: split", "2026-11-16 amber PO agreement"))
+        res_md = reconcile_notes(
+            md_only,
+            actions(row(kinds=["carry"], badge="Carry-over", sprint_path=NEW["path"])),
+            self.selected,
+            TODAY,
+        )
+        self.assertFalse(md_only.warnings)
+        self.assertEqual(md_only.state["ALFA"]["i:81"]["kinds"], ["carry"])
+        self.assertTrue(md_only.state["ALFA"]["i:81"]["carry"])
+        self.assertFalse(res_md["ALFA"]["rows"][0]["handled"])
+        self.assertNotIn(81, notes_for_team(md_only, "ALFA").items)
+
+    def test_non_local_carry_is_not_handled_and_none_closed_never_publishes(self):
+        prior = os.path.join(self.root, "prior_carry")
+        self.save_text(markdown("agreed: split"), prior)
+        n = load_report_notes(self.root, prior, self.selected, [OLD, NEW], self.warnings.append)
+        first = reconcile_notes(n, actions(row(kinds=["carry"], badge="Carry-over")), self.selected, TODAY)
+        write_report_notes(prior, n)
+        # Local plain text including legacy prefix is preserved verbatim as Reason.
+        self.assertEqual(notes_for_team(n, "ALFA").items.get(81), "agreed: split")
+        self.assertTrue(first["ALFA"]["rows"][0]["handled"])
+        # Same-closed-sprint inheritance clears local -> not Handled and no Reason published.
+        copied = self.load(os.path.join(self.root, "same_sprint_copy"))
+        out = reconcile_notes(
+            copied, actions(row(kinds=["carry"], badge="Carry-over")), self.selected, TODAY
+        )["ALFA"]["rows"][0]
+        self.assertFalse(out["worse"])
+        self.assertFalse(out["handled"])
+        self.assertNotIn(81, notes_for_team(copied, "ALFA").items)
+        # Missing closed sprint marker never matches meta["closed"] == None.
+        markerless = parse_notes(markdown("should not publish"))
+        markerless.markers.clear()
+        markerless.state = {
+            "ALFA": {
+                "i:81": {
+                    "date": "2026-11-16",
+                    "level": "amber",
+                    "kinds": ["carry"],
+                    "answer": "should not publish",
+                    "closed": None,
+                    "carry": True,
+                    "local": True,
+                }
+            }
+        }
+        reconcile_notes(markerless, actions(), {"ALFA": None}, TODAY)
+        self.assertFalse(markerless.items)
+        self.assertNotIn(81, notes_for_team(markerless, "ALFA").items)
 
 
 if __name__ == "__main__":

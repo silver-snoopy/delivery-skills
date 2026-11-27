@@ -645,19 +645,17 @@ def _attention(
             red_carry.add(c["id"])
             add(
                 "red",
-                "old",
+                "carry",
                 f"#{c['id']} has been carried over for {c['sprints']} sprints and is "
                 f"{c['age']} days old, older than the squad's P85 of {p85} days.",
                 c["id"],
-                kind="carry",
             )
         elif c["sprints"] >= CARRIED_FLAG:
             add(
                 "amber",
-                "old",
+                "carry",
                 f"#{c['id']} has been carried over for {c['sprints']} sprints.",
                 c["id"],
-                kind="carry",
             )
         else:
             add("amber", "carry", f"#{c['id']} was carried over.", c["id"])
@@ -1247,7 +1245,7 @@ def team_actions(
         for signal in closed["attention"]:
             if not running or (signal["id"] in carry and signal["kind"] in ("carry", "old")):
                 value = dict(signal)
-                if running and signal["id"] in open_ids and signal["kind"] in ("old", "carry"):
+                if running and signal["id"] in open_ids:
                     i = signal["id"]
                     age = t.open_age(t.hist[i], at, t.local(at - timedelta(microseconds=1)))
                     previous = carry[i]["age"]

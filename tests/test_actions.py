@@ -475,7 +475,7 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["kinds"], ["carry", "waiting"])
         self.assertTrue(rows[0]["carry"])
-        self.assertIn("; ", rows[0]["problem"])
+        self.assertEqual(rows[0]["problem"], "waited in Ready for QA 5 working days; carried over")
         self.assertIn("Raise it with the PO.", rows[0]["ask"])
         self.assertIn("Record why it was carried over", rows[0]["ask"])
 

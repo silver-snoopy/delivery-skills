@@ -72,12 +72,11 @@ text-transform:uppercase;padding:6px 10px;border-bottom:1px solid var(--line)}
 td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 .id{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--accent);white-space:nowrap}
 .chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
-.GREEN{background:var(--good-soft);color:var(--good)}
-.AMBER{background:var(--warn-soft);color:var(--warn)}
-.RED{background:var(--bad-soft);color:var(--bad)}.wait,.track{background:var(--accent-soft);color:var(--accent)}
+.GREEN,.green{background:var(--good-soft);color:var(--good)}
+.AMBER,.amber{background:var(--warn-soft);color:var(--warn)}
+.RED,.red{background:var(--bad-soft);color:var(--bad)}.wait,.track{background:var(--accent-soft);color:var(--accent)}
 .hot{color:var(--bad);font-weight:600}
-.red{background:var(--bad-soft);color:var(--bad)}.amber{background:var(--warn-soft);color:var(--warn)}
-.grey{background:var(--bg);color:var(--muted)}.green{background:var(--good-soft);color:var(--good)}
+.grey{background:var(--bg);color:var(--muted)}
 .foot{font-size:12.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px;
 display:flex;flex-direction:column;gap:6px}
 .private{background:var(--bad-soft);color:var(--bad);font-size:12px;padding:6px 10px;
@@ -470,7 +469,7 @@ def _footnote(dm: bool, teams: list[dict] | None = None) -> str:
         lines.append(
             f"<b>Status rule</b> (our convention, not an industry standard): GREEN = at least {round(GREEN_SHARE * 100)}% of "
             "planned work items delivered, not counting removed ones, and no carry-over older than the "
-            "team's P85; AMBER = one condition missed; RED = both missed, or a "
+            "team's P85 (or no carry-over when P85 is unavailable); AMBER = one condition missed; RED = both missed, or a "
             f"work item waiting (in a waiting state or blocked) for more than {WAIT_RED_DAYS} working days."
         )
         lines.append(
@@ -484,14 +483,14 @@ def _footnote(dm: bool, teams: list[dict] | None = None) -> str:
             f"over {WAIT_RED_DAYS} working days, or older than P85 and carried in; Waiting = waiting or Blocked "
             f"over {WAIT_FLAG_DAYS} working days; On Hold = in a hold state; Chase = older than P85; No movement "
             f"= no board change for {STALE_DAYS} working days; Not started = still Proposed after working "
-            f"day {NOT_STARTED_DAY}. Carry-over = planned item not delivered by sprint end (red when carried "
-            f"{CARRIED_FLAG}+ sprints and older than P85). No work = available, not onboarding, no open assignment; "
-            f"Too much WIP = over {WIP_FLAG} in progress; Nothing delivered = no delivery in the closed sprint. "
-            "Check = never active, reopened or shared; On track = open without a signal; Done = delivered "
-            "in the running sprint. Handled = answered "
-            "without worsening; ↑ = higher severity, a new signal kind or a new sprint since "
-            "the answer. Copied answers do not supply a carry-over reason for a new closed sprint; "
-            "change or clear and re-enter the Answer to update it."
+            f"day {NOT_STARTED_DAY}. Carry-over = unfinished planned item still on a sprint at sprint end "
+            f"(red when carried {CARRIED_FLAG}+ sprints and older than P85). No work = available, not onboarding, "
+            f"no open assignment; Too much WIP = over {WIP_FLAG} in progress; Nothing delivered = no delivery in "
+            "the closed sprint. Check = never active, reopened or shared; On track = open without a signal; "
+            "Done = delivered in the running sprint. Handled = answered without worsening (carry-over rows also "
+            "need a local reason in this folder); ↑ = higher severity, a new signal kind or a new sprint since "
+            "the answer. Answers inherited from another report folder do not supply a carry-over reason; "
+            "change or clear and re-enter the Answer to publish it."
         )
     else:
         enabled = (
@@ -926,8 +925,8 @@ def _pick(data, cfg, people, team_names, today, wanted) -> tuple:
 
 
 def run_report(args, client: Client | None, out) -> int:
-    """Generate manager_ and dm_ reports; reconcile raw signals first so carry-over reasons stay
-    scoped to answers entered or changed in this folder."""
+    """Generate manager_ and dm_ reports: compute team results, reconcile DM answers, and attach
+    scoped carry-over reasons."""
     cfg, people, data, vac, today, team_names = _load(args, client, out)
     if not cfg.test_states and any("first_pass" in metrics_of(cfg, team) for team in team_names):
         _warn(out, "no test states in config.json; first-time pass counts reopens only")
@@ -953,20 +952,11 @@ def run_report(args, client: Client | None, out) -> int:
         else None
         for team in picked
     }
-    closed = {
-        team: team_sprint(data, cfg, people, team, sprint, Notes(), vac.days_off) if sprint else None
-        for team, sprint in picked.items()
-    }
-    actions = {
-        team: team_actions(data, cfg, people, team, closed[team], running[team], today, vac.days_off)
-        for team in picked
-    }
-    reconcile_notes(notes, actions, picked, today)
     teams = []
+    actions = {}
     for team, sprint in picked.items():
-        scoped = notes_for_team(notes, team)
         if sprint is not None:
-            result = team_sprint(data, cfg, people, team, sprint, scoped, vac.days_off)
+            result = team_sprint(data, cfg, people, team, sprint, notes_for_team(notes, team), vac.days_off)
         else:
             why = f"No sprint named {name}." if args.sprint else _no_sprint(data, cfg, people, team)
             result = {
@@ -976,12 +966,17 @@ def run_report(args, client: Client | None, out) -> int:
                 "show_flow": show_flow_of(cfg, team),
                 "notes": {"note": notes.note.get(team, "")},
             }
-        refreshed = team_actions(
+        actions[team] = team_actions(
             data, cfg, people, team, result if sprint else None, running[team], today, vac.days_off
         )
-        reconcile_notes(notes, {team: refreshed}, picked, today, observed=actions)
-        result["actions"] = refreshed
+        result["actions"] = actions[team]
         teams.append(result)
+    reconcile_notes(notes, actions, picked, today)
+    for result in teams:
+        if not result.get("missing"):
+            reasons = notes_for_team(notes, result["team"]).items
+            for carry in result["carry"]:
+                carry["reason"] = reasons.get(carry["id"], "")
     write_report_notes(folder, notes)
     for s in {
         (t["sprint"]["name"], t["sprint"]["start"], t["sprint"]["end"]) for t in teams if not t.get("missing")
@@ -1012,10 +1007,11 @@ def run_report(args, client: Client | None, out) -> int:
     print(f"Written:\n  {paths[0]}\n  {paths[1]}\n  {notes_path} (notes)", file=out)
     print(f"sprint: {name}\nnotes: {notes_path}", file=out)
     for t in sorted((t for t in teams if not t.get("missing")), key=lambda t: t["team"]):
+        reasons = notes_for_team(notes, t["team"]).items
         lines = [
             f"carry-over without note: #{c['id']} {c['title'] or ''}"
             for c in t["carry"]
-            if c["id"] not in notes_for_team(notes, t["team"]).items
+            if c["id"] not in reasons
         ]
         lines += [
             f"worked on: #{w['id']} {w['title']} ({'delivered' if w['delivered'] else 'in progress'})"
@@ -1025,11 +1021,7 @@ def run_report(args, client: Client | None, out) -> int:
             print(f"{t['team']} {' '.join(line.split())}", file=out)
     for t in teams:
         for row in t["actions"]["rows"]:
-            if row["level"] in ("red", "amber") and (
-                not row.get("answer")
-                or row.get("worse")
-                or (row.get("carry") and row["id"] not in notes_for_team(notes, t["team"]).items)
-            ):
+            if row["level"] in ("red", "amber") and not row.get("handled"):
                 item = f" #{row['id']}" if row["id"] is not None else ""
                 badge_text = row["badge"] + (" ↑" if row.get("worse") else "")
                 line = f"{t['team']} action: {row['person']}{item} {badge_text} - {row['problem']}"

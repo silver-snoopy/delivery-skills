@@ -729,16 +729,26 @@ class RenderTest(unittest.TestCase):
         page_without_hold = render_manager("Sprint 29", t, GEN)
         self.assertNotIn("<th>On Hold</th>", page_without_hold)
         self.assertNotIn("Agreed with PO", page_without_hold)
+        self.assertIn("<th>At sprint end</th><th>Reason</th>", page_without_hold)
+        self.assertIn("<td>–</td></tr>", page_without_hold)
         t[0]["carry"][0]["held"] = 3
+        t[0]["carry"].append(
+            dict(t[0]["carry"][0], id=109, title="Sibling carry", held=0, reason="API delay")
+        )
         t[0]["people"][0]["held"] = [[103, 3], [7, 1]]
         page_with_hold = render_manager("Sprint 29", t, GEN)
-        self.assertIn("<summary>Carried over items (1) (1 On Hold)</summary>", page_with_hold)
+        self.assertIn("<summary>Carried over items (2) (1 On Hold)</summary>", page_with_hold)
         alfa_card = self.card(page_with_hold, "ALFA")
         beta_card = self.card(page_with_hold, "BETA")
-        self.assertIn("<th>On Hold</th><th>Reason</th>", alfa_card)
-        self.assertIn("<td>3 d</td>", alfa_card)
+        self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", alfa_card)
+        self.assertIn("<td>3 d</td><td>–</td>", alfa_card)
+        self.assertIn("<td>–</td><td>API delay</td>", alfa_card)
         self.assertNotIn("<th>On Hold</th>", beta_card)
         self.assertNotIn("Agreed with PO", page_with_hold)
+        dm_page = render_dm("Sprint 29", t, GEN)
+        self.assertIn("(or no carry-over when P85 is unavailable)", dm_page)
+        self.assertIn("unfinished planned item still on a sprint at sprint end", dm_page)
+        self.assertNotIn("PO agreement", dm_page)
         for render in (render_manager, render_dm):
             self.assertIn(
                 "On Hold = days the work item spent in a hold state or tagged Blocked",
@@ -777,7 +787,11 @@ class RenderTest(unittest.TestCase):
             self.assertIn("Retry &amp; reconcile", page)
         t = teams()
         t[0]["worked_on"] = [["<b>x</b>", 1]]
-        self.assertIn("&lt;b&gt;x&lt;/b&gt;", render_manager("Sprint 29", t, GEN))
+        t[0]["carry"][0]["reason"] = "<script>x</script> & delay"
+        escaped_manager = render_manager("Sprint 29", t, GEN)
+        self.assertIn("&lt;b&gt;x&lt;/b&gt;", escaped_manager)
+        self.assertIn("&lt;script&gt;x&lt;/script&gt; &amp; delay", escaped_manager)
+        self.assertNotIn("<script>x</script>", escaped_manager)
 
     def test_no_script_tags_or_external_urls(self):
         for render in (render_manager, render_dm):
@@ -900,7 +914,9 @@ class RenderTest(unittest.TestCase):
             b.cache(), action_config(), roster, "ALFA", t, b.sprints[-1], date(2026, 11, 10), {}
         )
         row = next(r for r in t["actions"]["rows"] if r["id"] == 7101)
-        expected = "Raise it with the PO. Ask what is blocking it."
+        expected = (
+            "Raise it with the PO. Ask what is blocking it. Record why it was carried over in notes.md."
+        )
         self.assertEqual(row["ask"], expected)
         page = render_dm("Old", [t], GEN).split('<div class="foot">')[0]
         self.assertIn("<td>" + expected + "</td>", page)

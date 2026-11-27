@@ -5,7 +5,7 @@ import re
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta
 from statistics import median
-from typing import Any, Optional
+from typing import Any
 
 from ledger.config import (
     Config,
@@ -34,7 +34,7 @@ MAX_SPRINT_DAYS = 42
 CLOSED = ("Completed", "Removed")
 
 
-def percentile(values: list[int], p: float) -> Optional[int]:
+def percentile(values: list[int], p: float) -> int | None:
     """Nearest rank: sorted(v)[ceil(p*n)-1]; None for no values."""
     if not values:
         return None
@@ -53,12 +53,12 @@ def histories(data: dict, not_delivered: Sequence[str]) -> dict[int, History]:
     return {i: History(rs, not_delivered) for i, rs in rows.items()}
 
 
-def _row(h: History, t: Optional[datetime]) -> Optional[dict]:
+def _row(h: History, t: datetime | None) -> dict | None:
     """The revision in force at `t`, or the last one when `t` is None."""
     return h.rows[-1] if t is None else h.at(t)
 
 
-def level_of(h: History, levels, histories, at: Optional[datetime] = None) -> Optional[str]:
+def level_of(h: History, levels, histories, at: datetime | None = None) -> str | None:
     """ "stories" or "tasks" at `at` (default: now); an unlisted Bug follows its parent's level."""
     row = _row(h, at)
     if row is None:
@@ -90,7 +90,7 @@ def _key(sprint: dict):
 
 
 def team_sprints(
-    data: dict, cfg: Config, people: list[Person], team: str, until: Optional[datetime] = None
+    data: dict, cfg: Config, people: list[Person], team: str, until: datetime | None = None
 ) -> list[dict]:
     """Dated iterations that held one of the team's counted items, from history up to `until`."""
     return _Team(data, cfg, people, team).sprints(until)
@@ -150,15 +150,15 @@ class _Team:
         }
         self.sprint_at = {s["path"]: s for s in data["iterations"] if is_sprint(s)}
 
-    def is_counted(self, h: History, t: Optional[datetime]) -> bool:
+    def is_counted(self, h: History, t: datetime | None) -> bool:
         if isinstance(self.count, list):
             return (_row(h, t) or {}).get("type") in self.count
         return level_of(h, self.data["levels"], self.hist, t) == self.count
 
-    def counted(self, t: Optional[datetime]) -> list[History]:
+    def counted(self, t: datetime | None) -> list[History]:
         return [self.hist[i] for i in sorted(self.hist) if self.is_counted(self.hist[i], t)]
 
-    def kids(self, h: History, t: Optional[datetime]) -> list[History]:
+    def kids(self, h: History, t: datetime | None) -> list[History]:
         """Child items whose parent at `t` is `h`; none when counting tasks. With a type list,
         children that are counted themselves are left out, so no work is counted twice."""
         if self.count == "tasks":
@@ -169,9 +169,9 @@ class _Team:
             found = [k for k in found if not self.is_counted(k, t)]
         return found
 
-    def sprints(self, until: Optional[datetime]) -> list[dict]:
+    def sprints(self, until: datetime | None) -> list[dict]:
         def seen(h):
-            return [r for r, ts in zip(h.rows, h.times) if until is None or ts <= until]
+            return [r for r, ts in zip(h.rows, h.times, strict=True) if until is None or ts <= until]
 
         paths = set()
         for h in self.counted(until):
@@ -196,7 +196,7 @@ class _Team:
         row = h.at(t1)
         return bool(row and row["assigned"] and row["assigned"].lower() in emails)
 
-    def ours(self, h: History, t0, t1, emails: Optional[set] = None) -> bool:
+    def ours(self, h: History, t0, t1, emails: set | None = None) -> bool:
         """Ours: one of `emails` (default: the team's) was the assignee while the item was active
         up to t1; an item never active by t1 counts by its assignee at t1. At the stories
         level the same test on a child item also makes the item ours."""
@@ -227,7 +227,7 @@ class _Team:
         start, end = date.fromisoformat(sprint["start"]), date.fromisoformat(sprint["end"])
         spans = [
             (ts, h.times[i + 1] if i + 1 < len(h.times) else None)
-            for i, (r, ts) in enumerate(zip(h.rows, h.times))
+            for i, (r, ts) in enumerate(zip(h.rows, h.times, strict=True))
             if is_held(r, self.cfg.hold_states)
         ]
         count, d = 0, start
@@ -242,13 +242,13 @@ class _Team:
     def local(self, t) -> date:
         return t.astimezone(self.tz).date()
 
-    def cycle_days(self, h: History) -> Optional[int]:
+    def cycle_days(self, h: History) -> int | None:
         fa, done = h.first_active, h.done_at
         if fa is None or done is None or fa > done:
             return None
         return (self.local(done) - self.local(fa)).days + 1
 
-    def build_span(self, h: History) -> Optional[tuple[datetime, datetime]]:
+    def build_span(self, h: History) -> tuple[datetime, datetime] | None:
         """First active ownership to first test entry (including creation in test), capped at the delivered close."""
         done = h.done_at
         if done is None:
@@ -266,7 +266,7 @@ class _Team:
         handoff = next(
             (
                 t
-                for i, (r, t) in enumerate(zip(h.rows, h.times))
+                for i, (r, t) in enumerate(zip(h.rows, h.times, strict=True))
                 if start <= t < done
                 and r["state"] in self.cfg.test_states
                 and (not i or h.rows[i - 1]["state"] not in self.cfg.test_states)
@@ -275,7 +275,7 @@ class _Team:
         )
         return (start, handoff) if start < handoff else None
 
-    def build_seconds(self, h: History) -> Optional[float]:
+    def build_seconds(self, h: History) -> float | None:
         """Build-span seconds excluding the union of waiting, hold and Blocked."""
         span = self.build_span(h)
         if span is None:
@@ -286,7 +286,7 @@ class _Team:
         )
         return (end - start).total_seconds() - excluded
 
-    def time_split(self, h: History) -> Optional[tuple[float, float, float]]:
+    def time_split(self, h: History) -> tuple[float, float, float] | None:
         """Building, waiting and remaining seconds from first active to delivered close."""
         fa, done = h.first_active, h.done_at
         if fa is None or done is None or fa > done:
@@ -301,7 +301,7 @@ class _Team:
         fa, done = h.first_active, h.done_at
         if fa is None or done is None or fa > done:
             return []
-        seen = {r["state"] for r, t in zip(h.rows, h.times) if fa <= t < done}
+        seen = {r["state"] for r, t in zip(h.rows, h.times, strict=True) if fa <= t < done}
         return [state for state in self.cfg.waiting_states if state in seen]
 
     def owner(self, h: History, at: datetime) -> str:
@@ -326,12 +326,12 @@ class _Team:
         past = [
             (ts, -x.id, self.names[(r["assigned"] or "").lower()])
             for x in [h, *kids]
-            for r, ts in zip(x.rows, x.times)
+            for r, ts in zip(x.rows, x.times, strict=True)
             if ts <= at and (r["assigned"] or "").lower() in self.names
         ]
         return max(past)[-1] if past else ""
 
-    def figures(self, sprint: dict, until: Optional[datetime] = None) -> dict[str, list[int]]:
+    def figures(self, sprint: dict, until: datetime | None = None) -> dict[str, list[int]]:
         """Sprint figures at t0/t1; planned is ours and open at t0 (not-yet-ours at t0 is added),
         and open planned items still on this or a later sprint at t1 carry over while cut or
         off-sprint moves count as removed."""
@@ -363,7 +363,9 @@ class _Team:
             planned = ours0 and open0
             added = (
                 not on_path0
-                and any(t0 < ts < t1 and r["iteration"] == path for r, ts in zip(h.rows, h.times))
+                and any(
+                    t0 < ts < t1 and r["iteration"] == path for r, ts in zip(h.rows, h.times, strict=True)
+                )
             ) or (open0 and not ours0)
             delivered = self.closed_in(h, path)
             reopened = done is not None and any(
@@ -371,7 +373,7 @@ class _Team:
                 and ts > done
                 and r["category"] in ACTIVE
                 and h.rows[i - 1]["category"] not in ACTIVE
-                for i, (r, ts) in enumerate(zip(h.rows, h.times))
+                for i, (r, ts) in enumerate(zip(h.rows, h.times, strict=True))
                 if i
             )
             if not (planned or added or delivered or reopened) or not self.ours(h, t0, t1):
@@ -412,7 +414,7 @@ class _Team:
             title = self.hist[parent].title
         return title or f"Parent {parent}"
 
-    def waiting_share(self, ids: list[int]) -> Optional[float]:
+    def waiting_share(self, ids: list[int]) -> float | None:
         waited = total = 0.0
         for i in ids:
             h = self.hist[i]
@@ -456,10 +458,10 @@ class _Team:
         return any(
             r is not None and r["category"] in ACTIVE
             for x in [h, *self.kids(h, t1)]
-            for r in [x.at(s0)] + [r for r, ts in zip(x.rows, x.times) if s0 <= ts <= t1]
+            for r in [x.at(s0)] + [r for r, ts in zip(x.rows, x.times, strict=True) if s0 <= ts <= t1]
         )
 
-    def open_age(self, h: History, t1, end: date) -> Optional[int]:
+    def open_age(self, h: History, t1, end: date) -> int | None:
         row, fa = h.at(t1), h.first_active
         if row is None or row["category"] in CLOSED or fa is None or fa > t1:
             return None
@@ -476,7 +478,8 @@ class _Team:
             ):
                 return True
             if any(
-                s0 <= ts <= t1 and (r["assigned"] or "").lower() in emails for r, ts in zip(h.rows, h.times)
+                s0 <= ts <= t1 and (r["assigned"] or "").lower() in emails
+                for r, ts in zip(h.rows, h.times, strict=True)
             ):
                 return True
         return False
@@ -507,10 +510,10 @@ class _Team:
             "no_assignment": not self.assigned_any(emails, s0, t1),
         }
 
-    def since(self, h: History, t1, waiting: bool) -> Optional[date]:
+    def since(self, h: History, t1, waiting: bool) -> date | None:
         """Local date the item last entered a waiting state (or Blocked), or last changed
         (counting changes to its children at the stories level)."""
-        rows = [(r, ts) for r, ts in zip(h.rows, h.times) if ts <= t1]
+        rows = [(r, ts) for r, ts in zip(h.rows, h.times, strict=True) if ts <= t1]
         if not waiting:
             return self.local(max(ts for x in [h, *self.kids(h, t1)] for ts in x.times if ts <= t1))
         start = None
@@ -520,15 +523,15 @@ class _Team:
             start = ts
         return self.local(start) if start is not None else None
 
-    def rest(self, members: list[dict], counted: list[History], sprint: dict) -> Optional[dict]:
+    def rest(self, members: list[dict], counted: list[History], sprint: dict) -> dict | None:
         """Delivered items at the team's level under members' main areas that are not ours."""
-        s0, t0, t1 = self.instants(sprint)
+        _, t0, t1 = self.instants(sprint)
         areas = set()
         for m in members:
             emails = {e.lower() for e in m["person"].emails}
             seen: dict[str, int] = {}
             for h in self.hist.values():
-                for r, ts in zip(h.rows, h.times):
+                for r, ts in zip(h.rows, h.times, strict=True):
                     if ts <= t1 and (r["assigned"] or "").lower() in emails:
                         seen[r["area"]] = seen.get(r["area"], 0) + 1
             if seen:
@@ -606,7 +609,7 @@ def _attention(
     people: list[dict],
     waits: dict[int, tuple],
     stale: dict[int, tuple],
-    p85: Optional[int],
+    p85: int | None,
     open_ages: dict[int, int],
     shared: dict[int, list[str]],
     at: datetime,
@@ -707,7 +710,7 @@ def _attention(
 
 
 def _status(
-    f: dict, carry: list[dict], p85: Optional[int], waits: dict[int, tuple], manual: Optional[tuple]
+    f: dict, carry: list[dict], p85: int | None, waits: dict[int, tuple], manual: tuple | None
 ) -> dict:
     """GREEN/AMBER/RED by planned delivery share and unagreed carry-overs (all carry-overs when P85 is unavailable)."""
     if manual is not None:
@@ -989,7 +992,7 @@ def team_sprint(
 
 
 def _running(
-    t: _Team, sprint: dict, now: datetime, members: list[dict], days_off: dict, p85: Optional[int]
+    t: _Team, sprint: dict, now: datetime, members: list[dict], days_off: dict, p85: int | None
 ) -> tuple:
     """Current figures and raw signals (`t` has no revisions later than `now`); detects all
     carried-in items across sprint boundaries, including added work."""
@@ -1047,7 +1050,8 @@ def _running(
                 and onward["start"] >= previous["start"]
                 and t.ours(h, planned_at, boundary)
                 and any(
-                    ts <= boundary and r["iteration"] == previous["path"] for r, ts in zip(h.rows, h.times)
+                    ts <= boundary and r["iteration"] == previous["path"]
+                    for r, ts in zip(h.rows, h.times, strict=True)
                 )
             ):
                 carried.add(h.id)
@@ -1073,7 +1077,7 @@ def _running(
     for h in opened:
         if h.id in current["held"]:
             since_ts = None
-            for r, ts in reversed(list(zip(h.rows, h.times))):
+            for r, ts in reversed(list(zip(h.rows, h.times, strict=True))):
                 if r["state"] not in t.cfg.hold_states:
                     break
                 since_ts = ts
@@ -1180,8 +1184,8 @@ def team_actions(
     cfg: Config,
     people: list[Person],
     team: str,
-    closed: Optional[dict],
-    running: Optional[dict],
+    closed: dict | None,
+    running: dict | None,
     today: date,
     days_off: dict,
 ) -> dict:

@@ -6,7 +6,7 @@ For each sprint it writes two self-contained HTML files, named with the run date
 
 ## Installation
 
-You need Python 3.9 or later and, for a real board, the `az` CLI signed in with `az login`. The `azure-devops` extension is optional: it supplies the default organisation and project; without it, pass `--org` and `--project` to `init`. There are no packages to install.
+You need Python 3.12 or later and, for a real board, the `az` CLI signed in with `az login`. The `azure-devops` extension is optional: it supplies the default organisation and project; without it, pass `--org` and `--project` to `init`. There are no packages to install.
 
 ```sh
 git clone <this repository> && cd delivery-skills
@@ -107,7 +107,7 @@ Scope changes and carry-over appear in one Scope line below the figures. Where t
 
 ## Development
 
-Running `bin/ledger` requires only the Python 3.9+ standard library. Contributors who modify the codebase can install the optional `pre-push` static analysis hook (requires `pre-commit` on Python 3.11+ and initial network access to build hook environments; works offline afterwards):
+Running `bin/ledger` requires only the Python 3.12+ standard library. Contributors who modify the codebase can install the optional `pre-push` static analysis hook (requires `pre-commit` and initial network access to build hook environments; works offline afterwards):
 
 ```sh
 pre-commit install --install-hooks

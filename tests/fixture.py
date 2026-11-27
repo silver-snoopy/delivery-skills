@@ -1,7 +1,6 @@
 """Small builder for revision caches used by every test that needs board history."""
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from ledger.replay import local_tz
 
@@ -60,7 +59,7 @@ class Item:
             if value is not _KEEP:
                 self.cur[key] = list(value) if key == "tags" else value
         local = datetime.strptime(when, "%Y-%m-%d %H:%M").replace(tzinfo=self.board.tz)
-        utc = local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        utc = local.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.rows.append(
             {
                 "id": self.id,
@@ -82,7 +81,7 @@ class Board:
         self.sprints = []  # type: List[dict]
         self.items = []  # type: List[Item]
 
-    def sprint(self, name: str, start: str, end: str, path: Optional[str] = None) -> "Board":
+    def sprint(self, name: str, start: str, end: str, path: str | None = None) -> "Board":
         self.sprints.append(
             {"path": path if path is not None else "Proj\\" + name, "name": name, "start": start, "end": end}
         )

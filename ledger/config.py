@@ -9,7 +9,7 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 from ledger.replay import local_tz
 
@@ -35,8 +35,8 @@ class Person:
     name: str
     emails: list[str]
     team: str
-    joined: Optional[date]
-    left: Optional[date]
+    joined: date | None
+    left: date | None
     allocation: float = 1.0
 
 
@@ -48,7 +48,7 @@ def _clean_name(raw: str) -> str:
     return " ".join(name.split())
 
 
-def parse_staff(text: str, warnings: Optional[list[str]] = None) -> list[tuple[str, str]]:
+def parse_staff(text: str, warnings: list[str] | None = None) -> list[tuple[str, str]]:
     """(name, email) pairs from `Name <email>;` entries or bare emails; entries without an
     email address are skipped with a line in `warnings`."""
     pairs = []
@@ -77,7 +77,7 @@ def merge_staff(pairs: list[tuple[str, str]]) -> dict[str, list[str]]:
     return merged
 
 
-def _date(text: Optional[str]) -> Optional[date]:
+def _date(text: str | None) -> date | None:
     cleaned = (text or "").strip()
     return date.fromisoformat(cleaned) if cleaned else None
 
@@ -242,14 +242,14 @@ class Notes:
     note: dict[str, str] = field(default_factory=dict)
     exec_note: dict[str, str] = field(default_factory=dict)
     po_satisfaction: dict[str, tuple[int, str]] = field(default_factory=dict)
-    po_history: dict[str, dict[str, Optional[int]]] = field(default_factory=dict)
+    po_history: dict[str, dict[str, int | None]] = field(default_factory=dict)
     status: dict[str, tuple[str, str]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     teams: dict = field(default_factory=dict)
     markers: dict = field(default_factory=dict)
     state: dict = field(default_factory=dict)
     raw: list[str] = field(default_factory=list)
-    reported: Optional[set] = None
+    reported: set | None = None
 
 
 _SECTIONS = ("Summary", "Exec note", "PO satisfaction", "Note", "Status", "Actions", "Resolved")
@@ -550,7 +550,7 @@ def load_report_notes(directory: str, folder: str, selected: dict, iterations: l
     notes = _read_notes(folder) if exists else Notes()
     target = os.path.abspath(folder)
     discovered: list[tuple[str, Notes]] = []
-    po_history: dict[str, dict[str, Optional[int]]] = {}
+    po_history: dict[str, dict[str, int | None]] = {}
     roots = [r for r in (directory, os.path.join(directory, "reports")) if os.path.isdir(r)]
     for entry in sorted((e for r in roots for e in os.scandir(r)), key=lambda e: e.path):
         if not entry.is_dir() or os.path.abspath(entry.path) == target:
@@ -570,8 +570,8 @@ def load_report_notes(directory: str, folder: str, selected: dict, iterations: l
                 _warning(notes, f"notes.md marker for {team} has unknown sprint path {path}; skipped")
     full_cache: dict[str, Notes] = {}
     for team, sprint in selected.items():
-        source: Optional[Notes] = notes if exists else None
-        source_path: Optional[str] = None
+        source: Notes | None = notes if exists else None
+        source_path: str | None = None
         if not exists and sprint is not None:
             choices = [
                 (ends[n.markers[team]], path)
@@ -675,7 +675,7 @@ def _observe(notes, team, key, saved, row, closed, today, copied):
 
 
 def reconcile_notes(
-    notes: Notes, actions: dict, selected: dict, today: date, observed: Optional[dict] = None
+    notes: Notes, actions: dict, selected: dict, today: date, observed: dict | None = None
 ) -> dict:
     """Own section membership; `observed` reuses raw baselines for the final signal view."""
     _bind(notes)

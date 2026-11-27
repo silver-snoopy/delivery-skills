@@ -3,7 +3,6 @@
 import argparse
 import os
 import sys
-from typing import Optional
 
 from ledger.ado import AdoError
 
@@ -46,7 +45,7 @@ def _ask_for(args, out):
     return ask
 
 
-def main(argv: Optional[list[str]] = None, client=None, out=None) -> int:
+def main(argv: list[str] | None = None, client=None, out=None) -> int:
     out = out or sys.stdout
     args = _parser().parse_args(argv)
     try:

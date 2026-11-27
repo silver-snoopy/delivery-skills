@@ -161,6 +161,7 @@ class SprintFigureTests(unittest.TestCase):
                     "sprints": 2,
                     "state": "Ready for QA",
                     "waiting": True,
+                    "on_hold": False,
                     "reason": "QA environment down",
                     "held": 0,
                 },
@@ -171,6 +172,7 @@ class SprintFigureTests(unittest.TestCase):
                     "sprints": 1,
                     "state": "New",
                     "waiting": False,
+                    "on_hold": False,
                     "reason": "",
                     "held": 0,
                 },
@@ -402,9 +404,15 @@ class SprintFigureTests(unittest.TestCase):
             "2026-11-02 09:00", state="On Hold"
         ).at("2026-11-04 09:00", state="Active").at("2026-11-05 18:00", tags=["Blocked"])
         b.item(2).at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active")
+        b.item(3).at("2026-10-26 09:00", iteration=S29, assigned=MAYA, state="Active").at(
+            "2026-11-05 09:00", state="On Hold"
+        )
         t = run(b, "ALFA", "S29")
         # Mon 2, Tue 3, Wed 4 (On Hold), Thu 5 and Fri 6 (Blocked); Sat 7 is not counted
-        self.assertEqual([(c["id"], c["held"]) for c in t["carry"]], [(1, 5), (2, 0)])
+        self.assertEqual(
+            [(c["id"], c["held"], c["on_hold"]) for c in t["carry"]],
+            [(1, 5, False), (2, 0, False), (3, 2, True)],
+        )
 
     def test_person_held_items(self):
         b = board()

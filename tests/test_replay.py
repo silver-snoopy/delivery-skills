@@ -1,11 +1,11 @@
 import json
 import unittest
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from ledger.replay import History, day_end, day_start, local_tz, parse_ts
 from tests.fixture import Board
 
-UTC = timezone.utc
+UTC = UTC
 
 
 def utc(*a):

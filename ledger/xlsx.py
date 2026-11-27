@@ -7,7 +7,6 @@ import zipfile
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional
 from xml.etree import ElementTree as ET
 
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -40,7 +39,7 @@ class Vacations:
     days: set[date] = field(default_factory=set)
 
 
-def match_name(name: str, candidates: Iterable[str]) -> Optional[str]:
+def match_name(name: str, candidates: Iterable[str]) -> str | None:
     """Match ignoring case, accents and word order; None when nothing matches."""
 
     def key(s):
@@ -57,7 +56,7 @@ def match_name(name: str, candidates: Iterable[str]) -> Optional[str]:
     return None
 
 
-def resolve_name(cal: str, names: Sequence[str], aliases: dict[str, str]) -> Optional[str]:
+def resolve_name(cal: str, names: Sequence[str], aliases: dict[str, str]) -> str | None:
     """The roster name for a calendar name: its name_aliases entry, else match_name."""
     target = aliases.get(cal)
     return target if target in names else match_name(cal, names)
@@ -133,7 +132,7 @@ def _read_sheet(z, path, shared):
     return cells, merges
 
 
-def _day_number(text: str) -> Optional[int]:
+def _day_number(text: str) -> int | None:
     try:
         f = float(text)
     except ValueError:
@@ -141,7 +140,7 @@ def _day_number(text: str) -> Optional[int]:
     return int(f) if f == int(f) and 1 <= f <= 31 else None
 
 
-def _month_title(text: str) -> Optional[tuple[int, int]]:
+def _month_title(text: str) -> tuple[int, int] | None:
     m = re.match(r"^(\d{4})-(\d{1,2})$", text)
     if m and 1 <= int(m.group(2)) <= 12:
         return int(m.group(1)), int(m.group(2))
@@ -184,7 +183,7 @@ def _runs(cells, header_row, name_col):
 
 
 def _run_months(cells, merges, header_row, runs):
-    months: list[Optional[tuple[int, int]]] = [None] * len(runs)
+    months: list[tuple[int, int] | None] = [None] * len(runs)
     for (r, c), text in sorted(cells.items()):
         title = _month_title(text) if r < header_row else None
         if not title:
@@ -235,7 +234,7 @@ def read_vacations(path: str, half_day_codes: Sequence[str] = ()) -> Vacations:
                 (c for (r, c), t in cells.items() if r == header_row and t.lower() == "squad"), None
             )
             col_day: dict[int, date] = {}
-            for run, ym in zip(runs, months):
+            for run, ym in zip(runs, months, strict=True):
                 if ym is None:
                     continue
                 year, month = ym

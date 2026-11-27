@@ -2,8 +2,8 @@
 
 import re
 from collections.abc import Callable, Sequence
-from datetime import date, datetime, timedelta, timezone, tzinfo
-from typing import Optional
+from datetime import UTC, date, datetime, timedelta, tzinfo
+from itertools import pairwise
 
 ACTIVE = ("InProgress", "Resolved")
 _TS = re.compile(r"^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.(\d+))?(Z|[+-]\d\d:?\d\d)?$")
@@ -29,7 +29,7 @@ def parse_ts(text: str) -> datetime:
         raise ValueError(f"bad timestamp: {text!r}")
     y, mo, d, h, mi, s, frac, zone = m.groups()
     micro = int((frac or "0")[:6].ljust(6, "0"))
-    dt = datetime(int(y), int(mo), int(d), int(h), int(mi), int(s), micro, tzinfo=timezone.utc)
+    dt = datetime(int(y), int(mo), int(d), int(h), int(mi), int(s), micro, tzinfo=UTC)
     if zone and zone != "Z":
         sign = 1 if zone[0] == "+" else -1
         digits = zone[1:].replace(":", "")
@@ -49,7 +49,7 @@ def is_held(row: dict, hold_states: Sequence[str]) -> bool:
 
 def day_start(d: date, tz: tzinfo) -> datetime:
     """UTC instant of 00:00 local on `d`."""
-    return datetime(d.year, d.month, d.day, tzinfo=tz).astimezone(timezone.utc)
+    return datetime(d.year, d.month, d.day, tzinfo=tz).astimezone(UTC)
 
 
 def day_end(d: date, tz: tzinfo) -> datetime:
@@ -68,16 +68,16 @@ class History:
         self.title = last["title"]
         self.parent = last["parent"]
 
-    def at(self, t: datetime) -> Optional[dict]:
+    def at(self, t: datetime) -> dict | None:
         found = None
-        for row, ts in zip(self.rows, self.times):
+        for row, ts in zip(self.rows, self.times, strict=True):
             if ts <= t:
                 found = row
         return found
 
     @property
-    def first_active(self) -> Optional[datetime]:
-        for row, ts in zip(self.rows, self.times):
+    def first_active(self) -> datetime | None:
+        for row, ts in zip(self.rows, self.times, strict=True):
             if row["category"] in ACTIVE:
                 return ts
         return None
@@ -89,8 +89,8 @@ class History:
         )
 
     @property
-    def done_at(self) -> Optional[datetime]:
-        for row, ts in zip(self.rows, self.times):
+    def done_at(self) -> datetime | None:
+        for row, ts in zip(self.rows, self.times, strict=True):
             if row["category"] == "Completed" and not self.cut(row):
                 return ts
         return None
@@ -99,7 +99,7 @@ class History:
     def reopened(self) -> bool:
         done = self.done_at
         return done is not None and any(
-            row["category"] in ACTIVE and ts > done for row, ts in zip(self.rows, self.times)
+            row["category"] in ACTIVE and ts > done for row, ts in zip(self.rows, self.times, strict=True)
         )
 
     def returned(self, test_states: Sequence[str]) -> bool:
@@ -115,14 +115,14 @@ class History:
                 and not self.cut(prev)
                 and new["category"] in ("Proposed", "InProgress", "Resolved")
             )
-            for prev, new in zip(self.rows, self.rows[1:])
+            for prev, new in pairwise(self.rows)
         )
 
     def assignees_active(self, until: datetime) -> set[str]:
         """Assignees recorded on revisions up to `until` while the item was active."""
         return {
             row["assigned"]
-            for row, ts in zip(self.rows, self.times)
+            for row, ts in zip(self.rows, self.times, strict=True)
             if ts <= until and row["category"] in ACTIVE and row["assigned"]
         }
 
@@ -132,14 +132,14 @@ class History:
     def seconds_where(self, start: datetime, end: datetime, pred: Callable[[dict], bool]) -> float:
         """Seconds in [start, end) whose revision in force satisfies `pred`."""
         total = 0.0
-        for i, (row, ts) in enumerate(zip(self.rows, self.times)):
+        for i, (row, ts) in enumerate(zip(self.rows, self.times, strict=True)):
             nxt = self.times[i + 1] if i + 1 < len(self.rows) else end
             lo, hi = max(ts, start), min(nxt, end)
             if hi > lo and pred(row):
                 total += (hi - lo).total_seconds()
         return total
 
-    def last_change(self, before: datetime) -> Optional[datetime]:
+    def last_change(self, before: datetime) -> datetime | None:
         """Time of the last revision at or before `before`."""
         found = [ts for ts in self.times if ts <= before]
         return max(found) if found else None

@@ -4,7 +4,6 @@ import os
 import re
 from datetime import date, datetime
 from html import escape, unescape
-from typing import Optional
 from urllib.parse import quote
 
 from ledger.ado import Client, cached_ids, fetch, load_cache, save_cache
@@ -197,7 +196,7 @@ def _fig(n: str, label: str, key: bool = False, arrow: str = "", extra: str = ""
     )
 
 
-def _arrow(now_text: str, before_text: Optional[str], better: bool, sprints: list[str]) -> str:
+def _arrow(now_text: str, before_text: str | None, better: bool, sprints: list[str]) -> str:
     if before_text is None or before_text == now_text or not sprints:
         return ""
     try:
@@ -279,8 +278,9 @@ _METRIC_RENDERERS = {
             "planned work items delivered",
             True,
         ),
-        lambda t, tr: ["Planned work items delivered"]
-        + [f"{s['delivered_planned']}/{s['planned']}" for s in tr],
+        lambda t, tr: (
+            ["Planned work items delivered"] + [f"{s['delivered_planned']}/{s['planned']}" for s in tr]
+        ),
     ),
     "delivered": (
         lambda t: _fig(str(len(t["delivered"])), "work items delivered in total"),
@@ -296,20 +296,24 @@ _METRIC_RENDERERS = {
     ),
     "first_pass": (
         _first_pass,
-        lambda t, tr: ["First-time pass"]
-        + [
-            "–"
-            if s["first_pass"] is None
-            else _pct(s["first_pass"], 99 if s["first_pass"] < 1.0 else 100)
-            if t["first_pass"]["tracked"]
-            else "not tracked"
-            for s in tr
-        ],
+        lambda t, tr: (
+            ["First-time pass"]
+            + [
+                "–"
+                if s["first_pass"] is None
+                else _pct(s["first_pass"], 99 if s["first_pass"] < 1.0 else 100)
+                if t["first_pass"]["tracked"]
+                else "not tracked"
+                for s in tr
+            ]
+        ),
     ),
     "po_satisfaction": (
         _po_satisfaction,
-        lambda t, tr: ["PO satisfaction"]
-        + [f"{s['po_satisfaction']}/5" if s.get("po_satisfaction") is not None else "–" for s in tr],
+        lambda t, tr: (
+            ["PO satisfaction"]
+            + [f"{s['po_satisfaction']}/5" if s.get("po_satisfaction") is not None else "–" for s in tr]
+        ),
     ),
 }
 
@@ -443,7 +447,7 @@ def _exec_team(t: dict) -> str:
     return _tag("article", "\n".join(parts), "squad")
 
 
-def _footnote(dm: bool, teams: Optional[list[dict]] = None) -> str:
+def _footnote(dm: bool, teams: list[dict] | None = None) -> str:
     has_po = False
     if dm:
         first = (
@@ -922,7 +926,7 @@ def _pick(data, cfg, people, team_names, today, wanted) -> tuple:
     return name, picked
 
 
-def run_report(args, client: Optional[Client], out) -> int:
+def run_report(args, client: Client | None, out) -> int:
     """Generate manager_ and dm_ reports; always reconcile source signals without PO agreement
     first so agreed rows keep a stable baseline across reruns."""
     cfg, people, data, vac, today, team_names = _load(args, client, out)
@@ -1034,7 +1038,7 @@ def run_report(args, client: Optional[Client], out) -> int:
     return 0
 
 
-def run_person(args, client: Optional[Client], out) -> int:
+def run_person(args, client: Client | None, out) -> int:
     cfg, people, data, vac, today, _ = _load(args, client, out)
     person = email_index(people).get(args.email.strip().lower())
     if person is None:

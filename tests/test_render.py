@@ -1452,6 +1452,7 @@ class RunReportTest(unittest.TestCase):
 
     def test_calendar_checks(self):
         code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertEqual(code, 0)
         self.assertIn("warning: no calendar row for Ivan Holt; their leave is not counted", out)
         self.assertNotIn("calendar does not cover", out)
         _, out = self.run_cli("report", "--offline", "--today", "2026-11-13", "--sprint", "Sprint 28")

@@ -1,6 +1,6 @@
 # Static code analysis, `no-explaining-comments`, and pre-push hook: design
 
-Status: implemented (2026-11-27). Option A selected: `ruff format --check` enforced, physical-line cap raised to `4,600`.
+Status: implemented (2026-11-27), updated 2026-11-27 for Python 3.12+ (`ruff-pre-commit v0.17.6`, `mirrors-mypy v2.4.1`). Option A selected: `ruff format --check` enforced, physical-line cap raised to `4,600`.
 
 ## 1. Intent
 

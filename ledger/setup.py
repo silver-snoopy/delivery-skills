@@ -4,7 +4,6 @@ import os
 from collections import Counter
 from collections.abc import Callable, Iterable
 from datetime import date
-from typing import Optional
 
 from ledger.ado import AdoError, Client, az_defaults, cache_path, cached_ids, fetch, save_cache
 from ledger.config import (
@@ -37,7 +36,7 @@ def _main_area(rows: list[dict]) -> str:
     return min(counts, key=lambda a: (-counts[a], a)) if counts else ""
 
 
-def count_stats(data: dict, members: dict[str, list[str]], hs: Optional[dict[int, History]] = None) -> dict:
+def count_stats(data: dict, members: dict[str, list[str]], hs: dict[int, History] | None = None) -> dict:
     """{team: {"stories": n, "tasks": n, "count": level}} from work items done by each team's members."""
     hs = hs if hs is not None else histories(data, DEFAULT_NOT_DELIVERED)
     out = {}
@@ -68,9 +67,9 @@ def suggest(
     data: dict,
     staff: dict[str, list[str]],
     known: list[Person],
-    squads: Optional[dict[str, str]] = None,
+    squads: dict[str, str] | None = None,
     tz: str = "UTC",
-    since: Optional[date] = None,
+    since: date | None = None,
 ) -> dict:
     """Team, join date and counting level suggestions; `since` is the history window start.
     First activity within JOINED_MARGIN days of `since` is too close to the window start to infer joining."""
@@ -151,7 +150,7 @@ def suggest(
     }
 
 
-def machine_timezone() -> Optional[str]:
+def machine_timezone() -> str | None:
     """The machine's IANA time zone name, or None when it cannot be found."""
     names = [os.environ.get("TZ")]
     try:
@@ -209,7 +208,7 @@ def _match_calendar(vac, staff, cfg, ask):
     return squads, unmatched
 
 
-def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out) -> int:
+def run_init(args, client: Client | None, ask: Callable[[str, str], str], out) -> int:
     d = args.dir
     today = date.today()
     path = os.path.join(d, CONFIG_FILE)

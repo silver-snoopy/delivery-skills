@@ -11,8 +11,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timezone
-from typing import Optional
+from datetime import UTC, date, datetime
 
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 BATCH = 200
@@ -78,7 +77,7 @@ def az_token(run=subprocess.run) -> str:
     return (res.stdout or "").strip()
 
 
-def az_defaults(run=subprocess.run) -> tuple[Optional[str], Optional[str]]:
+def az_defaults(run=subprocess.run) -> tuple[str | None, str | None]:
     try:
         res = run(["az", "devops", "configure", "--list"], capture_output=True, text=True, timeout=AZ_TIMEOUT)
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -114,7 +113,7 @@ def _open(req: urllib.request.Request) -> str:
         ) from e
 
 
-def _request(method: str, url: str, body: Optional[dict], token: str) -> dict:
+def _request(method: str, url: str, body: dict | None, token: str) -> dict:
     scheme = urllib.parse.urlsplit(url).scheme.lower()
     if scheme not in ("https", "http"):
         raise ValueError(f"unsupported Azure DevOps URL scheme in {url!r}; expected https:// or http://")
@@ -149,7 +148,7 @@ def az_http(run=subprocess.run) -> Callable:
     """An `http(method, url, body)` callable that gets the az token once and reuses it."""
     token: list[str] = []
 
-    def http(method: str, url: str, body: Optional[dict] = None) -> dict:
+    def http(method: str, url: str, body: dict | None = None) -> dict:
         if not token:
             token.append(az_token(run))
         return _request(method, url, body, token[0])
@@ -172,7 +171,7 @@ def _chunks(items: list, size: int = BATCH):
 
 
 class Client:
-    def __init__(self, org: str, project: str, http: Optional[Callable] = None):
+    def __init__(self, org: str, project: str, http: Callable | None = None):
         self.org = org.rstrip("/")
         self.project = project
         self.http = http or az_http()
@@ -253,8 +252,8 @@ class Client:
         walk(root)
         return out
 
-    def titles(self, ids: list[int]) -> dict[str, Optional[str]]:
-        out: dict[str, Optional[str]] = {}
+    def titles(self, ids: list[int]) -> dict[str, str | None]:
+        out: dict[str, str | None] = {}
         for chunk in _chunks(ids):
             res = self.http(
                 "POST",
@@ -370,7 +369,7 @@ def fetch(
     iterations.sort(key=lambda i: (i["start"], i["path"]))
     parents = client.titles(sorted({r["parent"] for r in rows if r["parent"] is not None}))
     data = {
-        "fetched": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "fetched": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "levels": client.levels(),
         "iterations": iterations,
         "revisions": rows,

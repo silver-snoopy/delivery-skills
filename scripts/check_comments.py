@@ -8,7 +8,6 @@ import re
 import sys
 import tokenize
 from pathlib import Path
-from typing import Optional
 
 RULE_CODE = "NEC001"
 RULE_NAME = "no-explaining-comments"
@@ -133,7 +132,7 @@ def discover_files(targets: list[str]) -> tuple[list[Path], list[str]]:
     return files, errors
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Run the no-explaining-comments checker from the command line."""
     parser = argparse.ArgumentParser(description="Fail on explanatory Python comments (NEC001).")
     parser.add_argument(

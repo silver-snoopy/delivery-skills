@@ -681,11 +681,9 @@ class RenderTest(unittest.TestCase):
             "Age",
             "Now in",
             "Agreed with PO",
-            "<th>On Hold</th>",
         ):
             self.assertNotIn(absent, card)
-        self.assertIn("<th>At sprint end</th>", card)
-        self.assertIn("<th>Reason</th>", card)
+        self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", card)
         self.assertIn("<td>Planned</td>", card)
 
     def test_manager_card_without_summary_has_no_highlights(self):
@@ -727,10 +725,9 @@ class RenderTest(unittest.TestCase):
     def test_carry_and_person_show_days_on_hold(self):
         t = teams()
         page_without_hold = render_manager("Sprint 29", t, GEN)
-        self.assertNotIn("<th>On Hold</th>", page_without_hold)
         self.assertNotIn("Agreed with PO", page_without_hold)
-        self.assertIn("<th>At sprint end</th><th>Reason</th>", page_without_hold)
-        self.assertIn("<td>–</td></tr>", page_without_hold)
+        self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", page_without_hold)
+        self.assertIn("<td>Active</td><td>–</td><td>–</td></tr>", page_without_hold)
         t[0]["carry"][0]["held"] = 3
         t[0]["carry"].append(
             dict(
@@ -752,7 +749,7 @@ class RenderTest(unittest.TestCase):
         self.assertIn("<td>Active</td><td>3 d</td><td>–</td>", alfa_card)
         self.assertIn("<td>Ready for QA</td><td>–</td><td>API delay</td>", alfa_card)
         self.assertNotIn("chip wait", alfa_card)
-        self.assertNotIn("<th>On Hold</th>", beta_card)
+        self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", beta_card)
         self.assertNotIn("Agreed with PO", page_with_hold)
         dm_page = render_dm("Sprint 29", t, GEN)
         self.assertIn("(or no carry-over when P85 is unavailable)", dm_page)

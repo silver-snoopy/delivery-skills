@@ -366,30 +366,24 @@ def _summary(text: str) -> str:
 
 def _carry(t: dict) -> str:
     held = sum(1 for c in t["carry"] if c["held"])
-    rows = []
-    for c in t["carry"]:
-        row = [
+    rows = [
+        [
             _tag("span", f"#{c['id']}", "id"),
             escape(c["title"] or ""),
             _tag("span", str(c["sprints"]), "hot" if c["sprints"] >= CARRIED_FLAG else ""),
             escape(c["state"]),
+            _days(c["held"]) if c["held"] else "–",
+            escape(c["reason"]) or "–",
         ]
-        if held:
-            row.append(_days(c["held"]) if c["held"] else "–")
-        row.append(escape(c["reason"]) or "–")
-        rows.append(row)
+        for c in t["carry"]
+    ]
     if not rows:
         return _tag(
             "div",
             _tag("h3", "Carried over items (0)") + _tag("p", "No work items carried over.", "note"),
             "carry-empty",
         )
-    head = (
-        ["Work item", "Title", "Sprints carried", "At sprint end"]
-        + (["On Hold"] if held else [])
-        + ["Reason"]
-    )
-    table = _table(head, rows)
+    table = _table(["Work item", "Title", "Sprints carried", "At sprint end", "On Hold", "Reason"], rows)
     held_suffix = f" ({held} On Hold)" if held else ""
     return _fold(f"Carried over items ({len(rows)}){held_suffix}", table)
 

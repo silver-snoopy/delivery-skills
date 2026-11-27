@@ -372,7 +372,7 @@ def _carry(t: dict) -> str:
             _tag("span", f"#{c['id']}", "id"),
             escape(c["title"] or ""),
             _tag("span", str(c["sprints"]), "hot" if c["sprints"] >= CARRIED_FLAG else ""),
-            _tag("span", escape(c["state"]), "chip wait") if c["waiting"] else escape(c["state"]),
+            escape(c["state"]),
         ]
         if held:
             row.append(_days(c["held"]) if c["held"] else "–")

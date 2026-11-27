@@ -729,6 +729,7 @@ class RenderTest(unittest.TestCase):
         self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", page_without_hold)
         self.assertIn("<td>Active</td><td>–</td><td>–</td></tr>", page_without_hold)
         t[0]["carry"][0]["held"] = 3
+        t[0]["carry"][0]["sprints"] = 2
         t[0]["carry"].append(
             dict(
                 t[0]["carry"][0],
@@ -746,9 +747,10 @@ class RenderTest(unittest.TestCase):
         alfa_card = self.card(page_with_hold, "ALFA")
         beta_card = self.card(page_with_hold, "BETA")
         self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", alfa_card)
-        self.assertIn("<td>Active</td><td>3 d</td><td>–</td>", alfa_card)
+        self.assertIn("<td>2</td><td>Active</td><td>3 d</td><td>–</td>", alfa_card)
         self.assertIn("<td>Ready for QA</td><td>–</td><td>API delay</td>", alfa_card)
         self.assertNotIn("chip wait", alfa_card)
+        self.assertNotIn('class="hot"', alfa_card)
         self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", beta_card)
         self.assertNotIn("Agreed with PO", page_with_hold)
         dm_page = render_dm("Sprint 29", t, GEN)

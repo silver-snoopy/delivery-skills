@@ -76,7 +76,6 @@ td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 .GREEN,.green{background:var(--good-soft);color:var(--good)}
 .AMBER,.amber{background:var(--warn-soft);color:var(--warn)}
 .RED,.red{background:var(--bad-soft);color:var(--bad)}.wait,.track{background:var(--accent-soft);color:var(--accent)}
-.hot{color:var(--bad);font-weight:600}
 .grey{background:var(--bg);color:var(--muted)}
 .foot{font-size:12.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px;
 display:flex;flex-direction:column;gap:6px}
@@ -370,7 +369,7 @@ def _carry(t: dict) -> str:
         [
             _tag("span", f"#{c['id']}", "id"),
             escape(c["title"] or ""),
-            _tag("span", str(c["sprints"]), "hot" if c["sprints"] >= CARRIED_FLAG else ""),
+            str(c["sprints"]),
             escape(c["state"]),
             _days(c["held"]) if c["held"] else "–",
             escape(c["reason"]) or "–",

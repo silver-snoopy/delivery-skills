@@ -261,7 +261,9 @@ class ManagerWindowTest(unittest.TestCase):
             ],
         )
         self.assertIn('<div class="fig key"><span class="n">', page)
-        trend_html = page.split("<summary>Last 2 sprints</summary>")[1].split("</details>")[0]
+        trend_html = page.split("<summary>Delivery stats per sprint (last 2 sprints)</summary>")[1].split(
+            "</details>"
+        )[0]
         row_labels = re.findall(r"<tr><td>([^<]+)</td>", trend_html)
         self.assertEqual(
             row_labels,
@@ -618,7 +620,7 @@ class RenderTest(unittest.TestCase):
         page = text(render_manager("Sprint 29", teams(NOTES), GEN))
         self.assertNotIn("AMBER", page)
         self.assertIn("build time, median (last 3 sprints)", page)
-        self.assertIn("Last 2 sprints Sprint 28 Sprint 29", page)
+        self.assertIn("Delivery stats per sprint (last 2 sprints) Sprint 28 Sprint 29", page)
 
     def test_dm_starts_with_internal_marker_and_notes_before_comparison(self):
         page = render_dm("Sprint 29", teams(NOTES), GEN)
@@ -665,7 +667,7 @@ class RenderTest(unittest.TestCase):
             "1 work item carried over",
             "<summary>Delivered items (2)</summary>",
             "<summary>Carried over items (1)</summary>",
-            "<summary>Last 2 sprints</summary>",
+            "<summary>Delivery stats per sprint (last 2 sprints)</summary>",
         ]
         self.assertEqual([card.index(o) for o in order], sorted(card.index(o) for o in order))
         self.assertIn(
@@ -718,7 +720,7 @@ class RenderTest(unittest.TestCase):
             "Upload is live.",
             '<div class="figs">',
             "Carried over",
-            "Last 2 sprints",
+            "Delivery stats per sprint",
         ):
             self.assertNotIn(absent, card)
 

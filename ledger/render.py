@@ -435,7 +435,7 @@ def _exec_team(t: dict) -> str:
         _carry(t),
     ]
     if metrics:
-        parts.append(_fold(_last(len(t["trend"])).capitalize(), _trend_table(t, metrics)))
+        parts.append(_fold(f"Delivery stats per sprint ({_last(len(t['trend']))})", _trend_table(t, metrics)))
     return _tag("article", "\n".join(parts), "squad")
 
 

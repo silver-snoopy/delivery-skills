@@ -408,6 +408,41 @@ class SprintFigureTests(unittest.TestCase):
         # see test_credit_by_iteration_at_close_and_late); nothing else after the end does
         self.assertEqual(first, run(build(True), "ALFA", "S29"))
 
+    def test_po_satisfaction_resolution_and_trend(self):
+        b = (board()
+             .sprint("S27", "2026-09-29", "2026-10-10")
+             .sprint("S30", "2026-11-10", "2026-11-21"))
+        for i, it_path, d_start, d_end in [
+            (1, "Proj\\S27", "2026-09-30", "2026-10-08"),
+            (2, S28, "2026-10-14", "2026-10-22"),
+            (3, S29, "2026-10-28", "2026-11-05"),
+            (4, "Proj\\S30", "2026-11-11", "2026-11-18"),
+        ]:
+            b.item(i).at("%s 09:00" % d_start, iteration=it_path, assigned=MAYA, state="Active") \
+                .at("%s 10:00" % d_end, state="Closed")
+        notes = Notes(
+            po_satisfaction={"alfa": (5, "Great demo")},
+            po_history={"ALFA": {"Proj\\S27": 3, S28: None, S29: 2, "Proj\\S30": 1}},
+        )
+        t = run(b, "ALFA", "S29", notes=notes)
+        self.assertEqual(t["po_satisfaction"],
+                         {"score": 5, "comment": "Great demo", "before": 3, "before_sprint": "S27"})
+        self.assertEqual([(r["sprint"], r["po_satisfaction"]) for r in t["trend"]],
+                         [("S27", 3), ("S28", None), ("S29", 5)])
+
+        # Current blank overrides duplicate folder score in po_history.
+        blank_notes = Notes(po_history={"ALFA": {"Proj\\S27": 3, S28: None, S29: 4}})
+        t_blank = run(b, "ALFA", "S29", notes=blank_notes)
+        self.assertIsNone(t_blank["po_satisfaction"])
+        self.assertEqual([(r["sprint"], r["po_satisfaction"]) for r in t_blank["trend"]],
+                         [("S27", 3), ("S28", None), ("S29", None)])
+
+        # Rated current sprint with no prior rated sprint in window.
+        first_rated = Notes(po_satisfaction={"ALFA": (4, "")})
+        t_first = run(b, "ALFA", "S29", notes=first_rated)
+        self.assertEqual(t_first["po_satisfaction"],
+                         {"score": 4, "comment": "", "before": None, "before_sprint": None})
+
 
 if __name__ == "__main__":
     unittest.main()

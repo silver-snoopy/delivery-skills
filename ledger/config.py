@@ -14,7 +14,7 @@ from ledger.replay import local_tz
 DEFAULT_NOT_DELIVERED = ["Removed", "Won't Fix", "Won't Do", "Cut", "Duplicate", "Obsolete", "Deferred",
                          "Abandoned"]
 DEFAULT_MANAGER_METRICS = ("planned", "delivered", "throughput", "build_time", "first_pass")
-KNOWN_METRICS = DEFAULT_MANAGER_METRICS
+KNOWN_METRICS = DEFAULT_MANAGER_METRICS + ("po_satisfaction",)
 _TEAM_KEYS = {"count", "metrics", "show_flow"}
 CONFIG_FILE = "config.json"
 TEAM_COLUMNS = ["name", "email", "team", "joined", "left", "allocation"]
@@ -217,6 +217,8 @@ class Notes:
     summary: Dict[str, str] = field(default_factory=dict)
     note: Dict[str, str] = field(default_factory=dict)
     exec_note: Dict[str, str] = field(default_factory=dict)
+    po_satisfaction: Dict[str, Tuple[int, str]] = field(default_factory=dict)
+    po_history: Dict[str, Dict[str, Optional[int]]] = field(default_factory=dict)
     status: Dict[str, Tuple[str, str]] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     teams: dict = field(default_factory=dict)
@@ -226,19 +228,22 @@ class Notes:
     reported: Optional[set] = None
 
 
-_SECTIONS = ("Summary", "Exec note", "Note", "Status", "Actions", "Resolved")
+_SECTIONS = ("Summary", "Exec note", "PO satisfaction", "Note", "Status", "Actions", "Resolved")
 _COLUMNS = ["Person", "Work item", "Problem", "Answer", "Answered"]
 # Tool-owned guide lines: rewritten on every run, ignored when reading.
 _GUIDE = "<!-- guide: %s -->"
 _TOP_GUIDE = (
     "Edit this file, then run `bin/ledger report --offline` to update both reports from the cache.",
     "Write only in the text sections and the Answer column; the tool rewrites the rest, these lines too.",
-    "Summary, Exec note, Status and carry-over answers reach the manager report: no engineer names.")
+    "Summary, Exec note, PO satisfaction, Status and carry-over answers reach the manager report: no engineer names.")
 _SECTION_GUIDE = {
     "Summary": 'Manager report, Delivery highlights. 2-4 bullets, no names. Example: "- Delivered upload '
                'validation."',
     "Exec note": 'Manager report, below the card. Optional, no names. Example: "Release moved one week: '
                  'waiting on the customer test environment."',
+    "PO satisfaction": 'Manager report. Optional, no names. 1-5 scale (5 Very satisfied, 4 Satisfied, '
+                       '3 Mixed, 2 Dissatisfied, 1 Very dissatisfied). Example: "4/5 - Smooth release, '
+                       'minor UAT delay"',
     "Note": 'DM report only; names are fine. Example: "Agreed pairing on the payment flow next sprint."',
     "Status": 'Leave empty for the computed status. To override: "AMBER - reason" (GREEN, AMBER or RED).',
     "Actions": 'Open red and amber problems. Write only in Answer; the tool fills Answered. Carry-over: '
@@ -246,6 +251,7 @@ _SECTION_GUIDE = {
                'sprint".',
     "Resolved": "Answered problems that went away. A row moves back to Actions if its problem returns."}
 _STATUS = re.compile(r"^(GREEN|AMBER|RED)\s*(?:-\s*(.*))?$", re.I)
+_PO_SAT = re.compile(r"^([1-5])(?:\s*/\s*5)?(?:\s*[-–—]\s*(.*))?$")
 _KIND_LABELS = {"old": "Chase", "agreed": "PO agreement", "waiting": "Waiting",
                 "stale": "No movement", "none": "No work", "nothing": "Nothing delivered",
                 "wip": "Too much WIP", "never_active": "Never active", "reopened": "Reopened",
@@ -287,20 +293,24 @@ def _cells(line):
 
 
 def _values(notes):
-    for attr in ("summary", "exec_note", "note", "status"):
+    for attr in ("summary", "exec_note", "po_satisfaction", "note", "status"):
         getattr(notes, attr).clear()
     for team, sec in notes.teams.items():
         notes.summary[team] = "\n".join(re.sub(r"^-\s+", "", line.strip())
                                           for line in sec["Summary"].splitlines() if line.strip())
         for heading, attr in (("Exec note", "exec_note"), ("Note", "note")):
             getattr(notes, attr)[team] = sec[heading].strip("\n")
-        text = sec["Status"].strip()
-        if text:
-            match = _STATUS.fullmatch(text)
-            if match:
-                notes.status[team] = (match[1].upper(), (match[2] or "").strip())
-            else:
-                _warning(notes, "notes.md %s has invalid Status: %s" % (team, text))
+        for heading, attr, pattern, upper in (
+                ("Status", "status", _STATUS, True),
+                ("PO satisfaction", "po_satisfaction", _PO_SAT, False)):
+            text = sec[heading].strip()
+            if text:
+                match = pattern.fullmatch(text)
+                if match:
+                    key = match[1].upper() if upper else int(match[1])
+                    getattr(notes, attr)[team] = (key, (match[2] or "").strip())
+                else:
+                    _warning(notes, "notes.md %s has invalid %s: %s" % (team, heading, text))
 
 
 def parse_notes(text: str) -> Notes:
@@ -471,24 +481,37 @@ def load_report_notes(directory: str, folder: str, selected: dict, iterations: l
     ends = {s["path"]: s["end"] for s in iterations}
     exists = os.path.isfile(os.path.join(folder, "notes.md"))
     notes = _read_notes(folder) if exists else Notes()
-    sources = []
+    target = os.path.abspath(folder)
+    discovered, po_history = [], {}
     # Report folders live in reports/; folders directly in `directory` are the older layout.
     roots = [r for r in (directory, os.path.join(directory, "reports")) if os.path.isdir(r)]
-    if not exists:
-        for entry in sorted((e for r in roots for e in os.scandir(r)), key=lambda e: e.path):
-            if entry.is_dir() and os.path.isfile(os.path.join(entry.path, "notes.md")):
-                source = _read_notes(entry.path)
-                sources.append((entry.path, source))
-                for team, path in source.markers.items():
-                    if path not in ends:
-                        _warning(notes, "notes.md marker for %s has unknown sprint path %s; skipped" % (team, path))
+    for entry in sorted((e for r in roots for e in os.scandir(r)), key=lambda e: e.path):
+        if not entry.is_dir() or os.path.abspath(entry.path) == target:
+            continue
+        notes_file = os.path.join(entry.path, "notes.md")
+        if not os.path.isfile(notes_file):
+            continue
+        with open(notes_file, encoding="utf-8-sig") as f:
+            parsed = parse_notes(f.read())
+        discovered.append((entry.path, parsed))
+        for team, path in parsed.markers.items():
+            if path in ends and team in parsed.teams:
+                po_history.setdefault(team.upper(), {})[path] = (
+                    parsed.po_satisfaction[team][0] if team in parsed.po_satisfaction else None)
+            elif not exists and path not in ends:
+                _warning(notes, "notes.md marker for %s has unknown sprint path %s; skipped" % (team, path))
+    full_cache = {}
     for team, sprint in selected.items():
-        source = notes if exists else None
+        source, source_path = (notes, None) if exists else (None, None)
         if not exists and sprint is not None:
-            choices = [(ends[n.markers[team]], path, n) for path, n in sources
+            choices = [(ends[n.markers[team]], path) for path, n in discovered
                        if team in n.teams and n.markers.get(team) in ends
                        and ends[n.markers[team]] <= sprint["end"]]
-            source_path, source = max(choices, key=lambda c: c[:2])[1:] if choices else (None, None)
+            if choices:
+                source_path = max(choices)[1]
+                if source_path not in full_cache:
+                    full_cache[source_path] = _read_notes(source_path)
+                source = full_cache[source_path]
         prior = source.markers.get(team) if source else None
         unresolved = bool(prior and prior not in ends)
         if unresolved:
@@ -496,6 +519,9 @@ def load_report_notes(directory: str, folder: str, selected: dict, iterations: l
         changed = bool(sprint and prior and not unresolved and prior != sprint["path"])
         if source and team in source.teams:
             sec = copy.deepcopy(source.teams[team])
+            if exists and sprint is not None and prior != sprint["path"] and sec["PO satisfaction"].strip():
+                sec["PO satisfaction"] = ""
+                _warning(notes, "notes.md %s PO satisfaction cleared because the closed sprint changed" % team)
             if changed and not exists:
                 copied = [r for r in sec["Actions"] + sec["Resolved"] if r["answer"]]
                 sec = _section()
@@ -526,6 +552,7 @@ def load_report_notes(directory: str, folder: str, selected: dict, iterations: l
         if path not in ends:
             _warning(notes, "notes.md marker for %s has unknown sprint path %s; skipped" % (team, path))
     notes.reported = set(selected)
+    notes.po_history = po_history
     _values(notes)
     _agreements(notes)
     for message in notes.warnings:

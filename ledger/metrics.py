@@ -695,6 +695,17 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
 
     worked = sorted({i for p in persons for i in p["items"]})
     worked.sort(key=lambda i: (i not in f["delivered"], i))
+    current_po = _by_team(notes.po_satisfaction, team, None)
+    hist_po = _by_team(notes.po_history, team, {})
+    po_scores = {s["path"]: (current_po[0] if current_po is not None else None)
+                 if s["path"] == sprint["path"] else hist_po.get(s["path"])
+                 for s in window}
+    po_satisfaction = None
+    if current_po is not None:
+        prior_po = next(((po_scores[s["path"]], s["name"]) for s in reversed(window[:-1])
+                         if po_scores[s["path"]] is not None), (None, None))
+        po_satisfaction = {"score": current_po[0], "comment": current_po[1],
+                           "before": prior_po[0], "before_sprint": prior_po[1]}
     return {
         "team": team, "count": ", ".join(t.count) if isinstance(t.count, list) else t.count,
         "manager_metrics": metrics_of(cfg, team), "show_flow": show_flow_of(cfg, team),
@@ -709,6 +720,7 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
         "first_pass": {**pooled_pass(now), "before": pooled_pass(before)["share"],
                        "tracked": any(passes[s["path"]]["returned"] for s in window)
                        or 0 < len(window_ids) <= 2 * len(tested)},
+        "po_satisfaction": po_satisfaction,
         "waiting_share": t.waiting_share(f["delivered"]),
         "carry": carry,
         "delivered_items": [{"id": i, "title": title_at(i), "planned": i in f["planned"],
@@ -721,7 +733,8 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
                    "delivered_planned": len(figs[s["path"]]["delivered_planned"]),
                    "delivered": len(figs[s["path"]]["delivered"]),
                    "first_pass": passes[s["path"]]["share"],
-                   "build": build([s])["median"], "per10": throughput([s])} for s in window],
+                   "build": build([s])["median"], "per10": throughput([s]),
+                   "po_satisfaction": po_scores[s["path"]]} for s in window],
         "capacity": {"engineers": len(members),
                      "onboarding": sum(m["onboarding"] for m in members),
                      "available": sum(m["available"] for m in members),

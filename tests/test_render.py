@@ -251,6 +251,62 @@ class ManagerWindowTest(unittest.TestCase):
         self.assertNotIn("Build time =", page)
         self.assertNotIn("First-time pass =", page)
 
+    def test_po_satisfaction_tile_bands_arrows_and_feedback(self):
+        expected_bands = {
+            5: ("Very satisfied", "green"),
+            4: ("Satisfied", "green"),
+            3: ("Mixed", "amber"),
+            2: ("Dissatisfied", "red"),
+            1: ("Very dissatisfied", "red"),
+        }
+        for score, (label, colour) in expected_bands.items():
+            with self.subTest(score=score):
+                t = self.team()
+                t["manager_metrics"] = ["planned", "po_satisfaction"]
+                t["po_satisfaction"] = {"score": score, "comment": "Smooth <release> & QA",
+                                        "before": None, "before_sprint": None}
+                page = self.page(t)
+                self.assertIn('<span class="n">%d <small>/ 5</small></span>' % score, page)
+                self.assertIn('<span class="l">PO satisfaction</span>', page)
+                self.assertIn('<span class="chip %s">%s</span>' % (colour, label), page)
+                self.assertNotIn('class="d ', page)
+                self.assertIn('<p class="note">PO feedback: Smooth &lt;release&gt; &amp; QA</p>', page)
+                self.assertLess(page.index("Scope:"), page.index("PO feedback:"))
+                self.assertNotIn("PO feedback:", page.split('<div class="figs">')[1].split('<p class="note">Scope:')[0])
+
+        # Up arrow (including 2 -> 3 amber improvement), down arrow, equal no arrow
+        t = self.team()
+        t["manager_metrics"] = ["po_satisfaction"]
+        t["po_satisfaction"] = {"score": 3, "comment": "", "before": 2, "before_sprint": "Sprint 28"}
+        self.assertIn('<span class="d up">▲ from 2 vs Sprint 28</span>', self.page(t))
+        self.assertNotIn("PO feedback:", self.page(t))
+
+        t["po_satisfaction"] = {"score": 2, "comment": "", "before": 4, "before_sprint": "Sprint 28"}
+        self.assertIn('<span class="d down">▼ from 4 vs Sprint 28</span>', self.page(t))
+
+        t["po_satisfaction"] = {"score": 4, "comment": "", "before": 4, "before_sprint": "Sprint 28"}
+        self.assertNotIn('class="d ', self.page(t))
+
+    def test_po_satisfaction_unrated_and_disabled(self):
+        t = self.team()
+        t["manager_metrics"] = ["planned", "po_satisfaction"]
+        t["po_satisfaction"] = None
+        t["trend"] = [dict(t["trend"][0], po_satisfaction=4), dict(t["trend"][1], po_satisfaction=None)]
+        page = self.page(t)
+        self.assertIn('<span class="n">–</span><span class="l">PO satisfaction</span>', page)
+        self.assertIn('<td>PO satisfaction</td><td>4/5</td><td>–</td>', page)
+        self.assertIn("PO satisfaction = product owner's 1–5 sprint rating", page)
+
+        # Disabled hides tile, trend row, PO feedback, and footnote even when data exists
+        t["manager_metrics"] = ["planned"]
+        t["po_satisfaction"] = {"score": 5, "comment": "Great sprint", "before": 4, "before_sprint": "Sprint 28"}
+        page_off = self.page(t)
+        self.assertNotIn("PO satisfaction", page_off)
+        self.assertNotIn("PO feedback:", page_off)
+        self.assertNotIn("Great sprint", page_off)
+        self.assertIn("Figures are recomputed", page_off)
+        self.assertNotIn("Board figures are recomputed", page_off)
+
     def test_dynamic_footnote_canonical_order_and_arrow_wording(self):
         from ledger.render import _footnote
         cases = [
@@ -263,6 +319,9 @@ class ManagerWindowTest(unittest.TestCase):
             (["throughput", "build_time", "first_pass"],
              "green means better (higher throughput or first-time pass, lower build time), red worse",
              "Arrows compare"),
+            (["build_time", "po_satisfaction"],
+             "green means better (lower build time), red worse",
+             "Delivery-metric arrows compare"),
         ]
         for metrics, better, arrow_prefix in cases:
             with self.subTest(metrics=metrics):
@@ -270,13 +329,18 @@ class ManagerWindowTest(unittest.TestCase):
                 self.assertIn(better, foot)
                 self.assertIn(arrow_prefix, foot)
         # Canonical order regardless of reversed team metric order
-        foot = _footnote(False, [{"manager_metrics": ["first_pass", "build_time", "throughput"],
+        foot = _footnote(False, [{"manager_metrics": ["po_satisfaction", "first_pass", "build_time", "throughput"],
                                   "show_flow": True}])
         order = ["<b>Method.</b>", "Work items per 10 person-days =", "Build time =",
-                 "First-time pass =", "Arrows compare", "Where the time goes =",
-                 "On Hold =", "Figures are recomputed"]
+                 "First-time pass =", "Delivery-metric arrows compare", "Where the time goes =",
+                 "PO satisfaction =", "On Hold =", "Board figures are recomputed"]
         positions = [foot.index(s) for s in order]
         self.assertEqual(positions, sorted(positions))
+        # Only po_satisfaction enabled -> no Delivery-metric arrows, still PO definition and Board figures
+        foot_po_only = _footnote(False, [{"manager_metrics": ["planned", "po_satisfaction"], "show_flow": False}])
+        self.assertNotIn("compare the last 3 sprints", foot_po_only)
+        self.assertIn("PO satisfaction =", foot_po_only)
+        self.assertIn("Board figures are recomputed", foot_po_only)
 
     def test_default_config_byte_for_byte_identical_and_dm_unchanged(self):
         t_default = self.team()
@@ -296,7 +360,8 @@ class ManagerWindowTest(unittest.TestCase):
         self.assertEqual(render_manager("Sprint 29", missing_default, GEN),
                          render_manager("Sprint 29", missing_explicit, GEN))
         # dm_.html is byte-for-byte unchanged regardless of manager_metrics / show_flow
-        t_custom = dict(t_default, manager_metrics=["planned"], show_flow=False)
+        t_custom = dict(t_default, manager_metrics=["po_satisfaction"], show_flow=False,
+                        po_satisfaction={"score": 5, "comment": "Great", "before": 4, "before_sprint": "Sprint 28"})
         self.assertEqual(render_dm("Sprint 29", [t_default], GEN),
                          render_dm("Sprint 29", [t_custom], GEN))
 
@@ -965,7 +1030,7 @@ class RunReportTest(unittest.TestCase):
         self.assertIn("<!-- guide: Edit this file, then run `bin/ledger report --offline`", text)
         self.assertEqual(text.count("## Summary\n<!-- guide: Manager report, Delivery highlights."),
                          text.count("\n# "))
-        self.assertEqual(text.count("<!-- guide: "), 3 + 6 * text.count("\n# "))
+        self.assertEqual(text.count("<!-- guide: "), 3 + 7 * text.count("\n# "))
         self.edit("reports/sprint-29/notes.md",
                   lambda t: t.replace("## Summary\n<!-- guide:", "## Summary\n- Shipped retries.\n<!-- guide:", 1))
         _, out = self.run_cli("report", "--offline", "--today", "2026-11-13")

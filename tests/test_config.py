@@ -130,10 +130,10 @@ class ConfigTest(unittest.TestCase):
     def test_manager_metrics_and_show_flow_defaults_and_resolution(self):
         cfg, warnings = self.load({"teams": {"alfa": {"count": "stories"},
                                              "BETA": {"count": "tasks", "metrics": [], "show_flow": False},
-                                             "GAMMA": {"metrics": ["build_time", "planned"], "show_flow": True}}})
+                                             "GAMMA": {"metrics": ["po_satisfaction", "planned"], "show_flow": True}}})
         self.assertEqual(warnings, [])
         self.assertEqual(cfg.manager_metrics, list(DEFAULT_MANAGER_METRICS))
-        self.assertEqual(KNOWN_METRICS, DEFAULT_MANAGER_METRICS)
+        self.assertEqual(KNOWN_METRICS, DEFAULT_MANAGER_METRICS + ("po_satisfaction",))
         self.assertTrue(cfg.show_flow)
         # Case-insensitive lookup + inheritance
         self.assertEqual(metrics_of(cfg, "ALFA"), list(DEFAULT_MANAGER_METRICS))
@@ -145,7 +145,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(metrics_of(cfg, "BETA"), [])
         self.assertFalse(show_flow_of(cfg, "BETA"))
         # Custom ordering + explicit True
-        self.assertEqual(metrics_of(cfg, "GAMMA"), ["build_time", "planned"])
+        self.assertEqual(metrics_of(cfg, "GAMMA"), ["po_satisfaction", "planned"])
         self.assertTrue(show_flow_of(cfg, "GAMMA"))
         # Global overrides inherited by teams without explicit overrides
         cfg2, _ = self.load({"manager_metrics": ["delivered", "build_time"], "show_flow": False,

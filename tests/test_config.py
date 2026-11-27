@@ -4,8 +4,10 @@ import tempfile
 import unittest
 from datetime import date
 
-from ledger.config import (Config, Person, email_index, load_config, merge_staff, parse_notes,
-                           parse_staff, read_team, save_config, write_team)
+from ledger.config import (DEFAULT_MANAGER_METRICS, KNOWN_METRICS, Config, Person, email_index,
+                           load_config, merge_staff, parse_notes, parse_staff, read_team, save_config,
+                           write_team)
+from ledger.metrics import metrics_of, show_flow_of
 from ledger.replay import local_tz
 
 
@@ -124,6 +126,73 @@ class ConfigTest(unittest.TestCase):
         self.assertIn("Europe/Zürich", str(e.exception))
         with self.assertRaises(ValueError):
             local_tz("Nowhere/City")
+
+    def test_manager_metrics_and_show_flow_defaults_and_resolution(self):
+        cfg, warnings = self.load({"teams": {"alfa": {"count": "stories"},
+                                             "BETA": {"count": "tasks", "metrics": [], "show_flow": False},
+                                             "GAMMA": {"metrics": ["build_time", "planned"], "show_flow": True}}})
+        self.assertEqual(warnings, [])
+        self.assertEqual(cfg.manager_metrics, list(DEFAULT_MANAGER_METRICS))
+        self.assertEqual(KNOWN_METRICS, DEFAULT_MANAGER_METRICS)
+        self.assertTrue(cfg.show_flow)
+        # Case-insensitive lookup + inheritance
+        self.assertEqual(metrics_of(cfg, "ALFA"), list(DEFAULT_MANAGER_METRICS))
+        self.assertTrue(show_flow_of(cfg, "ALFA"))
+        # Unconfigured team inherits global
+        self.assertEqual(metrics_of(cfg, "DELTA"), list(DEFAULT_MANAGER_METRICS))
+        self.assertTrue(show_flow_of(cfg, "DELTA"))
+        # Explicit [] and False override global
+        self.assertEqual(metrics_of(cfg, "BETA"), [])
+        self.assertFalse(show_flow_of(cfg, "BETA"))
+        # Custom ordering + explicit True
+        self.assertEqual(metrics_of(cfg, "GAMMA"), ["build_time", "planned"])
+        self.assertTrue(show_flow_of(cfg, "GAMMA"))
+        # Global overrides inherited by teams without explicit overrides
+        cfg2, _ = self.load({"manager_metrics": ["delivered", "build_time"], "show_flow": False,
+                             "teams": {"ALFA": {"count": "stories"}, "BETA": {"show_flow": True}}})
+        self.assertEqual(metrics_of(cfg2, "ALFA"), ["delivered", "build_time"])
+        self.assertFalse(show_flow_of(cfg2, "ALFA"))
+        self.assertTrue(show_flow_of(cfg2, "BETA"))
+
+    def test_invalid_metrics_and_show_flow_raise_value_error(self):
+        bad_metrics = [None, "planned", 123, {"planned": True}, [123], [{"x": 1}], [None],
+                       ["planned", "bogus"], ["planned", "delivered", "planned"]]
+        for bad in bad_metrics:
+            with self.assertRaises(ValueError):
+                self.load({"manager_metrics": bad})
+            with self.assertRaises(ValueError) as cm:
+                self.load({"teams": {"ALFA": {"metrics": bad}}})
+            self.assertIn("ALFA", str(cm.exception))
+        with self.assertRaises(ValueError) as cm:
+            self.load({"teams": {"ALFA": {"metrics": ["planned", "bogus"]}}})
+        self.assertIn("bogus", str(cm.exception))
+        with self.assertRaises(ValueError) as cm:
+            self.load({"manager_metrics": ["planned", "delivered", "planned"]})
+        self.assertIn("planned", str(cm.exception))
+        for bad in (None, 0, 1, "true", "false", []):
+            with self.assertRaises(ValueError):
+                self.load({"show_flow": bad})
+            with self.assertRaises(ValueError) as cm:
+                self.load({"teams": {"ALFA": {"show_flow": bad}}})
+            self.assertIn("ALFA", str(cm.exception))
+
+    def test_invalid_teams_case_collision_and_unknown_team_keys(self):
+        for bad in (None, [], "ALFA"):
+            with self.assertRaises(ValueError):
+                self.load({"teams": bad})
+        for bad in (None, [], "stories", 1):
+            with self.assertRaises(ValueError) as cm:
+                self.load({"teams": {"ALFA": bad}})
+            self.assertIn("ALFA", str(cm.exception))
+        with self.assertRaises(ValueError) as cm:
+            self.load({"teams": {"alfa": {"count": "stories"}, "ALFA": {"count": "tasks"}}})
+        self.assertIn("ALFA", str(cm.exception))
+        self.assertIn("alfa", str(cm.exception))
+        cfg, warnings = self.load({"teams": {"ALFA": {"count": "stories", "zzz": 1, "aaa": 2}}})
+        self.assertEqual(cfg.teams["ALFA"]["count"], "stories")
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("ALFA", warnings[0])
+        self.assertIn("aaa, zzz", warnings[0])
 
 
 if __name__ == "__main__":

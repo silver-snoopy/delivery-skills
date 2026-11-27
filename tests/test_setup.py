@@ -246,6 +246,22 @@ class InitTest(unittest.TestCase):
                 setup.run_init(a, None, lambda p, d: d, io.StringIO())
         self.assertIn("az devops configure", cm.exception.next_step)
 
+    def test_init_reuses_lowercase_team_key_and_preserves_custom_metrics(self):
+        from ledger.config import Config, save_config
+        cfg = Config(timezone="Europe/Zurich",
+                     teams={"alfa": {"metrics": ["planned", "delivered", "build_time"], "show_flow": False}})
+        save_config(self.d, cfg)
+        code, text = self.run_init()
+        self.assertEqual(code, 0)
+        self.assertIn("ALFA counts stories", text)
+        reloaded = load_config(self.d)
+        self.assertEqual(list(reloaded.teams.keys()), ["alfa"])
+        self.assertEqual(reloaded.teams["alfa"], {
+            "count": "stories",
+            "metrics": ["planned", "delivered", "build_time"],
+            "show_flow": False,
+        })
+
 
 if __name__ == "__main__":
     unittest.main()

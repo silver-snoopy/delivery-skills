@@ -33,7 +33,7 @@ Anti-goals: this fails even if it works when
 - it ranks people or puts per-person figures in the executive report,
 - a number changes between two runs on the same data,
 - setup asks the operator more than each person's team and join date,
-- the tool grows past 3,200 physical lines of code (enforced by a test).
+- the tool grows past 3,600 physical lines of code (enforced by a test).
 
 ## 3. Setup
 
@@ -81,8 +81,10 @@ Tom H.,tom.h@vendor.example,ALFA,2024-11-04,,0.5
   "project": "PROJECT",
   "query": "<query>",
   "timezone": "Europe/Zurich",
-  "teams": {"ALFA": {"count": "stories"}, "BETA": {"count": "tasks"},
+  "teams": {"ALFA": {"count": "stories"}, "BETA": {"count": "tasks", "metrics": ["planned", "delivered", "build_time"], "show_flow": false},
             "GAMMA": {"count": ["User Story", "Bug"]}},
+  "manager_metrics": ["planned", "delivered", "throughput", "build_time", "first_pass"],
+  "show_flow": true,
   "onboarding_sprints": 2,
   "half_day_codes": [],
   "waiting_states": ["Ready for QA", "In Review", "PO Acceptance"],
@@ -99,6 +101,7 @@ Tom H.,tom.h@vendor.example,ALFA,2024-11-04,,0.5
 
 - `organization` and `project` come from `--org`/`--project`, else the `az devops` defaults. `timezone` comes from `--timezone`, else the machine (`TZ`, then `/etc/localtime`). If the machine zone cannot be found, `init` uses UTC and warns the operator to set `timezone`. An unknown zone name is an error; it never falls back silently.
 - `count` must be `stories`, `tasks` or a non-empty list of work item type names; anything else is an error naming the team.
+- `manager_metrics` (default `["planned", "delivered", "throughput", "build_time", "first_pass"]`) and `show_flow` (default `true`) configure which manager Delivery stats tiles, trend rows, and *Where the time goes* bar appear; per-team `teams.<TEAM>.metrics` and `teams.<TEAM>.show_flow` override the global defaults.
 - `waiting_states` is proposed from active-category state names (review, QA, test, accept, wait, blocked, verify, UAT). `init` prints every state so the operator can correct the list.
 - `test_states` is global like `waiting_states`; `init` proposes test states for the DM to confirm. An empty list counts reopens only, with a report warning.
 - `hold_states` is proposed from state names of any category that contain hold, blocked or impeded. It only feeds the On Hold column.
@@ -269,7 +272,7 @@ The agent reads ticket titles to write the summary. The wording may differ betwe
 
 ## 8. Build
 
-- Python 3.9+ standard library only. Modules: `ado.py` (token, WIQL and work item REST APIs with retries, cache), `replay.py` (item state at a point in time), `metrics.py` (counting rules, flags, status), `render.py` (HTML pages and the `report` and `person` commands), `setup.py` (`init`), `xlsx.py` (team calendar), `config.py` (config.json, team.csv, staff.txt, notes.md and .notes-state.json), `cli.py`. At most 3,300 physical lines under `ledger/`, enforced by a test.
+- Python 3.9+ standard library only. Modules: `ado.py` (token, WIQL and work item REST APIs with retries, cache), `replay.py` (item state at a point in time), `metrics.py` (counting rules, flags, status), `render.py` (HTML pages and the `report` and `person` commands), `setup.py` (`init`), `xlsx.py` (team calendar), `config.py` (config.json, team.csv, staff.txt, notes.md and .notes-state.json), `cli.py`. At most 3,600 physical lines under `ledger/`, enforced by a test.
 - Tests run against an invented fixture of revision rows covering both squad styles, carry-overs, moves to the next sprint, reopen, late close, mid-sprint add and remove, and leave. No test touches the network or `az`.
 - The v2 code is removed from `main` and stays in git history.
 

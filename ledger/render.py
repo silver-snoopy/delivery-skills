@@ -17,6 +17,8 @@ from ledger.replay import local_tz, parse_ts
 from ledger.xlsx import read_vacations, resolve_name
 
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+PO_BANDS = {5: ("Very satisfied", "green"), 4: ("Satisfied", "green"), 3: ("Mixed", "amber"),
+            2: ("Dissatisfied", "red"), 1: ("Very dissatisfied", "red")}
 CSS = """:root{--bg:#F6F7F9;--paper:#FFF;--fg:#16202A;--muted:#5A6573;--line:#DCE1E7;--accent:#1E5B86;
 --accent-soft:#E6EEF5;--good:#2C7A4B;--good-soft:#E5F2EA;--warn:#9A6514;--warn-soft:#FBF0DC;
 --bad:#A8352D;--bad-soft:#F8E4E2}
@@ -145,8 +147,8 @@ def _capacity(t: dict) -> str:
     return _tag("span", "<br>".join(escape(line) for line in lines), "cap")
 
 
-def _fig(n: str, label: str, key: bool = False, arrow: str = "") -> str:
-    return _tag("div", _tag("span", n, "n") + _tag("span", escape(label), "l") + arrow,
+def _fig(n: str, label: str, key: bool = False, arrow: str = "", extra: str = "") -> str:
+    return _tag("div", _tag("span", n, "n") + _tag("span", escape(label), "l") + extra + arrow,
                 "fig key" if key else "fig")
 
 
@@ -191,6 +193,18 @@ def _first_pass(t: dict) -> str:
                     now, previous, before is not None and f["share"] > before, t["windows"]["before"]))
 
 
+def _po_satisfaction(t: dict) -> str:
+    po = t.get("po_satisfaction")
+    if po is None:
+        return _fig("–", "PO satisfaction")
+    label, colour = PO_BANDS[po["score"]]
+    chip = '<div style="margin-top:4px"><span class="chip %s">%s</span></div>' % (
+        colour, escape(label))
+    arrow = "" if po["before"] is None or not po.get("before_sprint") else _arrow(
+        str(po["score"]), str(po["before"]), po["score"] > po["before"], [po["before_sprint"]])
+    return _fig("%d <small>/ 5</small>" % po["score"], "PO satisfaction", arrow=arrow, extra=chip)
+
+
 def _window_fig(t: dict, key: str, field: str, label: str, unit: str = "") -> str:
     value, before = t[key][field], t[key]["before"]
     now = _day_count(_decimal(value)) if unit and value is not None else _decimal(value)
@@ -227,6 +241,12 @@ _METRIC_RENDERERS = {
             "–" if s["first_pass"] is None else
             _pct(s["first_pass"], 99 if s["first_pass"] < 1.0 else 100)
             if t["first_pass"]["tracked"] else "not tracked" for s in tr],
+    ),
+    "po_satisfaction": (
+        _po_satisfaction,
+        lambda t, tr: ["PO satisfaction"] + [
+            "%d/5" % s["po_satisfaction"] if s.get("po_satisfaction") is not None else "–"
+            for s in tr],
     ),
 }
 
@@ -318,7 +338,9 @@ def _exec_team(t: dict) -> str:
                           + (_summary(summary) if summary else "")
                           + (_tag("p", escape(exec_note)) if exec_note else "")))
     metrics = t.get("manager_metrics", DEFAULT_MANAGER_METRICS)
-    parts += [_tag("div", _tag("h3", "Delivery stats") + _figs(t, metrics) + _scope(t)),
+    po = t.get("po_satisfaction") if "po_satisfaction" in metrics else None
+    po_feedback = _tag("p", "PO feedback: %s" % escape(po["comment"]), "note") if po and po.get("comment") else ""
+    parts += [_tag("div", _tag("h3", "Delivery stats") + _figs(t, metrics) + _scope(t) + po_feedback),
               _flow(t) if t.get("show_flow", True) else "", _delivered(t), _carry(t)]
     if metrics:
         parts.append(_fold(_last(len(t["trend"])).capitalize(), _trend_table(t, metrics)))
@@ -326,6 +348,7 @@ def _exec_team(t: dict) -> str:
 
 
 def _footnote(dm: bool, teams: Optional[List[dict]] = None) -> str:
+    has_po = False
     if dm:
         first = ("<b>Method.</b> Each team counts the work items of one level set in config.json: "
                  "stories (backlog items), tasks, or a list of work item types. The figures per team "
@@ -371,6 +394,7 @@ def _footnote(dm: bool, teams: Optional[List[dict]] = None) -> str:
         enabled = ({m for t in teams for m in t.get("manager_metrics", DEFAULT_MANAGER_METRICS)}
                    if teams else set(DEFAULT_MANAGER_METRICS))
         show_flow = any(t.get("show_flow", True) for t in teams) if teams else True
+        has_po = "po_satisfaction" in enabled
         first = ("<b>Method.</b> Each team counts its own agreed work item types, so figures are not "
                  "comparable between teams. PD = person-days available after leave. ")
         lines = [first + "Planned = in the sprint and assigned to one of the team's engineers at the end of "
@@ -399,20 +423,25 @@ def _footnote(dm: bool, teams: Optional[List[dict]] = None) -> str:
             ["lower build time"] if "build_time" in enabled else [])
         if better_parts:
             lines.append(
-                "Arrows compare the last 3 sprints with the 3 before: the triangle follows the number; "
+                "%s compare the last 3 sprints with the 3 before: the triangle follows the number; "
                 "green means better (%s), red worse. "
                 "No arrow means a missing value or no change at displayed precision. Compare a team only "
                 "with its own past. Arrows are a direction, not a verdict, especially with small samples."
-                % ", ".join(better_parts))
+                % ("Delivery-metric arrows" if has_po else "Arrows", ", ".join(better_parts)))
         if show_flow:
             lines.append(
                 "Where the time goes = median start-to-done time over the last 6 sprints, split using "
                 "pooled time shares into building, waiting (named states or Blocked) and other, including "
                 "hold and rework. Parts are whole percentages of that time, with the remainder in other.")
+        if has_po:
+            lines.append(
+                "PO satisfaction = product owner's 1–5 sprint rating recorded by the delivery manager "
+                "(5 Very satisfied, 4 Satisfied, 3 Mixed, 2 Dissatisfied, 1 Very dissatisfied); its arrow "
+                "compares with the most recent prior rated sprint in the last 6 sprints.")
     lines.append("On Hold = days the work item spent in a hold state or tagged Blocked during the "
                  "sprint; shown for context and not counted against the team.")
-    lines.append("Figures are recomputed from the board history on every run and do not change for "
-                 "a closed sprint unless the history changes.")
+    lines.append("%s are recomputed from the board history on every run and do not change for "
+                 "a closed sprint unless the history changes." % ("Board figures" if has_po else "Figures"))
     return _tag("div", "".join(_tag("p", line) for line in lines), "foot")
 
 

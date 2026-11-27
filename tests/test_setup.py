@@ -249,7 +249,7 @@ class InitTest(unittest.TestCase):
     def test_init_reuses_lowercase_team_key_and_preserves_custom_metrics(self):
         from ledger.config import Config, save_config
         cfg = Config(timezone="Europe/Zurich",
-                     teams={"alfa": {"metrics": ["planned", "delivered", "build_time"], "show_flow": False}})
+                     teams={"alfa": {"metrics": ["planned", "delivered", "po_satisfaction"], "show_flow": False}})
         save_config(self.d, cfg)
         code, text = self.run_init()
         self.assertEqual(code, 0)
@@ -258,7 +258,7 @@ class InitTest(unittest.TestCase):
         self.assertEqual(list(reloaded.teams.keys()), ["alfa"])
         self.assertEqual(reloaded.teams["alfa"], {
             "count": "stories",
-            "metrics": ["planned", "delivered", "build_time"],
+            "metrics": ["planned", "delivered", "po_satisfaction"],
             "show_flow": False,
         })
 

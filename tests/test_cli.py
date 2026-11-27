@@ -211,6 +211,70 @@ class CliTest(unittest.TestCase):
             self.assertEqual(re.search(r'<article.*?</article>', pages["manager"], re.S).group(),
                              gap_manager)
 
+    def test_po_satisfaction_history_survives_offline_reruns_and_checks_name_leaks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vacation = root / "vacations.xlsx"
+            rows = calendar_rows()
+            rows[4] = {4: "Ari Pine", 3: "Alfa"}
+            del rows[5]
+            build_workbook(str(vacation), rows, ["G2:AJ2", "AK2:BO2"])
+            cfg = Config(vacations=str(vacation),
+                         manager_metrics=["planned", "delivered", "po_satisfaction"],
+                         teams={"ALFA": {"count": "stories"}})
+            save_config(directory, cfg)
+            write_team(str(root / "team.csv"),
+                       [Person("Ari Pine", ["ari@vendor.example"], "ALFA", None, None)])
+            board = (Board().sprint("Sprint 28", "2026-10-13", "2026-10-24")
+                     .sprint("Sprint 29", "2026-10-27", "2026-11-07"))
+            board.item(1, title="Old work").at("2026-10-13 09:00", state="Active",
+                                               iteration="Proj\\Sprint 28", assigned="ari@vendor.example") \
+                .at("2026-10-20 15:00", state="Closed")
+            board.item(2, title="New work").at("2026-10-27 09:00", state="Active",
+                                               iteration="Proj\\Sprint 29", assigned="ari@vendor.example") \
+                .at("2026-11-04 15:00", state="Closed")
+            (root / "cache").mkdir()
+            (root / CACHE_FILE).write_text(json.dumps(board.cache()), encoding="utf-8")
+
+            # Prior sprint folder with a PO rating of 3
+            s28_dir = root / "reports" / "sprint-28"
+            s28_dir.mkdir(parents=True)
+            (s28_dir / "notes.md").write_text(
+                "<!-- ledger notes: ALFA=Proj\\Sprint 28 -->\n# ALFA\n## PO satisfaction\n3/5 - Okay\n",
+                encoding="utf-8")
+
+            # Current sprint folder with a PO rating of 5 and a comment mentioning Ari Pine
+            s29_dir = root / "reports" / "sprint-29"
+            s29_dir.mkdir(parents=True)
+            (s29_dir / "notes.md").write_text(
+                "<!-- ledger notes: ALFA=Proj\\Sprint 29 -->\n# ALFA\n## Summary\nShipped.\n"
+                "## PO satisfaction\n5/5 - Ari Pine handled release well\n",
+                encoding="utf-8")
+
+            # Two consecutive --offline runs must preserve po_history, arrow, trend, and name-leak warning
+            for run in range(2):
+                out = io.StringIO()
+                code = cli.main(["--dir", directory, "report", "--offline", "--today", "2026-11-13"], out=out)
+                self.assertEqual(code, 0, out.getvalue())
+                self.assertIn("warning: manager file mentions Ari Pine", out.getvalue())
+                manager = (s29_dir / "manager_2026-11-13.html").read_text(encoding="utf-8")
+                self.assertIn('5 <small>/ 5</small>', manager)
+                self.assertIn('<span class="chip green">Very satisfied</span>', manager)
+                self.assertIn('<span class="d up">▲ from 3 vs Sprint 28</span>', manager)
+                self.assertIn('<td>PO satisfaction</td><td>3/5</td><td>5/5</td>', manager)
+                self.assertIn('PO feedback: Ari Pine handled release well', manager)
+
+            # Disabling po_satisfaction suppresses the rendered comment and therefore the name-leak warning
+            cfg.manager_metrics = ["planned", "delivered"]
+            save_config(directory, cfg)
+            out = io.StringIO()
+            code = cli.main(["--dir", directory, "report", "--offline", "--today", "2026-11-13"], out=out)
+            self.assertEqual(code, 0, out.getvalue())
+            self.assertNotIn("warning: manager file mentions Ari Pine", out.getvalue())
+            manager = (s29_dir / "manager_2026-11-13.html").read_text(encoding="utf-8")
+            self.assertNotIn("PO satisfaction", manager)
+            self.assertNotIn("PO feedback:", manager)
+
     def test_non_tty_accepts_suggestions_and_says_so(self):
         out = io.StringIO()
         seen = {}

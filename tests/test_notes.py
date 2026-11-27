@@ -87,7 +87,7 @@ class NotesTest(unittest.TestCase):
                     'keep this unknown team'):
             self.assertEqual(out.count(raw), 1)
         offsets = [out.index('## ' + s) for s in
-                   ('Summary', 'Exec note', 'Note', 'Status', 'Actions', 'Resolved')]
+                   ('Summary', 'Exec note', 'PO satisfaction', 'Note', 'Status', 'Actions', 'Resolved')]
         self.assertEqual(offsets, sorted(offsets))
         self.assertTrue(n.warnings)
 
@@ -96,7 +96,7 @@ class NotesTest(unittest.TestCase):
         self.cycle(n)
         self.assertFalse(n.status)
         self.assertTrue(self.read().startswith('<!-- ledger notes: ALFA=Project/Two -->'))
-        self.assertEqual(self.read().count('## '), 6)
+        self.assertEqual(self.read().count('## '), 7)
         self.assertEqual(self.load().teams['ALFA']['Actions'][0]['answer'], '')
 
     def test_baseline_lifecycle_and_tool_owned_edits(self):
@@ -583,7 +583,7 @@ class NotesTest(unittest.TestCase):
         historical = self.load(selected={'ALFA': None, 'BETA': OLD})
         self.assertEqual(historical.summary['BETA'], 'Delivered a fixture.')
         with self.subTest('sections'):
-            for heading in ('Summary', 'Exec note', 'Note', 'Status', 'Actions', 'Resolved'):
+            for heading in ('Summary', 'Exec note', 'PO satisfaction', 'Note', 'Status', 'Actions', 'Resolved'):
                 self.assertFalse(historical.teams['ALFA'][heading])
         with self.subTest('state'):
             self.assertFalse(historical.state.get('ALFA'))
@@ -688,6 +688,125 @@ class NotesTest(unittest.TestCase):
             with self.assertRaises(TypeError):
                 write_report_notes(self.folder, n)
         self.assertEqual((self.read(), self.read('.notes-state.json')), before)
+
+    def test_po_satisfaction_parsing_valid_and_invalid(self):
+        valid = [
+            ('4', (4, '')),
+            ('4/5', (4, '')),
+            (' 4 / 5 ', (4, '')),
+            ('5 - Smooth release', (5, 'Smooth release')),
+            ('4/5 - Smooth release, minor UAT delay', (4, 'Smooth release, minor UAT delay')),
+            ('3 – Mixed feedback', (3, 'Mixed feedback')),
+            ('2 — Delays in QA', (2, 'Delays in QA')),
+            ('1 - ', (1, '')),
+        ]
+        for raw, expected in valid:
+            with self.subTest(raw=raw):
+                text = markdown().replace('## Note\n', '## PO satisfaction\n%s\n## Note\n' % raw)
+                n = parse_notes(text)
+                self.assertEqual(n.po_satisfaction['ALFA'], expected)
+                self.assertFalse(n.warnings)
+        blank = parse_notes(markdown().replace('## Note\n', '## PO satisfaction\n   \n## Note\n'))
+        self.assertNotIn('ALFA', blank.po_satisfaction)
+        self.assertFalse(blank.warnings)
+        for bad in ('0', '6', '3.5', '4/10', 'good', '4/5 - line one\nline two'):
+            with self.subTest(bad=bad):
+                text = markdown().replace('## Note\n', '## PO satisfaction\n%s\n## Note\n' % bad)
+                n = parse_notes(text)
+                self.assertNotIn('ALFA', n.po_satisfaction)
+                self.assertTrue(any('invalid PO satisfaction' in w for w in n.warnings))
+                self.assertEqual(n.teams['ALFA']['PO satisfaction'].strip(), bad)
+                write_report_notes(self.folder, n)
+                self.assertIn(bad, self.read())
+
+    def test_po_satisfaction_carry_forward_and_reused_folder_clearing(self):
+        def po_md(value, marker=OLD['path'], team='ALFA'):
+            return markdown(marker=marker, team=team).replace(
+                '## Note\n', '## PO satisfaction\n%s\n## Note\n' % value)
+
+        # New folder, unchanged sprint -> preserved.
+        self.save_text(po_md('4/5 - Good', marker=NEW['path']), os.path.join(self.root, 'same'))
+        n = self.load(os.path.join(self.root, 'new_same'))
+        self.assertEqual(n.po_satisfaction.get('ALFA'), (4, 'Good'))
+
+        # New folder, changed sprint -> cleared.
+        self.save_text(po_md('5/5 - Great', marker=OLD['path']), os.path.join(self.root, 'only_old'))
+        n = load_report_notes(os.path.join(self.root, 'only_old'),
+                              os.path.join(self.root, 'only_old', 'sub'),
+                              {'ALFA': NEW}, [OLD, NEW], self.warnings.append)
+        self.assertNotIn('ALFA', n.po_satisfaction)
+
+        # Reused folder: changed marker, missing marker, and unknown marker all clear with warning.
+        for label, text in [
+            ('changed', po_md('4/5 - Old sprint', marker=OLD['path'])),
+            ('missing', po_md('4/5 - No marker', marker=OLD['path']).split('\n', 1)[1]),
+            ('unknown', po_md('4/5 - Bad marker', marker='unknown/path')),
+        ]:
+            with self.subTest(label=label):
+                self.warnings.clear()
+                folder = os.path.join(self.root, 'reuse_po_' + label)
+                self.save_text(text, folder)
+                n = self.load(folder)
+                self.assertNotIn('ALFA', n.po_satisfaction)
+                self.assertEqual(n.teams['ALFA']['PO satisfaction'], '')
+                self.assertTrue(any('PO satisfaction cleared' in w for w in self.warnings))
+                reconcile_notes(n, actions(), self.selected, TODAY)
+                write_report_notes(folder, n)
+                self.warnings.clear()
+                again = self.load(folder)
+                self.assertNotIn('ALFA', again.po_satisfaction)
+                self.assertFalse(any('PO satisfaction cleared' in w for w in self.warnings))
+
+        # Missing-sprint team preserves PO satisfaction untouched.
+        folder = os.path.join(self.root, 'missing_sprint_po')
+        self.save_text(po_md('3/5 - Keep me', marker=OLD['path']), folder)
+        self.warnings.clear()
+        n = self.load(folder, selected={'ALFA': None})
+        self.assertEqual(n.po_satisfaction.get('ALFA'), (3, 'Keep me'))
+        self.assertFalse(any('PO satisfaction cleared' in w for w in self.warnings))
+
+    def test_po_history_discovery_authoritative_and_predecessor_state(self):
+        def po_md(value, marker, team='ALFA', answer='chased: ok'):
+            return markdown(answer, marker=marker, team=team).replace(
+                '## Note\n', '## PO satisfaction\n%s\n## Note\n' % value)
+
+        reports = os.path.join(self.root, 'reports')
+        # Earlier folder for OLD has score 4; lexicographically later folder for OLD is blank -> overrides to None.
+        f1 = os.path.join(reports, '01_old')
+        f2 = os.path.join(reports, '02_old_cleared')
+        f3 = os.path.join(reports, '03_beta_only')
+        self.save_text(po_md('4/5 - Good', OLD['path'], 'ALFA') +
+                       po_md('5/5 - Beta', OLD['path'], 'BETA'), f1)
+        # Write a bad .notes-state.json in f1 (unrelated predecessor when f2 is selected) to ensure
+        # discovery uses lightweight parse_notes() and does not load unrelated sidecars.
+        with open(os.path.join(f1, '.notes-state.json'), 'w') as f:
+            f.write('{corrupt')
+        self.save_text(po_md('', OLD['path'], 'ALFA'), f2)
+        # Put valid predecessor state in f2 to verify selected predecessor sidecar still loads.
+        old_n = load_report_notes(self.root, f2, {'ALFA': OLD}, [OLD, NEW], lambda _: None)
+        reconcile_notes(old_n, actions(row(sprint_path=OLD['path'])), {'ALFA': OLD}, date(2026, 11, 2))
+        write_report_notes(f2, old_n)
+        self.save_text(po_md('2/5 - Beta two', NEW['path'], 'BETA'), f3)
+
+        dest = os.path.join(reports, '04_dest')
+        self.warnings.clear()
+        n = self.load(dest, selected={'ALFA': NEW, 'BETA': NEW})
+        # f2 (blank) overrode f1 (4) for ALFA on OLD; BETA on OLD stayed 5; BETA on NEW is 2.
+        self.assertIsNone(n.po_history['ALFA'][OLD['path']])
+        self.assertEqual(n.po_history['BETA'][OLD['path']], 5)
+        self.assertEqual(n.po_history['BETA'][NEW['path']], 2)
+        # Unrelated f1 corrupt sidecar did not warn.
+        self.assertFalse(any('malformed .notes-state.json' in w for w in self.warnings))
+        # Selected predecessor f2's state loaded for ALFA.
+        self.assertIn('i:81', n.state['ALFA'])
+
+        # Survives reconcile_notes, notes_for_team, and rerun when destination exists.
+        reconcile_notes(n, actions(row()), {'ALFA': NEW, 'BETA': NEW}, TODAY)
+        self.assertEqual(notes_for_team(n, 'BETA').po_history['BETA'][OLD['path']], 5)
+        write_report_notes(dest, n)
+        rerun = self.load(dest, selected={'ALFA': NEW, 'BETA': NEW})
+        self.assertIsNone(rerun.po_history['ALFA'][OLD['path']])
+        self.assertEqual(rerun.po_history['BETA'][OLD['path']], 5)
 
 
 if __name__ == '__main__':

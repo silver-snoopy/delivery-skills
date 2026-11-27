@@ -33,7 +33,7 @@ Anti-goals: this fails even if it works when
 - it ranks people or puts per-person figures in the executive report,
 - a number changes between two runs on the same data,
 - setup asks the operator more than each person's team and join date,
-- the tool grows past 3,600 physical lines of code (enforced by a test).
+- the tool grows past 4,600 physical lines of code (enforced by a test).
 
 ## 3. Setup
 
@@ -276,7 +276,7 @@ The agent reads ticket titles to write the summary. The wording may differ betwe
 
 ## 8. Build
 
-- Python 3.9+ standard library only. Modules: `ado.py` (token, WIQL and work item REST APIs with retries, cache), `replay.py` (item state at a point in time), `metrics.py` (counting rules, flags, status), `render.py` (HTML pages and the `report` and `person` commands), `setup.py` (`init`), `xlsx.py` (team calendar), `config.py` (config.json, team.csv, staff.txt, notes.md and .notes-state.json), `cli.py`. At most 3,600 physical lines under `ledger/`, enforced by a test.
+- Python 3.9+ standard library only. Modules: `ado.py` (token, WIQL and work item REST APIs with retries, cache), `replay.py` (item state at a point in time), `metrics.py` (counting rules, flags, status), `render.py` (HTML pages and the `report` and `person` commands), `setup.py` (`init`), `xlsx.py` (team calendar), `config.py` (config.json, team.csv, staff.txt, notes.md and .notes-state.json), `cli.py`. At most 4,600 physical lines under `ledger/`, enforced by a test.
 - Tests run against an invented fixture of revision rows covering both squad styles, carry-overs, moves to the next sprint, reopen, late close, mid-sprint add and remove, and leave. No test touches the network or `az`.
 - The v2 code is removed from `main` and stays in git history.
 

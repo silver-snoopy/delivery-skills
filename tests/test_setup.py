@@ -21,12 +21,16 @@ def board(tasks=0, stories=1):
     b = Board().sprint("S1", "2026-10-05", "2026-10-16")
     n = 100
     for i in range(stories):
-        b.item(n + i, "User Story", area="Proj\\Claims\\Intake").at("2026-10-06 09:00", state="Active", assigned=MAYA) \
-            .at("2026-10-08 09:00", state="Closed")
+        b.item(n + i, "User Story", area="Proj\\Claims\\Intake").at(
+            "2026-10-06 09:00", state="Active", assigned=MAYA
+        ).at("2026-10-08 09:00", state="Closed")
     for i in range(tasks):
-        b.item(500 + i, "Task", parent=100, area="Proj\\Claims\\Intake").at("2026-10-06 09:00", state="Active", assigned=MAYA) \
-            .at("2026-10-07 09:00", state="Closed")
-    b.item(900, "User Story", area="Proj\\Claims\\Intake").at("2026-10-05 09:00", state="Active", assigned=JOHN)
+        b.item(500 + i, "Task", parent=100, area="Proj\\Claims\\Intake").at(
+            "2026-10-06 09:00", state="Active", assigned=MAYA
+        ).at("2026-10-07 09:00", state="Closed")
+    b.item(900, "User Story", area="Proj\\Claims\\Intake").at(
+        "2026-10-05 09:00", state="Active", assigned=JOHN
+    )
     return b
 
 
@@ -38,7 +42,10 @@ class SuggestTest(unittest.TestCase):
     def test_suggestions(self):
         s = setup.suggest(board().cache(), STAFF, [])
         maya = s["people"][0]
-        self.assertEqual((maya["team"], maya["area"], maya["joined"]), ("INTAKE", "Proj\\Claims\\Intake", date(2026, 10, 6)))
+        self.assertEqual(
+            (maya["team"], maya["area"], maya["joined"]),
+            ("INTAKE", "Proj\\Claims\\Intake", date(2026, 10, 6)),
+        )
         known = [Person("John Doe", [JOHN], "ALFA", date(2026, 1, 5), None)]
         s = setup.suggest(board().cache(), STAFF, known)
         self.assertEqual([p["team"] for p in s["people"]], ["ALFA", "ALFA"])
@@ -52,15 +59,18 @@ class SuggestTest(unittest.TestCase):
 
     def test_person_without_tickets_is_kept(self):
         s = setup.suggest(board().cache(), {"Ana K.": [ANA]}, [])
-        self.assertEqual(s["people"][0], {"name": "Ana K.", "emails": [ANA], "team": "", "joined": None,
-                                          "items": 0, "area": ""})
+        self.assertEqual(
+            s["people"][0],
+            {"name": "Ana K.", "emails": [ANA], "team": "", "joined": None, "items": 0, "area": ""},
+        )
 
     def test_count_suggestion(self):
         for tasks, stories, want in ((30, 4, "tasks"), (10, 8, "stories")):
             b = board(tasks, 0)
             for i in range(stories):
-                b.item(200 + i, "User Story", area="Proj\\Claims\\Intake").at("2026-10-06 09:00", state="Active", assigned=MAYA) \
-                    .at("2026-10-08 09:00", state="Closed")
+                b.item(200 + i, "User Story", area="Proj\\Claims\\Intake").at(
+                    "2026-10-06 09:00", state="Active", assigned=MAYA
+                ).at("2026-10-08 09:00", state="Closed")
             s = setup.suggest(b.cache(), STAFF, [])
             self.assertEqual(s["teams"]["INTAKE"], {"count": want, "stories": stories, "tasks": tasks})
 
@@ -82,17 +92,25 @@ class SuggestTest(unittest.TestCase):
 
     def test_suggest_test_states(self):
         b = board()
-        states = (("Ready for QA", "InProgress"), ("In Review", "InProgress"),
-                  ("On Hold", "InProgress"), ("Verify", "Resolved"), ("UAT", "Resolved"),
-                  ("Acceptance", "InProgress"), ("Testing", "InProgress"),
-                  ("Resolved", "Resolved"),
-                  ("Test backlog", "Proposed"), ("Test done", "Completed"),
-                  ("Test removed", "Removed"))
+        states = (
+            ("Ready for QA", "InProgress"),
+            ("In Review", "InProgress"),
+            ("On Hold", "InProgress"),
+            ("Verify", "Resolved"),
+            ("UAT", "Resolved"),
+            ("Acceptance", "InProgress"),
+            ("Testing", "InProgress"),
+            ("Resolved", "Resolved"),
+            ("Test backlog", "Proposed"),
+            ("Test done", "Completed"),
+            ("Test removed", "Removed"),
+        )
         for i, (state, category) in enumerate(states, 1):
             b.item(i).at("2026-10-06 09:00", state=state, category=category, assigned=MAYA)
         s = setup.suggest(b.cache(), STAFF, [])
-        self.assertEqual(s["test"], ["Acceptance", "In Review", "Ready for QA", "Resolved", "Testing",
-                                      "UAT", "Verify"])
+        self.assertEqual(
+            s["test"], ["Acceptance", "In Review", "Ready for QA", "Resolved", "Testing", "UAT", "Verify"]
+        )
         self.assertNotIn("Active", s["test"])
         self.assertNotIn("On Hold", s["test"])
 
@@ -104,7 +122,7 @@ class InitTest(unittest.TestCase):
         self.d = os.path.join(self.tmp.name, "work")
         self.staff = os.path.join(self.tmp.name, "staff.txt")
         self.vac = os.path.join(self.tmp.name, "vac.xlsx")
-        self.write_staff("Maya R. <%s>; John Doe <%s>" % (MAYA, JOHN))
+        self.write_staff(f"Maya R. <{MAYA}>; John Doe <{JOHN}>")
         rows = calendar_rows()
         rows[6] = {4: "Nobody X"}
         build_workbook(self.vac, rows, ["G2:AJ2", "AK2:BO2"])
@@ -114,8 +132,16 @@ class InitTest(unittest.TestCase):
             f.write(text)
 
     def args(self):
-        return Namespace(dir=self.d, query="Proj\\Claims", staff=self.staff, vacations=self.vac, yes=True,
-                         org="https://dev.azure.com/org", project="P", timezone="Europe/Zurich")
+        return Namespace(
+            dir=self.d,
+            query="Proj\\Claims",
+            staff=self.staff,
+            vacations=self.vac,
+            yes=True,
+            org="https://dev.azure.com/org",
+            project="P",
+            timezone="Europe/Zurich",
+        )
 
     def run_init(self, data=None, ask=None):
         out = io.StringIO()
@@ -127,8 +153,10 @@ class InitTest(unittest.TestCase):
         code, text = self.run_init()
         self.assertEqual(code, 0)
         cfg = load_config(self.d)
-        self.assertEqual((cfg.organization, cfg.project, cfg.timezone, cfg.teams),
-                         ("https://dev.azure.com/org", "P", "Europe/Zurich", {"ALFA": {"count": "stories"}}))
+        self.assertEqual(
+            (cfg.organization, cfg.project, cfg.timezone, cfg.teams),
+            ("https://dev.azure.com/org", "P", "Europe/Zurich", {"ALFA": {"count": "stories"}}),
+        )
         self.assertTrue(os.path.isabs(cfg.staff) and os.path.isabs(cfg.vacations))
         self.assertIn("Nobody X", text)
         self.assertIn("Active: InProgress", text)
@@ -137,12 +165,13 @@ class InitTest(unittest.TestCase):
         team_path = os.path.join(self.d, "team.csv")
         people = read_team(team_path)
         people[0].team = "BETA"
-        from ledger.config import write_team, save_config
+        from ledger.config import save_config, write_team
+
         write_team(team_path, people)
         cfg.name_aliases["Nobody X"] = "John Doe"
         cfg.waiting_states = ["Custom"]
         save_config(self.d, cfg)
-        self.write_staff("Maya R. <%s>; Ana K. <%s>" % (MAYA, ANA))
+        self.write_staff(f"Maya R. <{MAYA}>; Ana K. <{ANA}>")
         asked = []
         code, text = self.run_init(ask=lambda p, d: asked.append(p) or d)
         self.assertFalse([p for p in asked if "Maya" in p or "John" in p])
@@ -175,6 +204,7 @@ class InitTest(unittest.TestCase):
 
     def test_configured_test_states_are_kept(self):
         from ledger.config import Config, save_config
+
         cfg = Config(timezone="Europe/Zurich")
         cfg.test_states = ["Custom QA"]
         save_config(self.d, cfg)
@@ -189,13 +219,14 @@ class InitTest(unittest.TestCase):
 
     def test_squad_teams_maps_calendar_squad_to_team(self):
         from ledger.config import Config, save_config
+
         save_config(self.d, Config(timezone="Europe/Zurich", squad_teams={"Alfa": "CLAIMS"}))
         self.run_init()
         teams = {p.name: p.team for p in read_team(os.path.join(self.d, "team.csv"))}
         self.assertEqual(teams["Maya R."], "CLAIMS")
 
     def test_unseen_email_typed_team_and_timezone(self):
-        self.write_staff("Maya R. <%s>; John Doe <%s>; Ana K. <%s>; nobody" % (MAYA, JOHN, ANA))
+        self.write_staff(f"Maya R. <{MAYA}>; John Doe <{JOHN}>; Ana K. <{ANA}>; nobody")
         a = self.args()
         a.timezone = None
         with mock.patch("ledger.setup.machine_timezone", return_value=None):
@@ -203,13 +234,14 @@ class InitTest(unittest.TestCase):
             with mock.patch("ledger.setup.fetch", return_value=board().cache()):
                 setup.run_init(a, object(), lambda p, d: " gamma " if "Team? (Ana" in p else d, out)
         text = out.getvalue()
-        self.assertIn("warning: %s is never assigned on the board; check the sign-in email" % ANA, text)
-        self.assertNotIn("warning: %s is never" % MAYA, text)
+        self.assertIn(f"warning: {ANA} is never assigned on the board; check the sign-in email", text)
+        self.assertNotIn(f"warning: {MAYA} is never", text)
         self.assertIn("'nobody' has no email address", text)
         self.assertIn("could not detect the time zone", text)
         self.assertEqual(load_config(self.d).timezone, "UTC")
-        self.assertEqual({p.name: p.team for p in read_team(os.path.join(self.d, "team.csv"))}["Ana K."],
-                         "GAMMA")
+        self.assertEqual(
+            {p.name: p.team for p in read_team(os.path.join(self.d, "team.csv"))}["Ana K."], "GAMMA"
+        )
 
     def test_bad_timezone_stops_init(self):
         a = self.args()
@@ -219,12 +251,14 @@ class InitTest(unittest.TestCase):
 
     def test_summary_lists_closure_reasons(self):
         b = board()
-        b.item(950).at("2026-10-06 09:00", state="Active", assigned=MAYA) \
-            .at("2026-10-07 09:00", state="Closed", reason="Obsolete")
+        b.item(950).at("2026-10-06 09:00", state="Active", assigned=MAYA).at(
+            "2026-10-07 09:00", state="Closed", reason="Obsolete"
+        )
         _, text = self.run_init(b.cache())
         self.assertIn("Not-delivered reasons (config): Removed, Won't Fix", text)
-        self.assertIn("Closure reasons on the board (* = not delivered): (no reason) (1), "
-                      "*Obsolete (1)", text)
+        self.assertIn(
+            "Closure reasons on the board (* = not delivered): (no reason) (1), *Obsolete (1)", text
+        )
 
     def test_unmatched_calendar_name_answer_is_remembered(self):
         asked = []
@@ -233,34 +267,44 @@ class InitTest(unittest.TestCase):
         self.assertEqual(load_config(self.d).name_aliases, {"Nobody X": "John Doe"})
 
     def test_init_stops_when_fetch_fails(self):  # fetch checks the rows (test_ado)
-        with mock.patch("ledger.setup.fetch", side_effect=AdoError("unknown state category 'Weird'")):
-            with self.assertRaises(AdoError):
-                setup.run_init(self.args(), object(), lambda p, d: d, io.StringIO())
+        with (
+            mock.patch("ledger.setup.fetch", side_effect=AdoError("unknown state category 'Weird'")),
+            self.assertRaises(AdoError),
+        ):
+            setup.run_init(self.args(), object(), lambda p, d: d, io.StringIO())
         self.assertFalse(os.path.exists(self.d))
 
     def test_missing_org_and_project(self):
         a = self.args()
         a.org = a.project = None
-        with mock.patch("ledger.setup.az_defaults", return_value=(None, None)):
-            with self.assertRaises(AdoError) as cm:
-                setup.run_init(a, None, lambda p, d: d, io.StringIO())
+        with (
+            mock.patch("ledger.setup.az_defaults", return_value=(None, None)),
+            self.assertRaises(AdoError) as cm,
+        ):
+            setup.run_init(a, None, lambda p, d: d, io.StringIO())
         self.assertIn("az devops configure", cm.exception.next_step)
 
     def test_init_reuses_lowercase_team_key_and_preserves_custom_metrics(self):
         from ledger.config import Config, save_config
-        cfg = Config(timezone="Europe/Zurich",
-                     teams={"alfa": {"metrics": ["planned", "delivered", "po_satisfaction"], "show_flow": False}})
+
+        cfg = Config(
+            timezone="Europe/Zurich",
+            teams={"alfa": {"metrics": ["planned", "delivered", "po_satisfaction"], "show_flow": False}},
+        )
         save_config(self.d, cfg)
         code, text = self.run_init()
         self.assertEqual(code, 0)
         self.assertIn("ALFA counts stories", text)
         reloaded = load_config(self.d)
         self.assertEqual(list(reloaded.teams.keys()), ["alfa"])
-        self.assertEqual(reloaded.teams["alfa"], {
-            "count": "stories",
-            "metrics": ["planned", "delivered", "po_satisfaction"],
-            "show_flow": False,
-        })
+        self.assertEqual(
+            reloaded.teams["alfa"],
+            {
+                "count": "stories",
+                "metrics": ["planned", "delivered", "po_satisfaction"],
+                "show_flow": False,
+            },
+        )
 
 
 if __name__ == "__main__":

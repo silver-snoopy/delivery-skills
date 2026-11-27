@@ -1,8 +1,9 @@
 """Command line: `ledger [--dir DIR] COMMAND`."""
+
 import argparse
 import os
 import sys
-from typing import List, Optional
+from typing import Optional
 
 from ledger.ado import AdoError
 
@@ -39,23 +40,25 @@ def _ask_for(args, out):
         return lambda prompt, default: default
 
     def ask(prompt: str, default: str) -> str:
-        answer = input("%s [%s] " % (prompt, default)).strip()
+        answer = input(f"{prompt} [{default}] ").strip()
         return answer or default
+
     return ask
 
 
-def main(argv: Optional[List[str]] = None, client=None, out=None) -> int:
+def main(argv: Optional[list[str]] = None, client=None, out=None) -> int:
     out = out or sys.stdout
     args = _parser().parse_args(argv)
     try:
         if args.command == "init":
             from ledger.setup import run_init
+
             return run_init(args, client, _ask_for(args, out), out)
         from ledger.render import run_person, run_report
+
         return (run_report if args.command == "report" else run_person)(args, client, out)
     except (AdoError, ValueError) as e:
-        print("error: %s" % e, file=out)
+        print(f"error: {e}", file=out)
         if isinstance(e, AdoError) and e.next_step:
-            print("next: %s" % e.next_step, file=out)
+            print(f"next: {e.next_step}", file=out)
         return 1
-    return 0

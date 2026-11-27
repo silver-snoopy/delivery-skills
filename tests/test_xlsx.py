@@ -24,30 +24,39 @@ def build_workbook(path, rows, merges=(), sheet_name="Sheet1"):
         cells = []
         for c in sorted(rows[r]):
             v = rows[r][c]
-            ref = "%s%d" % (col_letters(c), r)
+            ref = f"{col_letters(c)}{r}"
             if isinstance(v, int):
-                cells.append('<c r="%s"><v>%d</v></c>' % (ref, v))
+                cells.append(f'<c r="{ref}"><v>{v}</v></c>')
             else:
                 shared.append(v)
-                cells.append('<c r="%s" t="s"><v>%d</v></c>' % (ref, len(shared) - 1))
-        row_xml.append('<row r="%d">%s</row>' % (r, "".join(cells)))
+                cells.append(f'<c r="{ref}" t="s"><v>{len(shared) - 1}</v></c>')
+        row_xml.append(f'<row r="{r}">{"".join(cells)}</row>')
     merge_xml = ""
     if merges:
-        merge_xml = '<mergeCells count="%d">%s</mergeCells>' % (
-            len(merges), "".join('<mergeCell ref="%s"/>' % m for m in merges))
+        merge_refs = "".join(f'<mergeCell ref="{m}"/>' for m in merges)
+        merge_xml = f'<mergeCells count="{len(merges)}">{merge_refs}</mergeCells>'
     ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-    sheet = ('<?xml version="1.0"?><worksheet xmlns="%s"><sheetData>%s</sheetData>%s</worksheet>'
-             % (ns, "".join(row_xml), merge_xml))
-    sst = ('<?xml version="1.0"?><sst xmlns="%s">%s</sst>'
-           % (ns, "".join("<si><t>%s</t></si>" % escape(s) for s in shared)))
-    wb = ('<?xml version="1.0"?><workbook xmlns="%s" '
-          'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-          '<sheets><sheet name="%s" sheetId="1" r:id="rId1"/></sheets></workbook>' % (ns, sheet_name))
-    rels = ('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
-            'Target="worksheets/sheet1.xml"/></Relationships>')
+    sheet = '<?xml version="1.0"?><worksheet xmlns="{}"><sheetData>{}</sheetData>{}</worksheet>'.format(
+        ns, "".join(row_xml), merge_xml
+    )
+    sst = '<?xml version="1.0"?><sst xmlns="{}">{}</sst>'.format(
+        ns, "".join(f"<si><t>{escape(s)}</t></si>" for s in shared)
+    )
+    wb = (
+        f'<?xml version="1.0"?><workbook xmlns="{ns}" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f'<sheets><sheet name="{sheet_name}" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    )
+    rels = (
+        '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet1.xml"/></Relationships>'
+    )
     with zipfile.ZipFile(path, "w") as z:
-        z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        z.writestr(
+            "[Content_Types].xml",
+            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
+        )
         z.writestr("xl/workbook.xml", wb)
         z.writestr("xl/_rels/workbook.xml.rels", rels)
         z.writestr("xl/sharedStrings.xml", sst)
@@ -85,8 +94,15 @@ class XlsxTest(unittest.TestCase):
     def test_reads_team_calendar_layout(self):
         build_workbook(self.path, calendar_rows(), MERGES)
         v = read_vacations(self.path, half_day_codes=["H"])
-        self.assertEqual(v.days_off["Maya R."], {date(2026, 10, 31): 1.0, date(2026, 11, 3): 1.0,
-                                                 date(2026, 11, 4): 1.0, date(2026, 12, 24): 0.5})
+        self.assertEqual(
+            v.days_off["Maya R."],
+            {
+                date(2026, 10, 31): 1.0,
+                date(2026, 11, 3): 1.0,
+                date(2026, 11, 4): 1.0,
+                date(2026, 12, 24): 0.5,
+            },
+        )
         self.assertEqual(v.squad["Maya R."], "Alfa")
         self.assertEqual(v.squad["Zoë Brandt"], "Beta")
         self.assertEqual(v.days_off.get("Zoë Brandt", {}), {})

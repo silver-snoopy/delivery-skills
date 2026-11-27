@@ -1,20 +1,30 @@
 """Configuration files: config.json, team.csv and the per-sprint notes.md."""
-import csv
+
 import copy
+import csv
 import json
 import os
 import re
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 from datetime import date
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from ledger.replay import local_tz
 
-DEFAULT_NOT_DELIVERED = ["Removed", "Won't Fix", "Won't Do", "Cut", "Duplicate", "Obsolete", "Deferred",
-                         "Abandoned"]
+DEFAULT_NOT_DELIVERED = [
+    "Removed",
+    "Won't Fix",
+    "Won't Do",
+    "Cut",
+    "Duplicate",
+    "Obsolete",
+    "Deferred",
+    "Abandoned",
+]
 DEFAULT_MANAGER_METRICS = ("planned", "delivered", "throughput", "build_time", "first_pass")
-KNOWN_METRICS = DEFAULT_MANAGER_METRICS + ("po_satisfaction",)
+KNOWN_METRICS = (*DEFAULT_MANAGER_METRICS, "po_satisfaction")
 _TEAM_KEYS = {"count", "metrics", "show_flow"}
 CONFIG_FILE = "config.json"
 TEAM_COLUMNS = ["name", "email", "team", "joined", "left", "allocation"]
@@ -23,7 +33,7 @@ TEAM_COLUMNS = ["name", "email", "team", "joined", "left", "allocation"]
 @dataclass
 class Person:
     name: str
-    emails: List[str]
+    emails: list[str]
     team: str
     joined: Optional[date]
     left: Optional[date]
@@ -34,11 +44,11 @@ def _clean_name(raw: str) -> str:
     name = re.sub(r"\s*\([^()]*\)$", "", raw.strip().strip('"').strip())
     if "," in name:
         last, first = name.split(",", 1)
-        name = "%s %s" % (first.strip(), last.strip())
+        name = f"{first.strip()} {last.strip()}"
     return " ".join(name.split())
 
 
-def parse_staff(text: str, warnings: Optional[List[str]] = None) -> List[Tuple[str, str]]:
+def parse_staff(text: str, warnings: Optional[list[str]] = None) -> list[tuple[str, str]]:
     """(name, email) pairs from `Name <email>;` entries or bare emails; entries without an
     email address are skipped with a line in `warnings`."""
     pairs = []
@@ -53,13 +63,13 @@ def parse_staff(text: str, warnings: Optional[List[str]] = None) -> List[Tuple[s
         else:
             found = [(t.split("@")[0], t.lower()) for t in re.split(r"[,\s]+", chunk) if t]
         if not all("@" in email for _, email in found) and warnings is not None:
-            warnings.append("staff.txt entry '%s' has no email address; skipped" % chunk)
+            warnings.append(f"staff.txt entry '{chunk}' has no email address; skipped")
         pairs += [(name, email) for name, email in found if "@" in email]
     return pairs
 
 
-def merge_staff(pairs: List[Tuple[str, str]]) -> Dict[str, List[str]]:
-    merged: Dict[str, List[str]] = {}
+def merge_staff(pairs: list[tuple[str, str]]) -> dict[str, list[str]]:
+    merged: dict[str, list[str]] = {}
     for name, email in pairs:
         emails = merged.setdefault(name, [])
         if email not in emails:
@@ -67,13 +77,13 @@ def merge_staff(pairs: List[Tuple[str, str]]) -> Dict[str, List[str]]:
     return merged
 
 
-def _date(text: str) -> Optional[date]:
-    text = (text or "").strip()
-    return date.fromisoformat(text) if text else None
+def _date(text: Optional[str]) -> Optional[date]:
+    cleaned = (text or "").strip()
+    return date.fromisoformat(cleaned) if cleaned else None
 
 
-def read_team(path: str) -> List[Person]:
-    people: Dict[str, Person] = {}
+def read_team(path: str) -> list[Person]:
+    people: dict[str, Person] = {}
     with open(path, newline="", encoding="utf-8-sig") as f:
         for row in csv.DictReader(f):
             name = row["name"].strip()
@@ -81,28 +91,40 @@ def read_team(path: str) -> List[Person]:
             person = people.get(name)
             if person is None:
                 alloc = (row.get("allocation") or "").strip()
-                person = Person(name, [], row["team"].strip().upper(), _date(row.get("joined")),
-                                _date(row.get("left")), float(alloc) if alloc else 1.0)
+                person = Person(
+                    name,
+                    [],
+                    row["team"].strip().upper(),
+                    _date(row.get("joined")),
+                    _date(row.get("left")),
+                    float(alloc) if alloc else 1.0,
+                )
                 people[name] = person
             if email and email not in person.emails:
                 person.emails.append(email)
     return list(people.values())
 
 
-def write_team(path: str, people: List[Person]) -> None:
+def write_team(path: str, people: list[Person]) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f, lineterminator="\n")
         w.writerow(TEAM_COLUMNS)
         for p in people:
             for email in p.emails or [""]:
-                w.writerow([p.name, email, p.team,
-                            p.joined.isoformat() if p.joined else "",
-                            p.left.isoformat() if p.left else "",
-                            "%g" % p.allocation])
+                w.writerow(
+                    [
+                        p.name,
+                        email,
+                        p.team,
+                        p.joined.isoformat() if p.joined else "",
+                        p.left.isoformat() if p.left else "",
+                        f"{p.allocation:g}",
+                    ]
+                )
 
 
-def email_index(people: List[Person]) -> Dict[str, Person]:
+def email_index(people: list[Person]) -> dict[str, Person]:
     return {e.lower(): p for p in people for e in p.emails}
 
 
@@ -112,33 +134,33 @@ class Config:
     project: str = ""
     query: str = ""
     timezone: str = "UTC"
-    teams: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    manager_metrics: List[str] = field(default_factory=lambda: list(DEFAULT_MANAGER_METRICS))
+    teams: dict[str, dict[str, Any]] = field(default_factory=dict)
+    manager_metrics: list[str] = field(default_factory=lambda: list(DEFAULT_MANAGER_METRICS))
     show_flow: bool = True
     onboarding_sprints: int = 2
-    half_day_codes: List[str] = field(default_factory=list)
-    waiting_states: List[str] = field(default_factory=list)
-    hold_states: List[str] = field(default_factory=list)
-    test_states: List[str] = field(default_factory=list)
-    not_delivered_reasons: List[str] = field(default_factory=lambda: list(DEFAULT_NOT_DELIVERED))
+    half_day_codes: list[str] = field(default_factory=list)
+    waiting_states: list[str] = field(default_factory=list)
+    hold_states: list[str] = field(default_factory=list)
+    test_states: list[str] = field(default_factory=list)
+    not_delivered_reasons: list[str] = field(default_factory=lambda: list(DEFAULT_NOT_DELIVERED))
     staff: str = ""
     vacations: str = ""
-    name_aliases: Dict[str, str] = field(default_factory=dict)
-    squad_teams: Dict[str, str] = field(default_factory=dict)
+    name_aliases: dict[str, str] = field(default_factory=dict)
+    squad_teams: dict[str, str] = field(default_factory=dict)
     history_days: int = 200
 
 
 def _check_metrics(value, where: str) -> None:
     if not isinstance(value, list):
-        raise ValueError("config.json: %s must be a list of metric names" % where)
+        raise ValueError(f"config.json: {where} must be a list of metric names")
     seen = set()
     for item in value:
         if not isinstance(item, str):
-            raise ValueError("config.json: %s entries must be strings, got %r" % (where, item))
+            raise ValueError(f"config.json: {where} entries must be strings, got {item!r}")
         if item not in KNOWN_METRICS:
-            raise ValueError("config.json: %s has unknown metric '%s'" % (where, item))
+            raise ValueError(f"config.json: {where} has unknown metric '{item}'")
         if item in seen:
-            raise ValueError("config.json: %s has duplicate metric '%s'" % (where, item))
+            raise ValueError(f"config.json: {where} has duplicate metric '{item}'")
         seen.add(item)
 
 
@@ -149,33 +171,35 @@ def load_config(directory: str, warn: Callable[[str], None] = lambda line: None)
     known = {f.name for f in fields(Config)}
     unknown = sorted(set(data) - known)
     if unknown:
-        warn("config.json keys not recognised and ignored: %s" % ", ".join(unknown))
+        warn(f"config.json keys not recognised and ignored: {', '.join(unknown)}")
     cfg = Config(**{k: v for k, v in data.items() if k in known})
     _check_metrics(cfg.manager_metrics, "manager_metrics")
     if not isinstance(cfg.show_flow, bool):
         raise ValueError("config.json: show_flow must be a boolean")
     if not isinstance(cfg.teams, dict):
         raise ValueError("config.json: teams must be an object")
-    seen_teams = {}
+    seen_teams: dict[str, str] = {}
     for team, entry in cfg.teams.items():
         low = team.lower()
         if low in seen_teams:
-            raise ValueError("config.json: duplicate team '%s' (collides with '%s')" % (team, seen_teams[low]))
+            raise ValueError(f"config.json: duplicate team '{team}' (collides with '{seen_teams[low]}')")
         seen_teams[low] = team
         if not isinstance(entry, dict):
-            raise ValueError("config.json: team %s must be an object" % team)
+            raise ValueError(f"config.json: team {team} must be an object")
         extra = sorted(set(entry) - _TEAM_KEYS)
         if extra:
-            warn("config.json: team %s has unrecognised keys ignored: %s" % (team, ", ".join(extra)))
+            warn(f"config.json: team {team} has unrecognised keys ignored: {', '.join(extra)}")
         c = entry.get("count")
         is_list = isinstance(c, list) and c and all(isinstance(t, str) and t.strip() for t in c)
         if not is_list and c not in (None, "", "stories", "tasks"):
-            raise ValueError("config.json: team %s has count '%s'; use \"stories\", \"tasks\" or a "
-                             "list of work item types" % (team, c))
+            raise ValueError(
+                f'config.json: team {team} has count \'{c}\'; use "stories", "tasks" or a '
+                "list of work item types"
+            )
         if "metrics" in entry:
-            _check_metrics(entry["metrics"], "team %s metrics" % team)
+            _check_metrics(entry["metrics"], f"team {team} metrics")
         if "show_flow" in entry and not isinstance(entry["show_flow"], bool):
-            raise ValueError("config.json: team %s show_flow must be a boolean" % team)
+            raise ValueError(f"config.json: team {team} show_flow must be a boolean")
     local_tz(cfg.timezone)
     return cfg
 
@@ -201,69 +225,85 @@ def count_of(cfg: Config, team: str):
     return team_value(cfg.teams, team, {}).get("count") or "stories"
 
 
-def metrics_of(cfg: Config, team: str) -> List[str]:
+def metrics_of(cfg: Config, team: str) -> list[str]:
     entry = team_value(cfg.teams, team, {})
-    return list(entry["metrics"] if "metrics" in entry else cfg.manager_metrics)
+    return list(entry.get("metrics", cfg.manager_metrics))
 
 
 def show_flow_of(cfg: Config, team: str) -> bool:
     entry = team_value(cfg.teams, team, {})
-    return entry["show_flow"] if "show_flow" in entry else cfg.show_flow
+    return entry.get("show_flow", cfg.show_flow)
 
 
 @dataclass
 class Notes:
-    items: Dict[int, Tuple[str, str]] = field(default_factory=dict)
-    summary: Dict[str, str] = field(default_factory=dict)
-    note: Dict[str, str] = field(default_factory=dict)
-    exec_note: Dict[str, str] = field(default_factory=dict)
-    po_satisfaction: Dict[str, Tuple[int, str]] = field(default_factory=dict)
-    po_history: Dict[str, Dict[str, Optional[int]]] = field(default_factory=dict)
-    status: Dict[str, Tuple[str, str]] = field(default_factory=dict)
-    warnings: List[str] = field(default_factory=list)
+    items: dict[int, tuple[str, str]] = field(default_factory=dict)
+    summary: dict[str, str] = field(default_factory=dict)
+    note: dict[str, str] = field(default_factory=dict)
+    exec_note: dict[str, str] = field(default_factory=dict)
+    po_satisfaction: dict[str, tuple[int, str]] = field(default_factory=dict)
+    po_history: dict[str, dict[str, Optional[int]]] = field(default_factory=dict)
+    status: dict[str, tuple[str, str]] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
     teams: dict = field(default_factory=dict)
     markers: dict = field(default_factory=dict)
     state: dict = field(default_factory=dict)
-    raw: List[str] = field(default_factory=list)
+    raw: list[str] = field(default_factory=list)
     reported: Optional[set] = None
 
 
 _SECTIONS = ("Summary", "Exec note", "PO satisfaction", "Note", "Status", "Actions", "Resolved")
 _COLUMNS = ["Person", "Work item", "Problem", "Answer", "Answered"]
-# Tool-owned guide lines: rewritten on every run, ignored when reading.
-_GUIDE = "<!-- guide: %s -->"
+_GUIDE = "<!-- guide: {} -->"
 _TOP_GUIDE = (
     "Edit this file, then run `bin/ledger report --offline` to update both reports from the cache.",
     "Write only in the text sections and the Answer column; the tool rewrites the rest, these lines too.",
-    "Summary, Exec note, PO satisfaction, Status and carry-over answers reach the manager report: no engineer names.")
+    "Summary, Exec note, PO satisfaction, Status and carry-over answers reach the manager report: no engineer names.",
+)
 _SECTION_GUIDE = {
     "Summary": 'Manager report, Delivery highlights. 2-4 bullets, no names. Example: "- Delivered upload '
-               'validation."',
+    'validation."',
     "Exec note": 'Manager report, below the card. Optional, no names. Example: "Release moved one week: '
-                 'waiting on the customer test environment."',
-    "PO satisfaction": 'Manager report. Optional, no names. 1-5 scale (5 Very satisfied, 4 Satisfied, '
-                       '3 Mixed, 2 Dissatisfied, 1 Very dissatisfied). Example: "4/5 - Smooth release, '
-                       'minor UAT delay"',
+    'waiting on the customer test environment."',
+    "PO satisfaction": "Manager report. Optional, no names. 1-5 scale (5 Very satisfied, 4 Satisfied, "
+    '3 Mixed, 2 Dissatisfied, 1 Very dissatisfied). Example: "4/5 - Smooth release, '
+    'minor UAT delay"',
     "Note": 'DM report only; names are fine. Example: "Agreed pairing on the payment flow next sprint."',
     "Status": 'Leave empty for the computed status. To override: "AMBER - reason" (GREEN, AMBER or RED).',
-    "Actions": 'Open red and amber problems. Write only in Answer; the tool fills Answered. Carry-over: '
-               'start with "agreed:", "not agreed:" or "unknown:". Example: "agreed: PO moved it to next '
-               'sprint".',
-    "Resolved": "Answered problems that went away. A row moves back to Actions if its problem returns."}
+    "Actions": "Open red and amber problems. Write only in Answer; the tool fills Answered. Carry-over: "
+    'start with "agreed:", "not agreed:" or "unknown:". Example: "agreed: PO moved it to next '
+    'sprint".',
+    "Resolved": "Answered problems that went away. A row moves back to Actions if its problem returns.",
+}
 _STATUS = re.compile(r"^(GREEN|AMBER|RED)\s*(?:-\s*(.*))?$", re.I)
 _PO_SAT = re.compile(r"^([1-5])(?:\s*/\s*5)?(?:\s*[-–—]\s*(.*))?$")
-_KIND_LABELS = {"old": "Chase", "agreed": "PO agreement", "waiting": "Waiting",
-                "stale": "No movement", "none": "No work", "nothing": "Nothing delivered",
-                "wip": "Too much WIP", "never_active": "Never active", "reopened": "Reopened",
-                "shared": "Shared", "carry": "Carry-over", "held": "On Hold",
-                "not_started": "Not started"}
+_KIND_LABELS = {
+    "old": "Chase",
+    "agreed": "PO agreement",
+    "waiting": "Waiting",
+    "stale": "No movement",
+    "none": "No work",
+    "nothing": "Nothing delivered",
+    "wip": "Too much WIP",
+    "never_active": "Never active",
+    "reopened": "Reopened",
+    "shared": "Shared",
+    "carry": "Carry-over",
+    "held": "On Hold",
+    "not_started": "Not started",
+}
 _LABEL_KINDS = {label: kind for kind, label in _KIND_LABELS.items()}
 _LEVELS = ("green", "grey", "amber", "red")
 
 
 def _section():
-    return dict({s: [] if s in ("Actions", "Resolved") else "" for s in _SECTIONS},
-                _extra=[], _Actions_raw=[], _Resolved_raw=[], _items={})
+    return dict(
+        {s: [] if s in ("Actions", "Resolved") else "" for s in _SECTIONS},
+        _extra=[],
+        _Actions_raw=[],
+        _Resolved_raw=[],
+        _items={},
+    )
 
 
 def _warning(notes, text):
@@ -272,7 +312,7 @@ def _warning(notes, text):
 
 
 def _cells(line):
-    """Split Markdown cells, decoding only the escapes emitted by our writer."""
+    """Split Markdown cells, decoding our writer's escapes and stripping one padding space per side."""
     if not line.startswith("|") or not line.endswith("|"):
         return None
     cells, value, i = [], "", 1
@@ -288,7 +328,6 @@ def _cells(line):
             value += c
         i += 1
     cells.append(value)
-    # Exactly one space on each side belongs to the table's formatting.
     return [c[1:-1] if c.startswith(" ") and c.endswith(" ") else c for c in cells]
 
 
@@ -296,13 +335,15 @@ def _values(notes):
     for attr in ("summary", "exec_note", "po_satisfaction", "note", "status"):
         getattr(notes, attr).clear()
     for team, sec in notes.teams.items():
-        notes.summary[team] = "\n".join(re.sub(r"^-\s+", "", line.strip())
-                                          for line in sec["Summary"].splitlines() if line.strip())
+        notes.summary[team] = "\n".join(
+            re.sub(r"^-\s+", "", line.strip()) for line in sec["Summary"].splitlines() if line.strip()
+        )
         for heading, attr in (("Exec note", "exec_note"), ("Note", "note")):
             getattr(notes, attr)[team] = sec[heading].strip("\n")
         for heading, attr, pattern, upper in (
-                ("Status", "status", _STATUS, True),
-                ("PO satisfaction", "po_satisfaction", _PO_SAT, False)):
+            ("Status", "status", _STATUS, True),
+            ("PO satisfaction", "po_satisfaction", _PO_SAT, False),
+        ):
             text = sec[heading].strip()
             if text:
                 match = pattern.fullmatch(text)
@@ -310,7 +351,7 @@ def _values(notes):
                     key = match[1].upper() if upper else int(match[1])
                     getattr(notes, attr)[team] = (key, (match[2] or "").strip())
                 else:
-                    _warning(notes, "notes.md %s has invalid %s: %s" % (team, heading, text))
+                    _warning(notes, f"notes.md {team} has invalid {heading}: {text}")
 
 
 def parse_notes(text: str) -> Notes:
@@ -326,7 +367,7 @@ def parse_notes(text: str) -> Notes:
                     name, path = entry.split("=", 1)
                     notes.markers[name] = path
                 elif entry:
-                    _warning(notes, "notes.md malformed marker: %s" % entry)
+                    _warning(notes, f"notes.md malformed marker: {entry}")
             continue
         if line.startswith("# ") and not line.startswith("## "):
             name = line[2:].strip()
@@ -345,8 +386,11 @@ def parse_notes(text: str) -> Notes:
         sec = notes.teams.get(team)
         if sec is not None and heading in ("Actions", "Resolved"):
             cells = _cells(line)
-            if cells and len(cells) == 5 and (cells == _COLUMNS or all(
-                    re.fullmatch(r":?-+:?", c.strip()) for c in cells)):
+            if (
+                cells
+                and len(cells) == 5
+                and (cells == _COLUMNS or all(re.fullmatch(r":?-+:?", c.strip()) for c in cells))
+            ):
                 continue
             if cells and len(cells) == 5:
                 person, work, problem, answer, answered = cells
@@ -354,8 +398,16 @@ def parse_notes(text: str) -> Notes:
                 answer = answer if answer.strip() else ""
                 item = re.match(r"^#(\d+)(?:\s|$)", work)
                 if item or work in ("–", "-", ""):
-                    sec[heading].append(dict(id=int(item[1]) if item else None, person=person,
-                                             work=work, problem=problem, answer=answer, answered=answered))
+                    sec[heading].append(
+                        dict(
+                            id=int(item[1]) if item else None,
+                            person=person,
+                            work=work,
+                            problem=problem,
+                            answer=answer,
+                            answered=answered,
+                        )
+                    )
                     continue
             if not line:
                 continue
@@ -368,7 +420,7 @@ def parse_notes(text: str) -> Notes:
         else:
             notes.raw.append(line)
         if line:
-            _warning(notes, "notes.md line %d preserved: %s" % (number, line))
+            _warning(notes, f"notes.md line {number} preserved: {line}")
     _values(notes)
     return notes
 
@@ -380,8 +432,9 @@ def _metadata(text):
             date.fromisoformat(match[1])
             labels = match[3].split(", ") if match[3] else []
             if set(labels) <= _LABEL_KINDS.keys():
-                return dict(date=match[1], level=match[2],
-                            kinds=sorted({_LABEL_KINDS[label] for label in labels}))
+                return dict(
+                    date=match[1], level=match[2], kinds=sorted({_LABEL_KINDS[label] for label in labels})
+                )
         except ValueError:
             pass
     return None
@@ -390,32 +443,42 @@ def _metadata(text):
 def _answered(meta):
     if not meta or not meta.get("date"):
         return ""
-    return "%s %s%s" % (meta["date"], meta["level"],
-                         " " + ", ".join(_KIND_LABELS[k] for k in meta["kinds"]) if meta["kinds"] else "")
+    suffix = " " + ", ".join(_KIND_LABELS[k] for k in meta["kinds"]) if meta["kinds"] else ""
+    return f"{meta['date']} {meta['level']}{suffix}"
 
 
 def _key(row):
-    return "i:%d" % row["id"] if row["id"] is not None else json.dumps(
-        [row["person"], row.get("badge", "")], ensure_ascii=False)
+    return (
+        f"i:{row['id']}"
+        if row["id"] is not None
+        else json.dumps([row["person"], row.get("badge", "")], ensure_ascii=False)
+    )
 
 
 def _bind(notes):
+    """Infer missing person-row badges from Answered metadata, problem prefixes, or legacy wording."""
     for sec in notes.teams.values():
         for row in sec["Actions"] + sec["Resolved"]:
             if row["id"] is not None:
                 continue
             kinds = (_metadata(row["answered"]) or {}).get("kinds", [])
-            badge = row.get("badge") or next((
-                _KIND_LABELS[k] for k in ("none", "nothing", "wip") if k in kinds), "")
+            badge = row.get("badge") or next(
+                (_KIND_LABELS[k] for k in ("none", "nothing", "wip") if k in kinds), ""
+            )
             prefix = row["problem"].partition(":")[0]
             if not badge and prefix in ("No work", "Nothing delivered", "Too much WIP"):
                 badge = prefix
             if not badge:
-                # Import older notes that have neither Answered metadata nor a badge prefix.
                 text = row["problem"].lower()
-                badge = ("No work" if any(t in text for t in ("no work", "no item", "no open")) else
-                         "Nothing delivered" if "delivered" in text else
-                         "Too much WIP" if "wip" in text or "in progress" in text else "")
+                badge = (
+                    "No work"
+                    if any(t in text for t in ("no work", "no item", "no open"))
+                    else "Nothing delivered"
+                    if "delivered" in text
+                    else "Too much WIP"
+                    if "wip" in text or "in progress" in text
+                    else ""
+                )
             row["badge"] = badge
 
 
@@ -424,8 +487,9 @@ def _normal_answer(answer):
 
 
 def _agreements(notes):
+    """Populate per-team and unambiguous global PO-agreement maps; ambiguous ids require notes_for_team."""
     notes.items.clear()
-    owners = {}
+    owners: dict[int, list[tuple[str, str]]] = {}
     for team, sec in notes.teams.items():
         sec["_items"] = {}
         if notes.reported is not None and team not in notes.reported:
@@ -436,15 +500,18 @@ def _agreements(notes):
                 continue
             answer = _normal_answer(row["answer"])
             match = re.match(r"^(agreed|not agreed|unknown):\s*(.*)$", answer, re.I | re.S)
-            valid = (meta.get("closed") == notes.markers.get(team) and meta.get("date")
-                     and _normal_answer(meta.get("answer", "")) == answer and meta.get("carry"))
+            valid = (
+                meta.get("closed") == notes.markers.get(team)
+                and meta.get("date")
+                and _normal_answer(meta.get("answer", "")) == answer
+                and meta.get("carry")
+            )
             if not valid:
                 continue
             reason = match[2] if match and meta.get("local") else ""
             value = (match[1].lower() if match else "unknown", reason)
             sec["_items"][row["id"]] = value
             owners.setdefault(row["id"], []).append(value)
-    # Ambiguous ids must be consumed through notes_for_team.
     notes.items.update({i: values[0] for i, values in owners.items() if len(values) == 1})
 
 
@@ -458,10 +525,10 @@ def _read_notes(folder):
                 saved = json.load(f)
             if saved.get("version") != 1 or not isinstance(saved.get("teams"), dict):
                 raise ValueError("invalid state structure")
-            for team, entries in saved["teams"].items():
+            for entries in saved["teams"].values():
                 if not isinstance(entries, dict):
                     raise ValueError("invalid team state")
-                for key, meta in entries.items():
+                for meta in entries.values():
                     if not isinstance(meta, dict) or not isinstance(meta.get("answer"), str):
                         raise ValueError("invalid answer state")
                     meta.pop("section", None)
@@ -475,15 +542,15 @@ def _read_notes(folder):
     return notes
 
 
-def load_report_notes(directory: str, folder: str, selected: dict, iterations: list,
-                      warn: Callable) -> Notes:
-    """Load the destination or choose an independent, non-future predecessor per team."""
+def load_report_notes(directory: str, folder: str, selected: dict, iterations: list, warn: Callable) -> Notes:
+    """Load the destination or choose an independent, non-future predecessor per team across
+    reports/ and legacy top-level folders."""
     ends = {s["path"]: s["end"] for s in iterations}
     exists = os.path.isfile(os.path.join(folder, "notes.md"))
     notes = _read_notes(folder) if exists else Notes()
     target = os.path.abspath(folder)
-    discovered, po_history = [], {}
-    # Report folders live in reports/; folders directly in `directory` are the older layout.
+    discovered: list[tuple[str, Notes]] = []
+    po_history: dict[str, dict[str, Optional[int]]] = {}
     roots = [r for r in (directory, os.path.join(directory, "reports")) if os.path.isdir(r)]
     for entry in sorted((e for r in roots for e in os.scandir(r)), key=lambda e: e.path):
         if not entry.is_dir() or os.path.abspath(entry.path) == target:
@@ -497,16 +564,20 @@ def load_report_notes(directory: str, folder: str, selected: dict, iterations: l
         for team, path in parsed.markers.items():
             if path in ends and team in parsed.teams:
                 po_history.setdefault(team.upper(), {})[path] = (
-                    parsed.po_satisfaction[team][0] if team in parsed.po_satisfaction else None)
+                    parsed.po_satisfaction[team][0] if team in parsed.po_satisfaction else None
+                )
             elif not exists and path not in ends:
-                _warning(notes, "notes.md marker for %s has unknown sprint path %s; skipped" % (team, path))
-    full_cache = {}
+                _warning(notes, f"notes.md marker for {team} has unknown sprint path {path}; skipped")
+    full_cache: dict[str, Notes] = {}
     for team, sprint in selected.items():
-        source, source_path = (notes, None) if exists else (None, None)
+        source: Optional[Notes] = notes if exists else None
+        source_path: Optional[str] = None
         if not exists and sprint is not None:
-            choices = [(ends[n.markers[team]], path) for path, n in discovered
-                       if team in n.teams and n.markers.get(team) in ends
-                       and ends[n.markers[team]] <= sprint["end"]]
+            choices = [
+                (ends[n.markers[team]], path)
+                for path, n in discovered
+                if team in n.teams and n.markers.get(team) in ends and ends[n.markers[team]] <= sprint["end"]
+            ]
             if choices:
                 source_path = max(choices)[1]
                 if source_path not in full_cache:
@@ -515,13 +586,13 @@ def load_report_notes(directory: str, folder: str, selected: dict, iterations: l
         prior = source.markers.get(team) if source else None
         unresolved = bool(prior and prior not in ends)
         if unresolved:
-            _warning(notes, "notes.md marker for %s has unknown sprint path %s; skipped" % (team, prior))
+            _warning(notes, f"notes.md marker for {team} has unknown sprint path {prior}; skipped")
         changed = bool(sprint and prior and not unresolved and prior != sprint["path"])
         if source and team in source.teams:
             sec = copy.deepcopy(source.teams[team])
             if exists and sprint is not None and prior != sprint["path"] and sec["PO satisfaction"].strip():
                 sec["PO satisfaction"] = ""
-                _warning(notes, "notes.md %s PO satisfaction cleared because the closed sprint changed" % team)
+                _warning(notes, f"notes.md {team} PO satisfaction cleared because the closed sprint changed")
             if changed and not exists:
                 copied = [r for r in sec["Actions"] + sec["Resolved"] if r["answer"]]
                 sec = _section()
@@ -535,22 +606,28 @@ def load_report_notes(directory: str, folder: str, selected: dict, iterations: l
                 for meta in notes.state[team].values():
                     meta["local"] = False
             for message in source.warnings:
-                _warning(notes, message if exists else "%s: %s" % (
-                    os.path.join(source_path, "notes.md"), message))
+                _warning(
+                    notes,
+                    message
+                    if exists or source_path is None
+                    else f"{os.path.join(source_path, 'notes.md')}: {message}",
+                )
         else:
             notes.teams.setdefault(team, _section())
         if sprint:
             notes.markers[team] = sprint["path"]
         elif prior:
             notes.markers[team] = prior
-    notes.teams = {**{t: notes.teams[t] for t in selected},
-                   **{t: s for t, s in notes.teams.items() if t not in selected}}
+    notes.teams = {
+        **{t: notes.teams[t] for t in selected},
+        **{t: s for t, s in notes.teams.items() if t not in selected},
+    }
     for team in notes.teams:
         if team not in selected:
-            _warning(notes, "notes.md team %s is not in this report; preserved and excluded" % team)
+            _warning(notes, f"notes.md team {team} is not in this report; preserved and excluded")
     for team, path in notes.markers.items():
         if path not in ends:
-            _warning(notes, "notes.md marker for %s has unknown sprint path %s; skipped" % (team, path))
+            _warning(notes, f"notes.md marker for {team} has unknown sprint path {path}; skipped")
     notes.reported = set(selected)
     notes.po_history = po_history
     _values(notes)
@@ -577,7 +654,7 @@ def _observe(notes, team, key, saved, row, closed, today, copied):
         if "level" in source:
             baseline = dict(date=today.isoformat(), level=source["level"], kinds=sorted(source["kinds"]))
     if baseline is None:
-        _warning(notes, "notes.md %s %s has invalid Answered; answer preserved without baseline" % (team, key))
+        _warning(notes, f"notes.md {team} {key} has invalid Answered; answer preserved without baseline")
     if copied:
         sprint_scope = None
     elif imported:
@@ -585,14 +662,21 @@ def _observe(notes, team, key, saved, row, closed, today, copied):
     else:
         sprint_scope = (row or previous or {}).get("sprint_path", (previous or {}).get("sprint", closed))
     carry = (row or previous or {}).get("carry", False)
-    if imported:
+    if imported and baseline is not None:
         carry = bool(set(baseline["kinds"]) & {"carry", "agreed"})
-    return dict(baseline or {}, answer=answer, closed=None if copied else closed,
-                sprint=sprint_scope, carry=carry, local=not (copied or imported))
+    return dict(
+        baseline or {},
+        answer=answer,
+        closed=None if copied else closed,
+        sprint=sprint_scope,
+        carry=carry,
+        local=not (copied or imported),
+    )
 
 
-def reconcile_notes(notes: Notes, actions: dict, selected: dict, today: date,
-                    observed: Optional[dict] = None) -> dict:
+def reconcile_notes(
+    notes: Notes, actions: dict, selected: dict, today: date, observed: Optional[dict] = None
+) -> dict:
     """Own section membership; `observed` reuses raw baselines for the final signal view."""
     _bind(notes)
     notes.reported = set(selected)
@@ -608,7 +692,7 @@ def reconcile_notes(notes: Notes, actions: dict, selected: dict, today: date,
             key = _key(saved)
             if key in old:
                 duplicates.append(saved)
-                _warning(notes, "notes.md %s has duplicate row %s; preserved" % (team, key))
+                _warning(notes, f"notes.md {team} has duplicate row {key}; preserved")
             else:
                 old[key] = saved
         observed_rows = {_key(r): r for r in observed[team]["rows"]} if observed else None
@@ -620,26 +704,36 @@ def reconcile_notes(notes: Notes, actions: dict, selected: dict, today: date,
                 saved = {}
             answer = saved.get("answer", "")
             if observed_rows is None:
-                meta = _observe(notes, team, key, saved, row, closed, today,
-                                sec.get("_copied") or sec.get("_unscoped"))
+                meta = _observe(
+                    notes, team, key, saved, row, closed, today, sec.get("_copied") or sec.get("_unscoped")
+                )
                 valid = bool(meta.get("date"))
                 worse = False
                 if answer and valid:
                     higher = _LEVELS.index(row["level"]) > _LEVELS.index(meta["level"])
                     new_kind = bool(set(row["kinds"]) - set(meta["kinds"]))
                     ongoing = row["open"] or row["id"] is None
-                    new_sprint = ongoing and (meta.get("sprint") != row["sprint_path"]
-                                              or meta.get("closed") != closed)
+                    new_sprint = ongoing and (
+                        meta.get("sprint") != row["sprint_path"] or meta.get("closed") != closed
+                    )
                     worse = higher or new_kind or new_sprint
-                row.update(answer=answer, answered=_answered(meta), worse=worse,
-                           handled=bool(answer and valid and not worse))
+                row.update(
+                    answer=answer,
+                    answered=_answered(meta),
+                    worse=worse,
+                    handled=bool(answer and valid and not worse),
+                )
                 meta.update(person=row["person"], badge=row["badge"], problem=row["problem"])
                 state[key] = meta
             else:
                 source = observed_rows.get(key, {})
-                row.update(answer=answer, answered=source.get("answered", ""),
-                           worse=source.get("worse", False), handled=source.get("handled", False))
-            value = dict(row, work="#%d %s" % (row["id"], row["title"]) if row["id"] is not None else "–")
+                row.update(
+                    answer=answer,
+                    answered=source.get("answered", ""),
+                    worse=source.get("worse", False),
+                    handled=source.get("handled", False),
+                )
+            value = dict(row, work=f"#{row['id']} {row['title']}" if row["id"] is not None else "–")
             if answer and not value["problem"]:
                 value["problem"] = saved.get("problem", "")
             if row["level"] in ("red", "amber"):
@@ -650,7 +744,9 @@ def reconcile_notes(notes: Notes, actions: dict, selected: dict, today: date,
             if not sec.get("_copied"):
                 if observed_rows is None:
                     meta = _observe(notes, team, key, saved, None, closed, today, sec.get("_unscoped"))
-                    meta.update(person=saved["person"], badge=saved.get("badge", ""), problem=saved["problem"])
+                    meta.update(
+                        person=saved["person"], badge=saved.get("badge", ""), problem=saved["problem"]
+                    )
                     state[key] = meta
                     saved["answered"] = _answered(meta)
                 if saved["answer"]:
@@ -666,23 +762,31 @@ def reconcile_notes(notes: Notes, actions: dict, selected: dict, today: date,
 
 
 def _markdown(notes):
-    lines = ["<!-- ledger notes: %s -->" % "; ".join("%s=%s" % pair for pair in notes.markers.items())]
-    lines.extend(_GUIDE % text for text in _TOP_GUIDE)
+    """Render notes.md including tool-owned guide lines that are rewritten on every run."""
+    markers = "; ".join(f"{k}={v}" for k, v in notes.markers.items())
+    lines = [f"<!-- ledger notes: {markers} -->"]
+    lines.extend(_GUIDE.format(text) for text in _TOP_GUIDE)
     lines.extend(notes.raw)
     for team, sec in notes.teams.items():
         lines.append("# " + team)
         for heading in _SECTIONS:
-            lines.extend(["## " + heading, _GUIDE % _SECTION_GUIDE[heading]])
+            lines.extend(["## " + heading, _GUIDE.format(_SECTION_GUIDE[heading])])
             if heading not in ("Actions", "Resolved"):
                 lines.extend(sec[heading].splitlines())
                 continue
             lines.extend(["| " + " | ".join(_COLUMNS) + " |", "|---|---|---|---|---|"])
             for row in sec[heading]:
-                cells = [row.get(k, "") for k in ("person", "work", "problem", "answer", "answered")]
+                cells: list[str] = [
+                    row.get(k, "") for k in ("person", "work", "problem", "answer", "answered")
+                ]
                 if row["id"] is None and row.get("badge"):
                     prefix = row["badge"] + ": "
                     cells[2] = prefix + cells[2].removeprefix(prefix)
-                escaped = [re.sub(r"\\(?=[\\|])|\|", lambda m: "\\" + m[0], c) for c in cells]
+
+                def _escape_cell(m: re.Match[str]) -> str:
+                    return "\\" + m.group(0)
+
+                escaped = [re.sub(r"\\(?=[\\|])|\|", _escape_cell, c) for c in cells]
                 lines.append("| " + " | ".join(escaped) + " |")
             lines.extend(sec["_" + heading + "_raw"])
         lines.extend(sec["_extra"])
@@ -690,7 +794,8 @@ def _markdown(notes):
 
 
 def write_report_notes(folder: str, notes: Notes) -> None:
-    """Serialize both files before replacement; the observed answer repairs interrupted pairs."""
+    """Serialize both files before replacement; persist .notes-state.json first so an interrupted
+    notes.md write can repair Answered on a later run without rebasing."""
     text = _markdown(notes)
     state = json.dumps(dict(version=1, teams=notes.state), indent=2, ensure_ascii=False) + "\n"
     os.makedirs(folder, exist_ok=True)
@@ -700,8 +805,6 @@ def write_report_notes(folder: str, notes: Notes) -> None:
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=folder, delete=False) as f:
                 temporary.append((f.name, os.path.join(folder, name)))
                 f.write(content)
-        # Answer text is unchanged by this write. Persist its provenance first so a
-        # failed notes replacement can repair Answered on a later day without rebasing.
         for source, target in reversed(temporary):
             os.replace(source, target)
     finally:

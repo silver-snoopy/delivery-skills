@@ -364,8 +364,10 @@ class RenderTest(unittest.TestCase):
         self.assertEqual([card.index(o) for o in order], sorted(card.index(o) for o in order))
         self.assertIn('<span class="cap">Sprint 29 (27 Oct – 7 Nov 2026)<br>2 engineers (18 PD '
                       'capacity)</span>', card)
-        for absent in ("Counts:", "GREEN", "AMBER", "RED", "Worked on", "worked on", "Age"):
+        for absent in ("Counts:", "GREEN", "AMBER", "RED", "Worked on", "worked on", "Age",
+                       "Now in"):
             self.assertNotIn(absent, card)
+        self.assertIn("<th>At sprint end</th>", card)
         self.assertIn("<td>Planned</td>", card)
 
     def test_manager_card_without_summary_has_no_highlights(self):

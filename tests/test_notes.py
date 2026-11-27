@@ -7,7 +7,7 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
-from ledger.config import load_report_notes, notes_for_team, parse_notes, reconcile_notes, write_report_notes
+from ledger.config import carry_reasons, load_report_notes, parse_notes, reconcile_notes, write_report_notes
 
 OLD = {"path": "Project/One", "name": "One", "start": "2026-10-19", "end": "2026-10-30"}
 NEW = {"path": "Project/Two", "name": "Two", "start": "2026-11-02", "end": "2026-11-13"}
@@ -183,7 +183,7 @@ class NotesTest(unittest.TestCase):
             n = self.load()
             self.assertFalse(n.teams["ALFA"]["Actions"])
             self.assertEqual(len(n.teams["ALFA"]["Resolved"]), 1)
-            self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ""), "split next sprint")
+            self.assertEqual(carry_reasons(n, "ALFA").get(81, ""), "split next sprint")
         self.cycle(self.load(), [])
         out = self.cycle(self.load(), [row(person="Ben Example")])[0]
         self.assertEqual(out["answer"], "split next sprint")
@@ -201,8 +201,8 @@ class NotesTest(unittest.TestCase):
                 result = reconcile_notes(
                     n, dict(actions(row()), BETA=actions(row())["ALFA"]), selected, TODAY
                 )
-                self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ""), expected)
-                self.assertEqual(notes_for_team(n, "BETA").items[81], "other team reason")
+                self.assertEqual(carry_reasons(n, "ALFA").get(81, ""), expected)
+                self.assertEqual(carry_reasons(n, "BETA")[81], "other team reason")
                 self.assertTrue(result["ALFA"]["rows"][0]["handled"])
 
     def test_person_identity_includes_badge(self):
@@ -257,14 +257,14 @@ class NotesTest(unittest.TestCase):
         self.assertTrue(out["worse"])
         self.assertFalse(out["handled"])
         self.assertFalse(n.summary.get("ALFA"))
-        self.assertNotIn(81, notes_for_team(n, "ALFA").items)
+        self.assertNotIn(81, carry_reasons(n, "ALFA"))
         out = self.cycle(self.load())[0]
         self.assertFalse(out["handled"])
-        self.assertNotIn(81, notes_for_team(self.load(), "ALFA").items)
+        self.assertNotIn(81, carry_reasons(self.load(), "ALFA"))
         self.save_text(self.read().replace("split", "renewed split"))
         n = self.load()
         self.assertTrue(self.cycle(n)[0]["handled"])
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ""), "renewed split")
+        self.assertEqual(carry_reasons(n, "ALFA").get(81, ""), "renewed split")
 
     def test_changed_sprint_copies_open_resolved_but_drops_closed_and_empty_rows(self):
         source = parse_notes(markdown("closed answer", marker=OLD["path"]))
@@ -408,12 +408,12 @@ class NotesTest(unittest.TestCase):
         self.save_text(self.read().replace("split", "revised reason"))
         n = self.load()
         self.cycle(n, [])
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ""), "revised reason")
+        self.assertEqual(carry_reasons(n, "ALFA").get(81, ""), "revised reason")
         # Loss of the sidecar imports non-locally, so no manager reason is inferred.
         os.unlink(os.path.join(self.folder, ".notes-state.json"))
         n = self.load()
         self.cycle(n, [])
-        self.assertNotIn(81, notes_for_team(n, "ALFA").items)
+        self.assertNotIn(81, carry_reasons(n, "ALFA"))
 
     def test_unknown_team_is_preserved_but_cannot_contribute_reason(self):
         self.save_text(markdown("unknown team reason", team="UNLISTED"))
@@ -422,7 +422,7 @@ class NotesTest(unittest.TestCase):
         write_report_notes(self.folder, n)
         n = self.load()
         self.assertFalse(n.items)
-        self.assertFalse(notes_for_team(n, "UNLISTED").items)
+        self.assertFalse(carry_reasons(n, "UNLISTED"))
         self.assertIn("unknown team reason", self.read())
 
     def test_person_answer_survives_tool_owned_problem_edits(self):
@@ -677,7 +677,7 @@ class NotesTest(unittest.TestCase):
         self.assertTrue(any("unknown/path" in w for w in self.warnings))
         self.assertEqual(n.note["ALFA"], "Private text")
         self.cycle(n)
-        self.assertNotIn(81, notes_for_team(n, "ALFA").items)
+        self.assertNotIn(81, carry_reasons(n, "ALFA"))
 
     def test_unknown_and_malformed_content_roundtrip_without_reconciliation(self):
         text = "# ALFA\n## Note\ntext  \n\nnext\n## Mystery\nline | raw\\x\n## Actions\n" + HEADER
@@ -699,7 +699,7 @@ class NotesTest(unittest.TestCase):
         self.save_text(self.read().replace("| Waiting for a slot |  |", "| Waiting for a slot | split |"))
         n = self.load()
         self.assertTrue(self.cycle(n)[0]["handled"])
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81, ""), "split")
+        self.assertEqual(carry_reasons(n, "ALFA").get(81, ""), "split")
 
     def test_unmatched_prior_state_is_retained(self):
         self.save_text(markdown("answer"))
@@ -859,8 +859,8 @@ class NotesTest(unittest.TestCase):
                 write_report_notes(folder, n)
                 self.assertEqual(result["ALFA"]["rows"][0]["answer"], "agreed: keep old agreement")
                 self.assertFalse(result["ALFA"]["rows"][0]["handled"])
-                self.assertNotIn(81, notes_for_team(n, "ALFA").items)
-                self.assertNotIn(82, notes_for_team(n, "ALFA").items)
+                self.assertNotIn(81, carry_reasons(n, "ALFA"))
+                self.assertNotIn(82, carry_reasons(n, "ALFA"))
                 self.assertEqual(
                     {r["answer"] for r in n.teams["ALFA"]["Resolved"]},
                     {"agreed: keep resolved", "keep person answer", "keep unmatched answer"},
@@ -1018,9 +1018,9 @@ class NotesTest(unittest.TestCase):
         # Selected predecessor f2's state loaded for ALFA.
         self.assertIn("i:81", n.state["ALFA"])
 
-        # Survives reconcile_notes, notes_for_team, and rerun when destination exists.
+        # Survives reconcile_notes and rerun when destination exists.
         reconcile_notes(n, actions(row()), {"ALFA": NEW, "BETA": NEW}, TODAY)
-        self.assertEqual(notes_for_team(n, "BETA").po_history["BETA"][OLD["path"]], 5)
+        self.assertEqual(n.po_history["BETA"][OLD["path"]], 5)
         write_report_notes(dest, n)
         rerun = self.load(dest, selected={"ALFA": NEW, "BETA": NEW})
         self.assertIsNone(rerun.po_history["ALFA"][OLD["path"]])
@@ -1063,10 +1063,11 @@ class NotesTest(unittest.TestCase):
         }
         with open(os.path.join(legacy_folder, ".notes-state.json"), "w", encoding="utf-8") as f:
             json.dump(state, f)
-        # Predecessor inheritance from a legacy folder preserves unrelated teams and marks carry worse.
+        # Predecessor inheritance from a legacy folder preserves unrelated teams and does not warn.
         self.warnings.clear()
         inherited = self.load(os.path.join(self.root, "next_folder"), selected={"ALFA": NEW, "BETA": NEW})
         self.assertFalse(any("malformed .notes-state.json" in w for w in self.warnings))
+        self.assertFalse(any("migrated legacy carry-over state" in w for w in self.warnings))
         self.assertEqual(inherited.state["ALFA"]["i:81"]["kinds"], ["carry"])
         self.assertIn("i:82", inherited.state["BETA"])
         inh_out = reconcile_notes(
@@ -1085,7 +1086,10 @@ class NotesTest(unittest.TestCase):
         self.assertTrue(inh_out["ALFA"]["rows"][0]["worse"])
         self.assertFalse(inh_out["ALFA"]["rows"][0]["handled"])
         self.assertTrue(inh_out["BETA"]["rows"][0]["handled"])
-        self.assertNotIn(81, notes_for_team(inherited, "ALFA").items)
+        self.assertNotIn(81, carry_reasons(inherited, "ALFA"))
+        self.assertFalse(inherited.copied)
+        self.assertFalse(inherited.unscoped)
+        self.assertTrue({"_items", "_copied", "_unscoped"}.isdisjoint(inherited.teams["ALFA"]))
         # Existing folder rerun migrates legacy state in place without losing unrelated team state.
         self.warnings.clear()
         selected_old = {"ALFA": OLD, "BETA": NEW}
@@ -1116,11 +1120,40 @@ class NotesTest(unittest.TestCase):
         self.assertFalse(alfa_row["worse"])
         self.assertFalse(alfa_row["handled"])
         self.assertTrue(beta_row["handled"])
-        self.assertNotIn(81, notes_for_team(n, "ALFA").items)
+        self.assertNotIn(81, carry_reasons(n, "ALFA"))
         # Second load does not repeat migration warning or rebase.
         self.warnings.clear()
         self.load(legacy_folder, selected=selected_old)
         self.assertFalse(any("migrated legacy carry-over state" in w for w in self.warnings))
+        # Non-local legacy entry normalizes silently without a migration warning.
+        non_local_folder = os.path.join(self.root, "legacy_non_local")
+        self.save_text(
+            markdown("copied note", "2026-11-16 amber PO agreement", marker=OLD["path"]), non_local_folder
+        )
+        non_local_state = {
+            "version": 1,
+            "teams": {
+                "ALFA": {
+                    "i:81": {
+                        "date": "2026-11-16",
+                        "level": "amber",
+                        "kinds": ["agreed", "carry"],
+                        "answer": "copied note",
+                        "closed": OLD["path"],
+                        "sprint": RUN,
+                        "carry": True,
+                        "local": False,
+                    }
+                }
+            },
+        }
+        with open(os.path.join(non_local_folder, ".notes-state.json"), "w", encoding="utf-8") as f:
+            json.dump(non_local_state, f)
+        self.warnings.clear()
+        nl = self.load(non_local_folder, selected={"ALFA": OLD})
+        self.assertFalse(any("migrated legacy carry-over state" in w for w in self.warnings))
+        self.assertEqual(nl.state["ALFA"]["i:81"]["kinds"], ["carry"])
+        self.assertFalse(nl.state["ALFA"]["i:81"]["local"])
         # Deliberate edit publishes the carry-over reason and marks Handled.
         self.save_text(
             self.read(folder=legacy_folder).replace("private note", "confirmed API wait"), legacy_folder
@@ -1133,7 +1166,7 @@ class NotesTest(unittest.TestCase):
             TODAY,
         )
         self.assertTrue(res["ALFA"]["rows"][0]["handled"])
-        self.assertEqual(notes_for_team(edited, "ALFA").items.get(81), "confirmed API wait")
+        self.assertEqual(carry_reasons(edited, "ALFA").get(81), "confirmed API wait")
         # Standalone Markdown import without sidecar accepts legacy PO agreement label.
         md_only = parse_notes(markdown("agreed: split", "2026-11-16 amber PO agreement"))
         res_md = reconcile_notes(
@@ -1146,7 +1179,7 @@ class NotesTest(unittest.TestCase):
         self.assertEqual(md_only.state["ALFA"]["i:81"]["kinds"], ["carry"])
         self.assertTrue(md_only.state["ALFA"]["i:81"]["carry"])
         self.assertFalse(res_md["ALFA"]["rows"][0]["handled"])
-        self.assertNotIn(81, notes_for_team(md_only, "ALFA").items)
+        self.assertNotIn(81, carry_reasons(md_only, "ALFA"))
 
     def test_non_local_carry_is_not_handled_and_none_closed_never_publishes(self):
         prior = os.path.join(self.root, "prior_carry")
@@ -1155,7 +1188,7 @@ class NotesTest(unittest.TestCase):
         first = reconcile_notes(n, actions(row(kinds=["carry"], badge="Carry-over")), self.selected, TODAY)
         write_report_notes(prior, n)
         # Local plain text including legacy prefix is preserved verbatim as Reason.
-        self.assertEqual(notes_for_team(n, "ALFA").items.get(81), "agreed: split")
+        self.assertEqual(carry_reasons(n, "ALFA").get(81), "agreed: split")
         self.assertTrue(first["ALFA"]["rows"][0]["handled"])
         # Same-closed-sprint inheritance clears local -> not Handled and no Reason published.
         copied = self.load(os.path.join(self.root, "same_sprint_copy"))
@@ -1164,7 +1197,7 @@ class NotesTest(unittest.TestCase):
         )["ALFA"]["rows"][0]
         self.assertFalse(out["worse"])
         self.assertFalse(out["handled"])
-        self.assertNotIn(81, notes_for_team(copied, "ALFA").items)
+        self.assertNotIn(81, carry_reasons(copied, "ALFA"))
         # Missing closed sprint marker never matches meta["closed"] == None.
         markerless = parse_notes(markdown("should not publish"))
         markerless.markers.clear()
@@ -1183,7 +1216,7 @@ class NotesTest(unittest.TestCase):
         }
         reconcile_notes(markerless, actions(), {"ALFA": None}, TODAY)
         self.assertFalse(markerless.items)
-        self.assertNotIn(81, notes_for_team(markerless, "ALFA").items)
+        self.assertNotIn(81, carry_reasons(markerless, "ALFA"))
 
 
 if __name__ == "__main__":

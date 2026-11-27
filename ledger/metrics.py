@@ -8,9 +8,11 @@ from statistics import median
 from typing import Any
 
 from ledger.config import (
+    SEVERITY,
     Config,
     Notes,
     Person,
+    carry_reasons,
     count_of,
     metrics_of,
     show_flow_of,
@@ -576,7 +578,6 @@ ASK = {
     "never_active": "Ask them to move items through Active on the board.",
     "shared": "Check that both teams should count it.",
 }
-_LEVELS = ("red", "amber", "grey", "green")
 _BADGES = {
     "old": "Chase",
     "carry": "Carry-over",
@@ -619,7 +620,7 @@ def _attention(
     def add(level, ask, text, item=None, name="", kind=None, badge=None):
         found.append(
             (
-                _LEVELS.index(level),
+                SEVERITY[level],
                 item is None,
                 item or 0,
                 name,
@@ -725,17 +726,13 @@ def _status(
         old = [c["id"] for c in carry]
     else:
         old = [c["id"] for c in carry if c["age"] is not None and c["age"] > p85]
-    many = len(old) > 1
     if not old:
         if p85 is not None:
             parts.append("no carry-over is older than the squad's P85")
-    elif p85 is None:
-        qty = len(old) if many else "one"
-        parts.append(f"{qty} carry-over{'s' if many else ''} ({_ids(old)})")
     else:
-        qty = len(old) if many else "one"
-        verb = "are" if many else "is"
-        parts.append(f"{qty} carry-over{'s' if many else ''} ({_ids(old)}) {verb} older than the squad's P85")
+        noun = f"{len(old)} carry-overs" if len(old) > 1 else "one carry-over"
+        suffix = "" if p85 is None else f" {'are' if len(old) > 1 else 'is'} older than the squad's P85"
+        parts.append(f"{noun} ({_ids(old)}){suffix}")
     long_waits = [(i, d) for i, (_, d) in sorted(waits.items()) if d > WAIT_RED_DAYS]
     parts += [
         f"#{i} has been waiting (in a waiting state or blocked) for {d} working days" for i, d in long_waits
@@ -776,6 +773,7 @@ def team_sprint(
         }
 
     passes = {path: first_pass(g["delivered"]) for path, g in figs.items()}
+    reasons = carry_reasons(notes, team)
     carry = []
     for i in f["carry"]:
         h, row = t.hist[i], t.hist[i].at(t1)
@@ -785,12 +783,12 @@ def team_sprint(
         carry.append(
             {
                 "id": i,
-                "title": row["title"],
+                "title": row["title"] or "",
                 "age": (end - t.local(fa)).days + 1 if fa is not None and fa <= t1 else None,
                 "sprints": sum(1 for g in figs.values() if i in g["open"]),
                 "state": row["state"],
                 "waiting": row["state"] in cfg.waiting_states,
-                "reason": notes.items.get(i, ""),
+                "reason": reasons.get(i, ""),
                 "held": t.held_days(h, sprint),
             }
         )
@@ -1130,11 +1128,7 @@ def _action_problem(row: dict) -> str:
         )
         text = re.sub(r"^(?:has |is |was )", "", text)
         text = re.sub(r" for (\d+) working days$", r" \1 working days", text)
-
-        def _singular(m: re.Match[str]) -> str:
-            return "1 " + m.group(1)[:-1]
-
-        text = re.sub(r"(?<![\d.])1 ((?:working |available )?days|sprints|items)\b", _singular, text)
+        text = re.sub(r"(?<![\d.])1 ((?:working |available )?day|sprint|item)s\b", r"1 \1", text)
         for fragment in filter(None, text.split("; ")):
             rank = (
                 1
@@ -1218,7 +1212,7 @@ def team_actions(
         i = signal["id"]
         name = t.owner(t.hist[i], at) if i in t.hist and t.hist[i].at(at) else signal["person"]
         row = row_for(i, name, signal)
-        if _LEVELS.index(signal["level"]) < _LEVELS.index(row["level"]):
+        if SEVERITY[signal["level"]] < SEVERITY[row["level"]]:
             row.update(level=signal["level"], badge=signal["badge"])
         row["kinds"] = sorted(set(row["kinds"] + [signal["kind"]]))
         for key, value in (("problem", signal["text"]), ("ask", signal["ask"])):
@@ -1252,7 +1246,7 @@ def team_actions(
                     if previous is not None and age is not None:
                         value["text"] = value["text"].replace(f"{previous} days old", f"{age} days old")
                 signals.append(value)
-    signals.sort(key=lambda s: (_LEVELS.index(s["level"]), priority.index(s["badge"])))
+    signals.sort(key=lambda s: (SEVERITY[s["level"]], priority.index(s["badge"])))
     for signal in signals:
         row = merge(signal)
         if running and closed is not None and signal["id"] in carry and signal["id"] not in open_ids:
@@ -1269,8 +1263,8 @@ def team_actions(
         persons.append({"name": name, "available": 0, "nominal": 0, "onboarding": False})
     worst = {
         p["name"]: min(
-            (_LEVELS.index(r["level"]) for r in rows.values() if r["person"] == p["name"]),
-            default=_LEVELS.index("green"),
+            (SEVERITY[r["level"]] for r in rows.values() if r["person"] == p["name"]),
+            default=SEVERITY["green"],
         )
         for p in persons
     }
@@ -1280,7 +1274,7 @@ def team_actions(
         rows.values(),
         key=lambda r: (
             order[r["person"]],
-            _LEVELS.index(r["level"]),
+            SEVERITY[r["level"]],
             not r["open"],
             r["id"] is None,
             r["id"] or 0,

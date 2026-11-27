@@ -374,8 +374,6 @@ class StatusTests(unittest.TestCase):
             old.at("2026-10-26 09:00", iteration=S29)
             if wait_from and wait_from > "2026-10-26 09:00":
                 old.at(wait_from, state="Ready for QA")
-        elif wait_from:
-            b.item(50).at(wait_from, iteration=S29, assigned=MAYA, state="Ready for QA")
         b.item(60).at("2026-10-27 09:00", iteration=S29, assigned=MAYA, state="Active").at(
             "2026-10-29 09:00", iteration="Proj"
         )

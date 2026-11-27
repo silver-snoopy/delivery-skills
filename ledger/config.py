@@ -238,6 +238,7 @@ def show_flow_of(cfg: Config, team: str) -> bool:
 @dataclass
 class Notes:
     items: dict[int, str] = field(default_factory=dict)
+    reasons: dict[str, dict[int, str]] = field(default_factory=dict)
     summary: dict[str, str] = field(default_factory=dict)
     note: dict[str, str] = field(default_factory=dict)
     exec_note: dict[str, str] = field(default_factory=dict)
@@ -250,6 +251,8 @@ class Notes:
     state: dict = field(default_factory=dict)
     raw: list[str] = field(default_factory=list)
     reported: set | None = None
+    copied: set[str] = field(default_factory=set)
+    unscoped: set[str] = field(default_factory=set)
 
 
 _SECTIONS = ("Summary", "Exec note", "PO satisfaction", "Note", "Status", "Actions", "Resolved")
@@ -292,7 +295,7 @@ _KIND_LABELS = {
     "not_started": "Not started",
 }
 _LABEL_KINDS = {**{label: kind for kind, label in _KIND_LABELS.items()}, "PO agreement": "carry"}
-_LEVELS = ("green", "grey", "amber", "red")
+SEVERITY = {"red": 0, "amber": 1, "grey": 2, "green": 3}
 
 
 def _section():
@@ -301,7 +304,6 @@ def _section():
         _extra=[],
         _Actions_raw=[],
         _Resolved_raw=[],
-        _items={},
     )
 
 
@@ -496,12 +498,12 @@ def _publishable_reason(meta: dict, closed: str | None, answer: str) -> bool:
     )
 
 
-def _reasons(notes):
-    """Populate per-team and unambiguous global carry-over reason maps; ambiguous ids require notes_for_team."""
-    notes.items.clear()
-    owners: dict[int, list[str]] = {}
+def _reasons(notes: Notes) -> None:
+    """Populate per-team publishable carry-over reason maps."""
+    notes.reasons.clear()
     for team, sec in notes.teams.items():
-        sec["_items"] = {}
+        team_reasons: dict[int, str] = {}
+        notes.reasons[team] = team_reasons
         if notes.reported is not None and team not in notes.reported:
             continue
         closed = notes.markers.get(team)
@@ -513,14 +515,24 @@ def _reasons(notes):
             if not answer:
                 continue
             meta = team_state.get(_key(row), {})
-            if not _publishable_reason(meta, closed, answer):
-                continue
-            sec["_items"][row["id"]] = answer
-            owners.setdefault(row["id"], []).append(answer)
-    notes.items.update({i: values[0] for i, values in owners.items() if len(values) == 1})
+            if _publishable_reason(meta, closed, answer):
+                team_reasons[row["id"]] = answer
 
 
-def _read_notes(folder):
+def _normalize_state_entry(meta: dict) -> bool:
+    """Strip legacy sidecar keys and map old 'agreed' kinds to 'carry'; return True if a local entry was downgraded."""
+    meta.pop("section", None)
+    meta.pop("position", None)
+    kinds = meta.get("kinds")
+    if isinstance(kinds, list) and all(isinstance(k, str) for k in kinds) and "agreed" in kinds:
+        was_local = bool(meta.get("local"))
+        meta["kinds"] = sorted({"carry" if k == "agreed" else k for k in kinds})
+        meta["local"] = False
+        return was_local
+    return False
+
+
+def _read_notes(folder: str, *, warn_migration: bool = True) -> Notes:
     with open(os.path.join(folder, "notes.md"), encoding="utf-8-sig") as f:
         notes = parse_notes(f.read())
     path = os.path.join(folder, ".notes-state.json")
@@ -537,21 +549,11 @@ def _read_notes(folder):
                 for meta in entries.values():
                     if not isinstance(meta, dict) or not isinstance(meta.get("answer"), str):
                         raise ValueError("invalid answer state")
-                    meta.pop("section", None)
-                    meta.pop("position", None)
-                    kinds = meta.get("kinds")
-                    if (
-                        isinstance(kinds, list)
-                        and all(isinstance(k, str) for k in kinds)
-                        and "agreed" in kinds
-                    ):
-                        meta["kinds"] = sorted({"carry" if k == "agreed" else k for k in kinds})
-                        meta["local"] = False
-                        migrated = True
+                    migrated = _normalize_state_entry(meta) or migrated
                     if meta.get("date") and _metadata(_answered(meta)) is None:
                         raise ValueError("invalid baseline")
             notes.state = saved["teams"]
-            if migrated:
+            if migrated and warn_migration:
                 _warning(
                     notes,
                     "notes.md migrated legacy carry-over state; review carry-over answers before sharing manager_",
@@ -601,7 +603,7 @@ def load_report_notes(directory: str, folder: str, selected: dict, iterations: l
             if choices:
                 source_path = max(choices)[1]
                 if source_path not in full_cache:
-                    full_cache[source_path] = _read_notes(source_path)
+                    full_cache[source_path] = _read_notes(source_path, warn_migration=False)
                 source = full_cache[source_path]
         prior = source.markers.get(team) if source else None
         unresolved = bool(prior and prior not in ends)
@@ -617,9 +619,9 @@ def load_report_notes(directory: str, folder: str, selected: dict, iterations: l
                 copied = [r for r in sec["Actions"] + sec["Resolved"] if r["answer"]]
                 sec = _section()
                 sec["Actions"] = copied
-                sec["_copied"] = True
+                notes.copied.add(team)
             if unresolved or (changed and exists):
-                sec["_unscoped"] = True
+                notes.unscoped.add(team)
             notes.teams[team] = sec
             notes.state[team] = copy.deepcopy(source.state.get(team, {}))
             if not exists:
@@ -694,6 +696,34 @@ def _observe(notes, team, key, saved, row, closed, today, copied):
     )
 
 
+def _reconcile_row(
+    notes: Notes, team: str, key: str, saved: dict, row: dict, closed: str | None, today: date, unscoped: bool
+) -> dict:
+    answer = saved.get("answer", "")
+    meta = _observe(notes, team, key, saved, row, closed, today, unscoped)
+    valid = bool(meta.get("date"))
+    worse = False
+    if answer and valid:
+        higher = SEVERITY[row["level"]] < SEVERITY[meta["level"]]
+        new_kind = bool(set(row["kinds"]) - set(meta["kinds"]))
+        ongoing = row["open"] or row["id"] is None
+        new_sprint = ongoing and (meta.get("sprint") != row["sprint_path"] or meta.get("closed") != closed)
+        worse = higher or new_kind or new_sprint
+    reason_ready = not row["carry"] or _publishable_reason(meta, closed, _normal_answer(answer))
+    row.update(
+        answer=answer,
+        answered=_answered(meta),
+        worse=worse,
+        handled=bool(answer and valid and not worse and reason_ready),
+    )
+    meta.update(person=row["person"], badge=row["badge"], problem=row["problem"])
+    notes.state[team][key] = meta
+    value = dict(row, work=f"#{row['id']} {row['title']}" if row["id"] is not None else "–")
+    if answer and not value["problem"]:
+        value["problem"] = saved.get("problem", "")
+    return value
+
+
 def reconcile_notes(notes: Notes, actions: dict, selected: dict, today: date) -> dict:
     """Own section membership and reconcile DM answers against current action rows."""
     _bind(notes)
@@ -704,8 +734,8 @@ def reconcile_notes(notes: Notes, actions: dict, selected: dict, today: date) ->
         sec = notes.teams.setdefault(team, _section())
         state = notes.state.setdefault(team, {})
         closed = selected[team]["path"] if selected[team] else None
-        old = {}
-        duplicates = []
+        is_copied, is_unscoped = team in notes.copied, team in notes.unscoped
+        old, duplicates = {}, []
         for saved in sec["Actions"] + sec["Resolved"]:
             key = _key(saved)
             if key in old:
@@ -717,49 +747,24 @@ def reconcile_notes(notes: Notes, actions: dict, selected: dict, today: date) ->
         for row in result["rows"]:
             key = _key(row)
             saved = old.pop(key, {})
-            if sec.get("_copied") and row["id"] is not None and not row["open"]:
+            if is_copied and row["id"] is not None and not row["open"]:
                 saved = {}
-            answer = saved.get("answer", "")
-            meta = _observe(
-                notes, team, key, saved, row, closed, today, sec.get("_copied") or sec.get("_unscoped")
-            )
-            valid = bool(meta.get("date"))
-            worse = False
-            if answer and valid:
-                higher = _LEVELS.index(row["level"]) > _LEVELS.index(meta["level"])
-                new_kind = bool(set(row["kinds"]) - set(meta["kinds"]))
-                ongoing = row["open"] or row["id"] is None
-                new_sprint = ongoing and (
-                    meta.get("sprint") != row["sprint_path"] or meta.get("closed") != closed
-                )
-                worse = higher or new_kind or new_sprint
-            reason_ready = not row["carry"] or _publishable_reason(meta, closed, _normal_answer(answer))
-            row.update(
-                answer=answer,
-                answered=_answered(meta),
-                worse=worse,
-                handled=bool(answer and valid and not worse and reason_ready),
-            )
-            meta.update(person=row["person"], badge=row["badge"], problem=row["problem"])
-            state[key] = meta
-            value = dict(row, work=f"#{row['id']} {row['title']}" if row["id"] is not None else "–")
-            if answer and not value["problem"]:
-                value["problem"] = saved.get("problem", "")
+            value = _reconcile_row(notes, team, key, saved, row, closed, today, is_copied or is_unscoped)
             if row["level"] in ("red", "amber"):
                 active.append(value)
-            elif answer:
+            elif value["answer"]:
                 resolved.append(value)
         for key, saved in old.items():
-            if not sec.get("_copied"):
-                meta = _observe(notes, team, key, saved, None, closed, today, sec.get("_unscoped"))
+            if not is_copied:
+                meta = _observe(notes, team, key, saved, None, closed, today, is_unscoped)
                 meta.update(person=saved["person"], badge=saved.get("badge", ""), problem=saved["problem"])
                 state[key] = meta
                 saved["answered"] = _answered(meta)
                 if saved["answer"]:
                     resolved.append(saved)
         sec["Actions"], sec["Resolved"] = active, resolved + duplicates
-        sec.pop("_copied", None)
-        sec.pop("_unscoped", None)
+        notes.copied.discard(team)
+        notes.unscoped.discard(team)
         if closed:
             notes.markers[team] = closed
     _values(notes)
@@ -819,7 +824,8 @@ def write_report_notes(folder: str, notes: Notes) -> None:
                 os.unlink(source)
 
 
-def notes_for_team(notes: Notes, team: str) -> Notes:
-    result = copy.copy(notes)
-    result.items = dict(notes.teams.get(team, {}).get("_items", {}))
-    return result
+def carry_reasons(notes: Notes, team: str) -> dict[int, str]:
+    """Per-team publishable carry-over reasons, falling back to `notes.items` for direct test fixtures."""
+    if team in notes.reasons:
+        return notes.reasons[team]
+    return notes.items if not notes.teams else {}

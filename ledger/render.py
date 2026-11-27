@@ -9,13 +9,14 @@ from urllib.parse import quote
 from ledger.ado import Client, cached_ids, fetch, load_cache, save_cache
 from ledger.config import (
     DEFAULT_MANAGER_METRICS,
+    SEVERITY,
     Notes,
     Person,
+    carry_reasons,
     email_index,
     load_config,
     load_report_notes,
     metrics_of,
-    notes_for_team,
     read_team,
     reconcile_notes,
     show_flow_of,
@@ -603,7 +604,9 @@ def link_ids(page: str, organization: str, project: str) -> str:
 def _action_rank(row: dict) -> int:
     if row.get("handled"):
         return 3
-    return {"red": 0, "amber": 1, "grey": 2, "green": 4 if row["open"] else 5}[row["level"]]
+    if row["level"] == "green":
+        return 4 if row["open"] else 5
+    return SEVERITY[row["level"]]
 
 
 def _actions(result: dict) -> str:
@@ -956,7 +959,7 @@ def run_report(args, client: Client | None, out) -> int:
     actions = {}
     for team, sprint in picked.items():
         if sprint is not None:
-            result = team_sprint(data, cfg, people, team, sprint, notes_for_team(notes, team), vac.days_off)
+            result = team_sprint(data, cfg, people, team, sprint, notes, vac.days_off)
         else:
             why = f"No sprint named {name}." if args.sprint else _no_sprint(data, cfg, people, team)
             result = {
@@ -974,7 +977,7 @@ def run_report(args, client: Client | None, out) -> int:
     reconcile_notes(notes, actions, picked, today)
     for result in teams:
         if not result.get("missing"):
-            reasons = notes_for_team(notes, result["team"]).items
+            reasons = carry_reasons(notes, result["team"])
             for carry in result["carry"]:
                 carry["reason"] = reasons.get(carry["id"], "")
     write_report_notes(folder, notes)
@@ -1007,12 +1010,7 @@ def run_report(args, client: Client | None, out) -> int:
     print(f"Written:\n  {paths[0]}\n  {paths[1]}\n  {notes_path} (notes)", file=out)
     print(f"sprint: {name}\nnotes: {notes_path}", file=out)
     for t in sorted((t for t in teams if not t.get("missing")), key=lambda t: t["team"]):
-        reasons = notes_for_team(notes, t["team"]).items
-        lines = [
-            f"carry-over without note: #{c['id']} {c['title'] or ''}"
-            for c in t["carry"]
-            if c["id"] not in reasons
-        ]
+        lines = [f"carry-over without note: #{c['id']} {c['title']}" for c in t["carry"] if not c["reason"]]
         lines += [
             f"worked on: #{w['id']} {w['title']} ({'delivered' if w['delivered'] else 'in progress'})"
             for w in t["worked_items"]

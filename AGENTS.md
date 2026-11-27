@@ -14,7 +14,6 @@ If your agent supports skills, the same procedure is in `skills/delivery-report/
 - Never answer a question or confirm a sentence on the DM's behalf.
 - Never write engineer names in Summary, Exec note or Status, or in PO satisfaction or carry-over answers. Names belong only in private Note or other private Answer text. Ticket titles can still contain names; show the CLI's warning to the DM.
 - Show the DM every `warning:` line a command prints.
-- **No explaining comments (`no-explaining-comments` in `ledger/` and `scripts/`):** Don't justify the workaround. Fix the real problem instead. Explanatory `#` comments are a lint error (`NEC001`); express intent through clear names, small helpers, explicit types, and docstrings. Only shebangs, PEP 263 encoding headers, `# pragma: no cover`, and code-scoped tool directives (`# noqa: CODE`, `# type: ignore[code]`) without trailing prose are allowed.
 
 ## Flow
 

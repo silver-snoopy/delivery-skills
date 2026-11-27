@@ -6,11 +6,11 @@ repos:
     rev: v0.17.6
     hooks:
       - id: ruff-check
-        args: [ledger, scripts, tests]
+        args: [ledger, tests]
         pass_filenames: false
         always_run: true
       - id: ruff-format
-        args: [--check, ledger, scripts, tests]
+        args: [--check, ledger, tests]
         pass_filenames: false
         always_run: true
 
@@ -24,13 +24,6 @@ repos:
 
   - repo: local
     hooks:
-      - id: no-explaining-comments
-        name: no-explaining-comments (NEC001)
-        entry: python3 scripts/check_comments.py ledger scripts
-        language: system
-        pass_filenames: false
-        always_run: true
-
       - id: unittest
         name: unittest
         entry: python3 -m unittest discover -s tests

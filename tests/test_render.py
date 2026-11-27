@@ -206,6 +206,100 @@ class ManagerWindowTest(unittest.TestCase):
         self.assertNotIn('Cycle time =', page)
         self.assertIn("Parts are whole percentages of that time, with the remainder in other.", page)
 
+    def test_custom_metrics_subset_and_order(self):
+        t = self.team()
+        t["manager_metrics"] = ["build_time", "planned", "delivered"]
+        page = self.page(t)
+        labels = re.findall(r'<span class="l">(.*?)</span>', page)
+        self.assertEqual(labels, [
+            "build time, median (last 3 sprints)",
+            "planned work items delivered",
+            "work items delivered in total",
+        ])
+        self.assertIn('<div class="fig key"><span class="n">', page)
+        trend_html = page.split('<summary>Last 2 sprints</summary>')[1].split('</details>')[0]
+        row_labels = re.findall(r'<tr><td>([^<]+)</td>', trend_html)
+        self.assertEqual(row_labels, [
+            "Build time median (days)",
+            "Planned work items delivered",
+            "Work items delivered in total",
+        ])
+
+    def test_show_flow_per_team_and_footnote(self):
+        t1, t2 = self.team(), self.team()
+        t1["team"], t2["team"] = "ALFA", "BETA"
+        t1["show_flow"], t2["show_flow"] = False, True
+        page = render_manager("Sprint 29", [t1, t2], GEN)
+        articles = re.findall(r'(?s)<article class="squad">.*?</article>', page)
+        self.assertNotIn("Where the time goes", articles[0])
+        self.assertIn("Where the time goes (last 6 sprints)", articles[1])
+        self.assertIn("Where the time goes =", page)
+
+        t2["show_flow"] = False
+        page_none = render_manager("Sprint 29", [t1, t2], GEN)
+        self.assertNotIn("Where the time goes", page_none)
+
+    def test_empty_metrics_omits_figs_and_trend(self):
+        t = self.team()
+        t["manager_metrics"] = []
+        page = self.page(t)
+        self.assertNotIn('<div class="figs">', page)
+        self.assertNotIn('<summary>Last ', page)
+        self.assertIn('<p class="note">Scope:', page)
+        self.assertNotIn("Arrows compare", page)
+        self.assertNotIn("Work items per 10 person-days =", page)
+        self.assertNotIn("Build time =", page)
+        self.assertNotIn("First-time pass =", page)
+
+    def test_dynamic_footnote_canonical_order_and_arrow_wording(self):
+        from ledger.render import _footnote
+        cases = [
+            (["throughput"], "green means better (higher throughput), red worse", "Arrows compare"),
+            (["build_time"], "green means better (lower build time), red worse", "Arrows compare"),
+            (["first_pass"], "green means better (higher first-time pass), red worse", "Arrows compare"),
+            (["throughput", "build_time"], "green means better (higher throughput, lower build time), red worse", "Arrows compare"),
+            (["first_pass", "build_time"], "green means better (higher first-time pass, lower build time), red worse", "Arrows compare"),
+            (["throughput", "first_pass"], "green means better (higher throughput or first-time pass), red worse", "Arrows compare"),
+            (["throughput", "build_time", "first_pass"],
+             "green means better (higher throughput or first-time pass, lower build time), red worse",
+             "Arrows compare"),
+        ]
+        for metrics, better, arrow_prefix in cases:
+            with self.subTest(metrics=metrics):
+                foot = _footnote(False, [{"manager_metrics": metrics, "show_flow": False}])
+                self.assertIn(better, foot)
+                self.assertIn(arrow_prefix, foot)
+        # Canonical order regardless of reversed team metric order
+        foot = _footnote(False, [{"manager_metrics": ["first_pass", "build_time", "throughput"],
+                                  "show_flow": True}])
+        order = ["<b>Method.</b>", "Work items per 10 person-days =", "Build time =",
+                 "First-time pass =", "Arrows compare", "Where the time goes =",
+                 "On Hold =", "Figures are recomputed"]
+        positions = [foot.index(s) for s in order]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_default_config_byte_for_byte_identical_and_dm_unchanged(self):
+        t_default = self.team()
+        t_explicit = dict(t_default, manager_metrics=["planned", "delivered", "throughput", "build_time", "first_pass"],
+                          show_flow=True)
+        self.assertEqual(render_manager("Sprint 29", [t_default], GEN),
+                         render_manager("Sprint 29", [t_explicit], GEN))
+        # No-flow and all-missing cases also match default footnote identically
+        t_noflow = dict(t_default, flow=None)
+        t_noflow_exp = dict(t_explicit, flow=None)
+        self.assertEqual(render_manager("Sprint 29", [t_noflow], GEN),
+                         render_manager("Sprint 29", [t_noflow_exp], GEN))
+        missing_default = [{"team": "GAMMA", "missing": "No sprint."}]
+        missing_explicit = [{"team": "GAMMA", "missing": "No sprint.",
+                             "manager_metrics": ["planned", "delivered", "throughput", "build_time", "first_pass"],
+                             "show_flow": True}]
+        self.assertEqual(render_manager("Sprint 29", missing_default, GEN),
+                         render_manager("Sprint 29", missing_explicit, GEN))
+        # dm_.html is byte-for-byte unchanged regardless of manager_metrics / show_flow
+        t_custom = dict(t_default, manager_metrics=["planned"], show_flow=False)
+        self.assertEqual(render_dm("Sprint 29", [t_default], GEN),
+                         render_dm("Sprint 29", [t_custom], GEN))
+
 
 class RenderTest(unittest.TestCase):
     def first_pass_team(self, scored=25, returned=None, share=0.92, tracked=True):
@@ -565,6 +659,21 @@ class RunReportTest(unittest.TestCase):
                 code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
                 self.assertEqual(code, 0, out)
                 self.assertEqual(out.splitlines().count(warning), 0 if states else 1, out)
+
+    def test_no_test_states_warning_suppressed_when_first_pass_disabled(self):
+        warning = "warning: no test states in config.json; first-time pass counts reopens only"
+        self.edit("config.json", lambda s: json.dumps(
+            dict(json.loads(s), test_states=[], manager_metrics=["planned", "delivered"])))
+        code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn(warning, out)
+        # Enabling first_pass for even one team restores the warning
+        self.edit("config.json", lambda s: json.dumps(
+            dict(json.loads(s), teams={"ALFA": {"count": "stories", "metrics": ["planned", "first_pass"]},
+                                       "BETA": {"count": "tasks"}})))
+        code, out = self.run_cli("report", "--offline", "--today", "2026-11-13")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.splitlines().count(warning), 1, out)
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()

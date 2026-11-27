@@ -6,7 +6,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from ledger.ado import AdoError, Client, az_defaults, cache_path, cached_ids, fetch, save_cache
 from ledger.config import (CONFIG_FILE, DEFAULT_NOT_DELIVERED, Config, Person, load_config, merge_staff,
-                           parse_staff, read_team, save_config, write_team)
+                           parse_staff, read_team, save_config, team_key, write_team)
 from ledger.metrics import histories, level_of
 from ledger.replay import History, local_tz, parse_ts
 from ledger.xlsx import match_name, read_vacations, resolve_name
@@ -228,7 +228,7 @@ def run_init(args, client: Optional[Client], ask: Callable[[str, str], str], out
             people.append(k)
     stats = count_stats(data, _team_emails((p.team, p.emails) for p in people if not p.left))
     for team, st in stats.items():
-        entry = cfg.teams.setdefault(team, {})
+        entry = cfg.teams.setdefault(team_key(cfg.teams, team), {})
         if not entry.get("count"):
             prompt = ("Count stories or tasks? (%s: last %d days, %d tasks, %d stories done)"
                       % (team, cfg.history_days, st["tasks"], st["stories"]))
@@ -269,7 +269,7 @@ def _summary(out, people, stats, cfg, sug, unmatched, warnings, paths) -> None:
     w("Counting level:")
     for team, st in stats.items():
         w("  %s counts %s (done in the window: %d tasks, %d stories)"
-          % (team, _count_text(cfg.teams[team]["count"]), st["tasks"], st["stories"]))
+          % (team, _count_text(cfg.teams[team_key(cfg.teams, team)]["count"]), st["tasks"], st["stories"]))
     w("States (waiting states in the config are marked *):")
     for s in sug["states"]:
         w("  %s%s: %s" % ("*" if s["name"] in cfg.waiting_states else " ", s["name"], s["category"]))

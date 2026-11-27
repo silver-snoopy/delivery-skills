@@ -5,7 +5,8 @@ from statistics import median
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from ledger.config import Config, Notes, Person
+from ledger.config import (Config, Notes, Person, count_of, metrics_of, show_flow_of,
+                           team_value as _by_team)
 from ledger.replay import ACTIVE, History, day_end, day_start, is_held, is_waiting, local_tz, parse_ts
 
 P85 = 0.85
@@ -67,16 +68,6 @@ def is_sprint(it: dict) -> bool:
         return False
     days = (date.fromisoformat(it["end"]) - date.fromisoformat(it["start"])).days + 1
     return days <= MAX_SPRINT_DAYS
-
-
-def _by_team(mapping: dict, team: str, default):
-    return next((v for k, v in mapping.items() if k.lower() == team.lower()), default)
-
-
-def count_of(cfg: Config, team: str):
-    """The team's counting level ("stories", "tasks") or list of work item types from
-    config.json; "stories" when the team has none."""
-    return _by_team(cfg.teams, team, {}).get("count") or "stories"
 
 
 def _emails(people: List[Person], team: str) -> set:
@@ -706,6 +697,7 @@ def team_sprint(data: dict, cfg: Config, people: List[Person], team: str, sprint
     worked.sort(key=lambda i: (i not in f["delivered"], i))
     return {
         "team": team, "count": ", ".join(t.count) if isinstance(t.count, list) else t.count,
+        "manager_metrics": metrics_of(cfg, team), "show_flow": show_flow_of(cfg, team),
         "sprint": {k: sprint[k] for k in ("name", "path", "start", "end")},
         **{k: f[k] for k in ("planned", "delivered_planned", "added", "removed", "delivered",
                              "late", "reopened")},

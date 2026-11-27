@@ -7,12 +7,15 @@ import re
 import tempfile
 from dataclasses import dataclass, field, fields
 from datetime import date
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ledger.replay import local_tz
 
 DEFAULT_NOT_DELIVERED = ["Removed", "Won't Fix", "Won't Do", "Cut", "Duplicate", "Obsolete", "Deferred",
                          "Abandoned"]
+DEFAULT_MANAGER_METRICS = ("planned", "delivered", "throughput", "build_time", "first_pass")
+KNOWN_METRICS = DEFAULT_MANAGER_METRICS
+_TEAM_KEYS = {"count", "metrics", "show_flow"}
 CONFIG_FILE = "config.json"
 TEAM_COLUMNS = ["name", "email", "team", "joined", "left", "allocation"]
 
@@ -109,7 +112,9 @@ class Config:
     project: str = ""
     query: str = ""
     timezone: str = "UTC"
-    teams: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    teams: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    manager_metrics: List[str] = field(default_factory=lambda: list(DEFAULT_MANAGER_METRICS))
+    show_flow: bool = True
     onboarding_sprints: int = 2
     half_day_codes: List[str] = field(default_factory=list)
     waiting_states: List[str] = field(default_factory=list)
@@ -123,6 +128,20 @@ class Config:
     history_days: int = 200
 
 
+def _check_metrics(value, where: str) -> None:
+    if not isinstance(value, list):
+        raise ValueError("config.json: %s must be a list of metric names" % where)
+    seen = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError("config.json: %s entries must be strings, got %r" % (where, item))
+        if item not in KNOWN_METRICS:
+            raise ValueError("config.json: %s has unknown metric '%s'" % (where, item))
+        if item in seen:
+            raise ValueError("config.json: %s has duplicate metric '%s'" % (where, item))
+        seen.add(item)
+
+
 def load_config(directory: str, warn: Callable[[str], None] = lambda line: None) -> Config:
     """Read config.json; unknown keys are passed to `warn`, a bad count or time zone raises."""
     with open(os.path.join(directory, CONFIG_FILE), encoding="utf-8-sig") as f:
@@ -132,12 +151,31 @@ def load_config(directory: str, warn: Callable[[str], None] = lambda line: None)
     if unknown:
         warn("config.json keys not recognised and ignored: %s" % ", ".join(unknown))
     cfg = Config(**{k: v for k, v in data.items() if k in known})
+    _check_metrics(cfg.manager_metrics, "manager_metrics")
+    if not isinstance(cfg.show_flow, bool):
+        raise ValueError("config.json: show_flow must be a boolean")
+    if not isinstance(cfg.teams, dict):
+        raise ValueError("config.json: teams must be an object")
+    seen_teams = {}
     for team, entry in cfg.teams.items():
-        c = (entry or {}).get("count")
+        low = team.lower()
+        if low in seen_teams:
+            raise ValueError("config.json: duplicate team '%s' (collides with '%s')" % (team, seen_teams[low]))
+        seen_teams[low] = team
+        if not isinstance(entry, dict):
+            raise ValueError("config.json: team %s must be an object" % team)
+        extra = sorted(set(entry) - _TEAM_KEYS)
+        if extra:
+            warn("config.json: team %s has unrecognised keys ignored: %s" % (team, ", ".join(extra)))
+        c = entry.get("count")
         is_list = isinstance(c, list) and c and all(isinstance(t, str) and t.strip() for t in c)
         if not is_list and c not in (None, "", "stories", "tasks"):
             raise ValueError("config.json: team %s has count '%s'; use \"stories\", \"tasks\" or a "
                              "list of work item types" % (team, c))
+        if "metrics" in entry:
+            _check_metrics(entry["metrics"], "team %s metrics" % team)
+        if "show_flow" in entry and not isinstance(entry["show_flow"], bool):
+            raise ValueError("config.json: team %s show_flow must be a boolean" % team)
     local_tz(cfg.timezone)
     return cfg
 
@@ -147,6 +185,30 @@ def save_config(directory: str, cfg: Config) -> None:
     with open(os.path.join(directory, CONFIG_FILE), "w", encoding="utf-8") as f:
         json.dump(cfg.__dict__, f, indent=2, ensure_ascii=False)
         f.write("\n")
+
+
+def team_key(mapping: dict, team: str) -> str:
+    return next((k for k in mapping if k.lower() == team.lower()), team)
+
+
+def team_value(mapping: dict, team: str, default=None):
+    return next((v for k, v in mapping.items() if k.lower() == team.lower()), default)
+
+
+def count_of(cfg: Config, team: str):
+    """The team's counting level ("stories", "tasks") or list of work item types from
+    config.json; "stories" when the team has none."""
+    return team_value(cfg.teams, team, {}).get("count") or "stories"
+
+
+def metrics_of(cfg: Config, team: str) -> List[str]:
+    entry = team_value(cfg.teams, team, {})
+    return list(entry["metrics"] if "metrics" in entry else cfg.manager_metrics)
+
+
+def show_flow_of(cfg: Config, team: str) -> bool:
+    entry = team_value(cfg.teams, team, {})
+    return entry["show_flow"] if "show_flow" in entry else cfg.show_flow
 
 
 @dataclass

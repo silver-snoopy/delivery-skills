@@ -7,8 +7,9 @@ from typing import Dict, List, Optional
 from urllib.parse import quote
 
 from ledger.ado import Client, cached_ids, fetch, load_cache, save_cache
-from ledger.config import (Notes, Person, email_index, load_config, load_report_notes,
-                           notes_for_team, read_team, reconcile_notes, write_report_notes)
+from ledger.config import (DEFAULT_MANAGER_METRICS, Notes, Person, email_index, load_config,
+                           load_report_notes, metrics_of, notes_for_team, read_team,
+                           reconcile_notes, show_flow_of, write_report_notes)
 from ledger.metrics import (CARRIED_FLAG, GREEN_SHARE, NOT_STARTED_DAY, STALE_DAYS, TREND,
                             WAIT_FLAG_DAYS, WAIT_RED_DAYS, WIP_FLAG, team_actions,
                             team_sprint, team_sprints)
@@ -190,22 +191,49 @@ def _first_pass(t: dict) -> str:
                     now, previous, before is not None and f["share"] > before, t["windows"]["before"]))
 
 
-def _figs(t: dict) -> str:
-    figs = [_fig("%d <small>of %d</small>" % (len(t["delivered_planned"]), len(t["planned"])),
-                 "planned work items delivered", True),
-            _fig(str(len(t["delivered"])), "work items delivered in total")]
-    for key, field, label, unit in (
-            ("throughput", "per10", "work items per 10 person-days (last 3 sprints)", ""),
-            ("build", "median", "build time, median (last 3 sprints)", " days")):
-        value, before = t[key][field], t[key]["before"]
-        now = _day_count(_decimal(value)) if unit and value is not None else _decimal(value)
-        previous = None if before is None else (
-            _day_count(_decimal(before)) if unit else _decimal(before))
-        better = value is not None and before is not None and (
-            value < before if key == "build" else value > before)
-        figs.append(_fig(re.sub(r" (days?)$", r" <small>\1</small>", now), label,
-                         arrow=_arrow(now, previous, better, t["windows"]["before"])))
-    return _tag("div", "".join(figs) + _first_pass(t), "figs")
+def _window_fig(t: dict, key: str, field: str, label: str, unit: str = "") -> str:
+    value, before = t[key][field], t[key]["before"]
+    now = _day_count(_decimal(value)) if unit and value is not None else _decimal(value)
+    previous = None if before is None else (
+        _day_count(_decimal(before)) if unit else _decimal(before))
+    better = value is not None and before is not None and (
+        value < before if key == "build" else value > before)
+    return _fig(re.sub(r" (days?)$", r" <small>\1</small>", now), label,
+                arrow=_arrow(now, previous, better, t["windows"]["before"]))
+
+
+_METRIC_RENDERERS = {
+    "planned": (
+        lambda t: _fig("%d <small>of %d</small>" % (len(t["delivered_planned"]), len(t["planned"])),
+                       "planned work items delivered", True),
+        lambda t, tr: ["Planned work items delivered"] + [
+            "%d/%d" % (s["delivered_planned"], s["planned"]) for s in tr],
+    ),
+    "delivered": (
+        lambda t: _fig(str(len(t["delivered"])), "work items delivered in total"),
+        lambda t, tr: ["Work items delivered in total"] + [str(s["delivered"]) for s in tr],
+    ),
+    "throughput": (
+        lambda t: _window_fig(t, "throughput", "per10", "work items per 10 person-days (last 3 sprints)"),
+        lambda t, tr: ["Work items per 10 PD"] + [_decimal(s["per10"]) for s in tr],
+    ),
+    "build_time": (
+        lambda t: _window_fig(t, "build", "median", "build time, median (last 3 sprints)", " days"),
+        lambda t, tr: ["Build time median (days)"] + [_decimal(s["build"]) for s in tr],
+    ),
+    "first_pass": (
+        _first_pass,
+        lambda t, tr: ["First-time pass"] + [
+            "–" if s["first_pass"] is None else
+            _pct(s["first_pass"], 99 if s["first_pass"] < 1.0 else 100)
+            if t["first_pass"]["tracked"] else "not tracked" for s in tr],
+    ),
+}
+
+
+def _figs(t: dict, metrics=None) -> str:
+    metrics = t.get("manager_metrics", DEFAULT_MANAGER_METRICS) if metrics is None else metrics
+    return _tag("div", "".join(_METRIC_RENDERERS[m][0](t) for m in metrics), "figs") if metrics else ""
 
 
 def _scope(t: dict) -> str:
@@ -273,16 +301,10 @@ def _delivered(t: dict) -> str:
                  _table(head, rows))
 
 
-def _trend_table(t: dict) -> str:
+def _trend_table(t: dict, metrics=None) -> str:
     tr = t["trend"]
-    rows = [["Planned work items delivered"] + ["%d/%d" % (s["delivered_planned"], s["planned"])
-                                                for s in tr],
-            ["Work items delivered in total"] + [str(s["delivered"]) for s in tr],
-            ["Work items per 10 PD"] + [_decimal(s["per10"]) for s in tr],
-            ["Build time median (days)"] + [_decimal(s["build"]) for s in tr],
-            ["First-time pass"] + ["–" if s["first_pass"] is None else
-                                   _pct(s["first_pass"], 99 if s["first_pass"] < 1.0 else 100)
-                                   if t["first_pass"]["tracked"] else "not tracked" for s in tr]]
+    metrics = t.get("manager_metrics", DEFAULT_MANAGER_METRICS) if metrics is None else metrics
+    rows = [_METRIC_RENDERERS[m][1](t, tr) for m in metrics]
     return _table([""] + [s["sprint"] for s in tr], [[r[0]] + [escape(c) for c in r[1:]] for r in rows])
 
 
@@ -295,12 +317,15 @@ def _exec_team(t: dict) -> str:
         parts.append(_tag("div", _tag("h3", "Delivery highlights")
                           + (_summary(summary) if summary else "")
                           + (_tag("p", escape(exec_note)) if exec_note else "")))
-    parts += [_tag("div", _tag("h3", "Delivery stats") + _figs(t) + _scope(t)), _flow(t), _delivered(t),
-              _carry(t), _fold(_last(len(t["trend"])).capitalize(), _trend_table(t))]
+    metrics = t.get("manager_metrics", DEFAULT_MANAGER_METRICS)
+    parts += [_tag("div", _tag("h3", "Delivery stats") + _figs(t, metrics) + _scope(t)),
+              _flow(t) if t.get("show_flow", True) else "", _delivered(t), _carry(t)]
+    if metrics:
+        parts.append(_fold(_last(len(t["trend"])).capitalize(), _trend_table(t, metrics)))
     return _tag("article", "\n".join(parts), "squad")
 
 
-def _footnote(dm: bool) -> str:
+def _footnote(dm: bool, teams: Optional[List[dict]] = None) -> str:
     if dm:
         first = ("<b>Method.</b> Each team counts the work items of one level set in config.json: "
                  "stories (backlog items), tasks, or a list of work item types. The figures per team "
@@ -343,27 +368,47 @@ def _footnote(dm: bool) -> str:
             "the Answer to renew it."
             % (WAIT_RED_DAYS, WAIT_FLAG_DAYS, STALE_DAYS, NOT_STARTED_DAY, CARRIED_FLAG, WIP_FLAG))
     else:
+        enabled = ({m for t in teams for m in t.get("manager_metrics", DEFAULT_MANAGER_METRICS)}
+                   if teams else set(DEFAULT_MANAGER_METRICS))
+        show_flow = any(t.get("show_flow", True) for t in teams) if teams else True
         first = ("<b>Method.</b> Each team counts its own agreed work item types, so figures are not "
                  "comparable between teams. PD = person-days available after leave. ")
         lines = [first + "Planned = in the sprint and assigned to one of the team's engineers at the end of "
                  "its first day; work that becomes theirs later counts as added. Scope is set by the "
                  "customer's product owner. A sprint gets credit for work items closed while on its "
-                 "iteration, even after its end date. Late = a planned work item closed after its sprint end date.",
-                 "Work items per 10 person-days = delivered work items divided by available person-days "
-                 "after leave, times 10, pooled over the last 3 sprints. Build time = calendar time from "
-                 "first active while ours to the first test handoff or delivered close, minus waiting, "
-                 "hold and Blocked time; the median of measured items delivered in the last 3 sprints.",
-                 "First-time pass = share of delivered work items never sent back from a test state "
-                 "and never reopened, pooled over the last 3 sprints; “not tracked” means no item moved "
-                 "back and fewer than half of the delivered items went through a test state in the "
-                 "last 6 sprints. – means no scored items; a return caps the display at 99%.",
-                 "Arrows compare the last 3 sprints with the 3 before: the triangle follows the number; "
-                 "green means better (higher throughput or first-time pass, lower build time), red worse. "
-                 "No arrow means a missing value or no change at displayed precision. Compare a team only "
-                 "with its own past. Arrows are a direction, not a verdict, especially with small samples.",
-                 "Where the time goes = median start-to-done time over the last 6 sprints, split using "
-                 "pooled time shares into building, waiting (named states or Blocked) and other, including "
-                 "hold and rework. Parts are whole percentages of that time, with the remainder in other."]
+                 "iteration, even after its end date. Late = a planned work item closed after its sprint end date."]
+        tb = []
+        if "throughput" in enabled:
+            tb.append("Work items per 10 person-days = delivered work items divided by available person-days "
+                      "after leave, times 10, pooled over the last 3 sprints.")
+        if "build_time" in enabled:
+            tb.append("Build time = calendar time from first active while ours to the first test handoff or "
+                      "delivered close, minus waiting, hold and Blocked time; the median of measured items "
+                      "delivered in the last 3 sprints.")
+        if tb:
+            lines.append(" ".join(tb))
+        if "first_pass" in enabled:
+            lines.append(
+                "First-time pass = share of delivered work items never sent back from a test state "
+                "and never reopened, pooled over the last 3 sprints; “not tracked” means no item moved "
+                "back and fewer than half of the delivered items went through a test state in the "
+                "last 6 sprints. – means no scored items; a return caps the display at 99%.")
+        higher = [label for key, label in (("throughput", "throughput"), ("first_pass", "first-time pass"))
+                  if key in enabled]
+        better_parts = (["higher " + " or ".join(higher)] if higher else []) + (
+            ["lower build time"] if "build_time" in enabled else [])
+        if better_parts:
+            lines.append(
+                "Arrows compare the last 3 sprints with the 3 before: the triangle follows the number; "
+                "green means better (%s), red worse. "
+                "No arrow means a missing value or no change at displayed precision. Compare a team only "
+                "with its own past. Arrows are a direction, not a verdict, especially with small samples."
+                % ", ".join(better_parts))
+        if show_flow:
+            lines.append(
+                "Where the time goes = median start-to-done time over the last 6 sprints, split using "
+                "pooled time shares into building, waiting (named states or Blocked) and other, including "
+                "hold and rework. Parts are whole percentages of that time, with the remainder in other.")
     lines.append("On Hold = days the work item spent in a hold state or tagged Blocked during the "
                  "sprint; shown for context and not counted against the team.")
     lines.append("Figures are recomputed from the board history on every run and do not change for "
@@ -379,7 +424,7 @@ def render_manager(sprint_name: str, teams: List[dict], generated: datetime, boa
     """Render closed-sprint results; `board` is the board data time."""
     title = "%s delivery summary" % sprint_name
     body = [_head(title, teams, generated, False, board)]
-    return _page(title, "\n".join(body + _teams(teams) + [_footnote(False)]), light=True, extra_css=MANAGER_CSS)
+    return _page(title, "\n".join(body + _teams(teams) + [_footnote(False, teams)]), light=True, extra_css=MANAGER_CSS)
 
 
 def link_ids(page: str, organization: str, project: str) -> str:
@@ -615,7 +660,7 @@ def _pick(data, cfg, people, team_names, today, wanted) -> tuple:
 
 def run_report(args, client: Optional[Client], out) -> int:
     cfg, people, data, vac, today, team_names = _load(args, client, out)
-    if not cfg.test_states:
+    if not cfg.test_states and any("first_pass" in metrics_of(cfg, team) for team in team_names):
         _warn(out, "no test states in config.json; first-time pass counts reopens only")
     name, picked = _pick(data, cfg, people, team_names, today, args.sprint)
     fetched = parse_ts(data["fetched"]).astimezone(local_tz(cfg.timezone)).strftime("%Y-%m-%d %H:%M")
@@ -643,7 +688,8 @@ def run_report(args, client: Optional[Client], out) -> int:
         else:
             why = ("No sprint named %s." % name if args.sprint
                    else _no_sprint(data, cfg, people, team))
-            result = {"team": team, "missing": why, "notes": {"note": notes.note.get(team, "")}}
+            result = {"team": team, "missing": why, "manager_metrics": metrics_of(cfg, team),
+                      "show_flow": show_flow_of(cfg, team), "notes": {"note": notes.note.get(team, "")}}
         refreshed = team_actions(data, cfg, people, team, result if sprint else None,
                                  running[team], today, vac.days_off)
         reconcile_notes(notes, {team: refreshed}, picked, today, observed=actions)

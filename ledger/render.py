@@ -36,6 +36,7 @@ from ledger.metrics import (
     team_sprints,
 )
 from ledger.replay import local_tz, parse_ts
+from ledger.theme import Theme, load_theme
 from ledger.xlsx import read_vacations, resolve_name
 
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -48,22 +49,23 @@ PO_BANDS = {
 }
 CSS = """:root{--bg:#F6F7F9;--paper:#FFF;--fg:#16202A;--muted:#5A6573;--line:#DCE1E7;--accent:#1E5B86;
 --accent-soft:#E6EEF5;--good:#2C7A4B;--good-soft:#E5F2EA;--warn:#9A6514;--warn-soft:#FBF0DC;
---bad:#A8352D;--bad-soft:#F8E4E2}
+--bad:#A8352D;--bad-soft:#F8E4E2;--other:#B8C0CA;
+--font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--font-heading:var(--font);
+--mono:ui-monospace,Menlo,Consolas,monospace;--radius-card:8px;--radius:6px;--max-width:980px}
 @media (prefers-color-scheme: dark){:root{--bg:#11161C;--paper:#171E26;--fg:#E4E9EF;--muted:#9AA6B4;
 --line:#2A3440;--accent:#7FB3DA;--accent-soft:#1D2B38;--good:#7CC79A;--good-soft:#18291F;
 --warn:#E3B260;--warn-soft:#2E2414;--bad:#EE8E86;--bad-soft:#331C1A;color-scheme:dark}}
-body{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",
-Roboto,sans-serif;margin:0;padding:24px 16px 56px}
-.wrap{max-width:980px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
-h1,h2,h3,p{margin:0}h1{font-size:26px}h2{font-size:20px}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--font);margin:0;padding:24px 16px 56px}
+.wrap{max-width:var(--max-width);margin:0 auto;display:flex;flex-direction:column;gap:20px}
+h1,h2,h3,p{margin:0}h1,h2,h3{font-family:var(--font-heading)}h1{font-size:26px}h2{font-size:20px}
 h3{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:4px}
 .meta,.cap,.note,.ask{color:var(--muted);font-size:13px}.cap{text-align:right}a{color:inherit}
-.squad{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:22px;
+.squad{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius-card);padding:22px;
 display:flex;flex-direction:column;gap:18px}
 .top{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
 ul{margin:0;padding-left:18px}
 .figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
-background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
 .fig{background:var(--paper);padding:12px 14px;display:flex;flex-direction:column}
 .n{font-size:24px;font-weight:600}.n small{font-size:14px;color:var(--muted)}
 .fig .l{font-size:12.5px;color:var(--muted)}.key .n{color:var(--accent)}
@@ -71,7 +73,7 @@ background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:h
 font-variant-numeric:tabular-nums}th{text-align:left;font-size:12px;color:var(--muted);
 text-transform:uppercase;padding:6px 10px;border-bottom:1px solid var(--line)}
 td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
-.id{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--accent);white-space:nowrap}
+.id{font-family:var(--mono);color:var(--accent);white-space:nowrap}
 .chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
 .GREEN,.green{background:var(--good-soft);color:var(--good)}
 .AMBER,.amber{background:var(--warn-soft);color:var(--warn)}
@@ -80,9 +82,9 @@ td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 .foot{font-size:12.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px;
 display:flex;flex-direction:column;gap:6px}
 .private{background:var(--bad-soft);color:var(--bad);font-size:12px;padding:6px 10px;
-border-radius:6px;align-self:flex-start}
-details{border:1px solid var(--line);border-radius:6px;padding:8px 12px}summary{cursor:pointer;font-weight:600}
-.carry-empty{background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:12px 14px}"""
+border-radius:var(--radius);align-self:flex-start}
+details{border:1px solid var(--line);border-radius:var(--radius);padding:8px 12px}summary{cursor:pointer;font-weight:600}
+.carry-empty{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}"""
 
 
 MANAGER_CSS = (
@@ -135,18 +137,60 @@ def _dates(sprint: dict) -> str:
     return f"{_day(a, a.year != b.year)} – {_day(b)}"
 
 
-def _page(title: str, body: str, light: bool = False, extra_css: str = "") -> str:
+def _page(
+    title: str,
+    body: str,
+    light: bool = False,
+    extra_css: str = "",
+    theme: Theme | None = None,
+    report: str = "",
+) -> str:
     """`light` drops the dark theme, for pages sent to readers whatever their system setting."""
     css = re.sub(r"@media \(prefers-color-scheme: dark\)\{.*?\}\}\n", "", CSS, flags=re.S) if light else CSS
+    css += extra_css
+    csp = ""
+    if theme is not None:
+        csp = (
+            '<meta http-equiv="Content-Security-Policy" '
+            "content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:;\">\n"
+        )
+        if theme.logo_uri:
+            css += (
+                "\n.brand-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap}"
+                ".brand-logo{max-height:36px;width:auto;display:block}"
+            )
+        if theme.css:
+            css += "\n" + theme.css
+    body_cls = f' class="report-{report}"' if report else ""
     return (
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        f"<title>{escape(title)}</title>\n<style>\n{css + extra_css}\n</style></head>\n"
-        f'<body><div class="wrap">\n{body}\n</div></body></html>\n'
+        f"{csp}<title>{escape(title)}</title>\n<style>\n{css}\n</style></head>\n"
+        f'<body{body_cls}><div class="wrap">\n{body}\n</div></body></html>\n'
     )
 
 
-def _head(title: str, teams: list[dict], generated: datetime, private: bool, board: str) -> str:
+def _brand_title(title: str, theme: Theme | None) -> list[str]:
+    parts = [_tag("p", escape(theme.header_note), "brand-header")] if theme and theme.header_note else []
+    h1 = _tag("h1", escape(title))
+    if theme and theme.logo_uri:
+        logo = f'<img class="brand-logo" src="{theme.logo_uri}" alt="{escape(theme.logo_alt)}">'
+        return [*parts, _tag("div", logo + h1, "brand-head")]
+    return [*parts, h1]
+
+
+def _brand_footer(theme: Theme | None) -> str:
+    return _tag("p", escape(theme.footer_note), "brand-footer") if theme and theme.footer_note else ""
+
+
+def _head(
+    title: str,
+    teams: list[dict],
+    generated: datetime,
+    private: bool,
+    board: str,
+    theme: Theme | None = None,
+) -> str:
     dated = next((t["sprint"] for t in teams if not t.get("missing")), None)
     meta = [_dates(dated)] if dated else []
     meta.append(f"{len(teams)} team{'' if len(teams) == 1 else 's'}")
@@ -158,8 +202,8 @@ def _head(title: str, teams: list[dict], generated: datetime, private: bool, boa
             if private
             else []
         )
+        + _brand_title(title, theme)
         + [
-            _tag("h1", escape(title)),
             _tag("p", escape(" · ".join(meta)), "meta"),
             _tag("p", f"generated {generated.strftime('%Y-%m-%d %H:%M %Z').strip()}", "meta"),
         ]
@@ -343,10 +387,14 @@ def _flow(t: dict) -> str:
         f"{f['building']}% building · {f['waiting']}% waiting{states} · {f['other']}% other"
     )
     bar = (
-        '<div aria-hidden="true" style="display:flex;height:6px;border-radius:3px;overflow:hidden">'
+        '<div class="flow-bar" aria-hidden="true" style="display:flex;height:6px;border-radius:3px;overflow:hidden">'
         + "".join(
             f'<span style="flex:{f[k]};background:{color}"></span>'
-            for k, color in (("building", "var(--accent)"), ("waiting", "var(--warn)"), ("other", "#B8C0CA"))
+            for k, color in (
+                ("building", "var(--accent)"),
+                ("waiting", "var(--warn)"),
+                ("other", "var(--other)"),
+            )
         )
         + "</div>"
     )
@@ -441,7 +489,7 @@ def _exec_team(t: dict) -> str:
     return _tag("article", "\n".join(parts), "squad")
 
 
-def _footnote(dm: bool, teams: list[dict] | None = None) -> str:
+def _footnote(dm: bool, teams: list[dict] | None = None, theme: Theme | None = None) -> str:
     has_po = False
     if dm:
         first = (
@@ -566,19 +614,30 @@ def _footnote(dm: bool, teams: list[dict] | None = None) -> str:
         f"{figures_label} are recomputed from the board history on every run and do not change for "
         "a closed sprint unless the history changes."
     )
-    return _tag("div", "".join(_tag("p", line) for line in lines), "foot")
+    return _tag("div", "".join(_tag("p", line) for line in lines) + _brand_footer(theme), "foot")
 
 
 def _teams(teams: list[dict]) -> list[str]:
     return [_missing(t) if t.get("missing") else _exec_team(t) for t in teams]
 
 
-def render_manager(sprint_name: str, teams: list[dict], generated: datetime, board: str = "") -> str:
+def render_manager(
+    sprint_name: str,
+    teams: list[dict],
+    generated: datetime,
+    board: str = "",
+    theme: Theme | None = None,
+) -> str:
     """Render closed-sprint results; `board` is the board data time."""
     title = f"{sprint_name} delivery summary"
-    body = [_head(title, teams, generated, False, board)]
+    body = [_head(title, teams, generated, False, board, theme)]
     return _page(
-        title, "\n".join(body + _teams(teams) + [_footnote(False, teams)]), light=True, extra_css=MANAGER_CSS
+        title,
+        "\n".join(body + _teams(teams) + [_footnote(False, teams, theme)]),
+        light=True,
+        extra_css=MANAGER_CSS,
+        theme=theme,
+        report="manager",
     )
 
 
@@ -731,7 +790,13 @@ def _dm_team(t: dict) -> str:
     return _tag("article", "\n".join(parts), "squad")
 
 
-def render_dm(sprint_name: str, teams: list[dict], generated: datetime, board: str = "") -> str:
+def render_dm(
+    sprint_name: str,
+    teams: list[dict],
+    generated: datetime,
+    board: str = "",
+    theme: Theme | None = None,
+) -> str:
     title = f"{sprint_name} delivery review"
     notes = [
         _tag("li", escape(f"{t['team']}: {t['notes']['note']}"))
@@ -739,7 +804,7 @@ def render_dm(sprint_name: str, teams: list[dict], generated: datetime, board: s
         if t.get("notes", {}).get("note")
     ]
     body = [
-        _head(title, teams, generated, True, board),
+        _head(title, teams, generated, True, board, theme),
         _tag(
             "div",
             _tag("h3", "Your notes for this sprint")
@@ -751,10 +816,12 @@ def render_dm(sprint_name: str, teams: list[dict], generated: datetime, board: s
         _missing(t) if t.get("missing") and not t.get("actions", {}).get("current") else _dm_team(t)
         for t in teams
     ]
-    return _page(title, "\n".join([*body, _footnote(True)]), light=True)
+    return _page(
+        title, "\n".join([*body, _footnote(True, theme=theme)]), light=True, theme=theme, report="dm"
+    )
 
 
-def render_person(person: Person, rows: list[dict], generated: datetime) -> str:
+def render_person(person: Person, rows: list[dict], generated: datetime, theme: Theme | None = None) -> str:
     cells = []
     for r in rows:
         if r.get("available") is None:
@@ -772,7 +839,7 @@ def render_person(person: Person, rows: list[dict], generated: datetime) -> str:
             )
     body = [
         _tag("p", "Private: delivery manager only", "private"),
-        _tag("h1", escape(person.name)),
+        *_brand_title(person.name, theme),
         _tag("p", escape(f"Team {person.team} · last {len(rows)} sprints"), "meta"),
         _tag("p", f"generated {generated.strftime('%Y-%m-%d %H:%M %Z').strip()}", "meta"),
         _table(
@@ -793,11 +860,12 @@ def render_person(person: Person, rows: list[dict], generated: datetime) -> str:
                 "This page lists what the board recorded, not an assessment. Cycle "
                 "time = calendar days from first active to done, inclusive.",
             )
-            + _tag("p", "Per-person reporting may fall under local labour law and works-council rules."),
+            + _tag("p", "Per-person reporting may fall under local labour law and works-council rules.")
+            + _brand_footer(theme),
             "foot",
         ),
     ]
-    return _page(person.name, "\n".join(body), light=True)
+    return _page(person.name, "\n".join(body), light=True, theme=theme, report="person")
 
 
 def folder_name(name: str) -> str:
@@ -924,6 +992,23 @@ def _pick(data, cfg, people, team_names, today, wanted) -> tuple:
     return name, picked
 
 
+def _resolve_theme(args, cfg, targets: tuple[str, ...], out) -> Theme | None:
+    cli_theme = getattr(args, "theme", None)
+    if cli_theme is not None:
+        if not cli_theme.strip():
+            raise ValueError("theme path must not be empty; use '--theme none' to disable")
+        if cli_theme.strip().lower() == "none":
+            return None
+    if not any(t in cfg.theme_reports for t in targets):
+        if cli_theme:
+            _warn(
+                out, f"theme_reports excludes {' and '.join(targets)}; --theme has no effect on this command"
+            )
+        return None
+    raw, base = (cli_theme, os.getcwd()) if cli_theme is not None else (cfg.theme, args.dir)
+    return load_theme(raw, base, args.dir, lambda line: _warn(out, line))
+
+
 def run_report(args, client: Client | None, out) -> int:
     """Generate manager_ and dm_ reports: compute team results, reconcile DM answers, and attach
     scoped carry-over reasons."""
@@ -931,6 +1016,7 @@ def run_report(args, client: Client | None, out) -> int:
     if not cfg.test_states and any("first_pass" in metrics_of(cfg, team) for team in team_names):
         _warn(out, "no test states in config.json; first-time pass counts reopens only")
     name, picked = _pick(data, cfg, people, team_names, today, args.sprint)
+    theme = _resolve_theme(args, cfg, ("manager", "dm"), out)
     fetched = parse_ts(data["fetched"]).astimezone(local_tz(cfg.timezone)).strftime("%Y-%m-%d %H:%M")
     source_label = "cached board from" if args.offline else "fetched board at"
     print(f"data: {source_label} {fetched}", file=out)
@@ -988,10 +1074,13 @@ def run_report(args, client: Client | None, out) -> int:
     paths, pages = [], []
     for prefix, render in (("manager", render_manager), ("dm", render_dm)):
         paths.append(os.path.join(folder, f"{prefix}_{today.isoformat()}.html"))
-        pages.append(link_ids(render(name, teams, generated, board), cfg.organization, cfg.project))
+        active = theme if prefix in cfg.theme_reports else None
+        pages.append(link_ids(render(name, teams, generated, board, active), cfg.organization, cfg.project))
         with open(paths[-1], "w", encoding="utf-8") as f:
             f.write(pages[-1])
-    manager = unescape(pages[0]).lower()
+    scan = re.sub(r"<style>.*?</style>", "", pages[0], count=1, flags=re.S)
+    scan = re.sub(r'(<img class="brand-logo" )src="data:[^"]*"', r"\1", scan, count=1)
+    manager = unescape(scan).lower()
     for term in sorted({t for p in people for t in [p.name, *p.emails]}):
         word = rf"(?<!\w){re.escape(term.lower())}(?!\w)"
         if (term.lower() in manager) if "@" in term else re.search(word, manager):
@@ -1029,6 +1118,7 @@ def run_person(args, client: Client | None, out) -> int:
     person = email_index(people).get(args.email.strip().lower())
     if person is None:
         raise ValueError(f"no one in team.csv has the email {args.email}")
+    theme = _resolve_theme(args, cfg, ("person",), out)
     rows = []
     for sprint in _ended(data, cfg, people, person.team, today)[-TREND:]:
         r = team_sprint(data, cfg, people, person.team, sprint, Notes(), vac.days_off)
@@ -1051,6 +1141,6 @@ def run_person(args, client: Client | None, out) -> int:
     )
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(render_person(person, rows, datetime.now().astimezone()))
+        f.write(render_person(person, rows, datetime.now().astimezone(), theme=theme))
     print(f"Written:\n  {path}", file=out)
     return 0

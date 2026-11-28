@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -341,6 +342,347 @@ class CliTest(unittest.TestCase):
             code = cli.main(["init", "--query", "q", "--staff", "s", "--vacations", "v"], out=out)
         self.assertEqual((code, seen["answer"]), (0, "ALFA"))
         self.assertIn("suggestions were accepted", out.getvalue())
+
+    def _theme_workspace(self, root: Path, people=None, **cfg_kwargs):
+        root.mkdir(parents=True, exist_ok=True)
+        vacation = root / "vacations.xlsx"
+        rows = calendar_rows()
+        rows[4] = {4: "Ari Pine", 3: "Alfa"}
+        del rows[5]
+        build_workbook(str(vacation), rows, ["G2:AJ2", "AK2:BO2"])
+        cfg = Config(vacations=str(vacation), teams={"ALFA": {"count": "stories"}}, **cfg_kwargs)
+        save_config(str(root), cfg)
+        write_team(
+            str(root / "team.csv"),
+            people or [Person("Ari Pine", ["ari@vendor.example"], "ALFA", None, None)],
+        )
+        board = Board().sprint("Sprint 29", "2026-10-27", "2026-11-07")
+        board.item(1, title="Upload validation").at(
+            "2026-10-27 09:00", state="Active", iteration="Proj\\Sprint 29", assigned="ari@vendor.example"
+        ).at("2026-11-04 15:00", state="Closed")
+        (root / "cache").mkdir(exist_ok=True)
+        (root / CACHE_FILE).write_text(json.dumps(board.cache()), encoding="utf-8")
+        return cfg
+
+    def _make_theme_pack(self, pack: Path, css=":root{--accent:#224466}", manifest=None, logo_bytes=None):
+        pack.mkdir(parents=True, exist_ok=True)
+        if css is not None:
+            (pack / "theme.css").write_text(css, encoding="utf-8")
+        if logo_bytes is not None:
+            (pack / "logo.png").write_bytes(logo_bytes)
+        if manifest is not None:
+            (pack / "theme.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    def test_theme_target_routing_for_manager_dm_and_person(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work = root / "work"
+            pack = work / "brand"
+            self._make_theme_pack(
+                pack,
+                css=":root{--accent:#224466}",
+                logo_bytes=b"\x89PNG\r\n\x1a\nfake",
+                manifest={
+                    "logo": "logo.png",
+                    "logo_alt": "Acme",
+                    "header_note": "Exec Review",
+                    "footer_note": "Brand Footer",
+                },
+            )
+            cfg = self._theme_workspace(work, theme="brand")
+
+            # Default theme_reports=["manager"]: manager gets theme, dm and person do not
+            out = io.StringIO()
+            code = cli.main(["--dir", str(work), "report", "--offline", "--today", "2026-11-13"], out=out)
+            self.assertEqual(code, 0, out.getvalue())
+            mgr = (work / "reports" / "sprint-29" / "manager_2026-11-13.html").read_text(encoding="utf-8")
+            dm = (work / "reports" / "sprint-29" / "dm_2026-11-13.html").read_text(encoding="utf-8")
+            self.assertIn("--accent:#224466", mgr)
+            self.assertIn("Content-Security-Policy", mgr)
+            self.assertIn("Exec Review", mgr)
+            self.assertIn("Brand Footer", mgr)
+            self.assertIn('class="brand-logo"', mgr)
+            self.assertNotIn("--accent:#224466", dm)
+            self.assertNotIn("Content-Security-Policy", dm)
+            self.assertNotIn("brand-logo", dm)
+
+            out = io.StringIO()
+            code = cli.main(
+                ["--dir", str(work), "person", "ari@vendor.example", "--offline", "--today", "2026-11-13"],
+                out=out,
+            )
+            self.assertEqual(code, 0, out.getvalue())
+            person_html = (work / "people" / "person_Ari_Pine_2026-11-13.html").read_text(encoding="utf-8")
+            self.assertNotIn("--accent:#224466", person_html)
+            self.assertNotIn("Content-Security-Policy", person_html)
+
+            # Enable all three targets: manager, dm, and person all receive theme; .private stays first
+            cfg.theme_reports = ["manager", "dm", "person"]
+            save_config(str(work), cfg)
+            out = io.StringIO()
+            code = cli.main(["--dir", str(work), "report", "--offline", "--today", "2026-11-13"], out=out)
+            self.assertEqual(code, 0, out.getvalue())
+            dm = (work / "reports" / "sprint-29" / "dm_2026-11-13.html").read_text(encoding="utf-8")
+            self.assertIn("--accent:#224466", dm)
+            self.assertIn("Content-Security-Policy", dm)
+            self.assertIn('class="brand-logo"', dm)
+            self.assertIn("Brand Footer", dm)
+            self.assertLess(dm.index('class="private"'), dm.index('class="brand-header"'))
+            self.assertLess(dm.index('class="private"'), dm.index('class="brand-head"'))
+
+            out = io.StringIO()
+            code = cli.main(
+                ["--dir", str(work), "person", "ari@vendor.example", "--offline", "--today", "2026-11-13"],
+                out=out,
+            )
+            self.assertEqual(code, 0, out.getvalue())
+            person_html = (work / "people" / "person_Ari_Pine_2026-11-13.html").read_text(encoding="utf-8")
+            self.assertIn("--accent:#224466", person_html)
+            self.assertIn("Content-Security-Policy", person_html)
+            self.assertIn('class="brand-logo"', person_html)
+            self.assertIn("Exec Review", person_html)
+            self.assertIn("Brand Footer", person_html)
+            self.assertLess(person_html.index('class="private"'), person_html.index('class="brand-header"'))
+            self.assertLess(person_html.index('class="private"'), person_html.index('class="brand-head"'))
+
+    def test_cli_theme_override_none_excluded_targets_and_cwd_vs_dir_resolution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work = root / "work"
+            work.mkdir()
+            cwd = root / "cwd"
+            cwd.mkdir()
+            (work / "cfg.css").write_text(":root{--accent:#111111}", encoding="utf-8")
+            (cwd / "cli.css").write_text(":root{--accent:#999999}", encoding="utf-8")
+            cfg = self._theme_workspace(work, theme="cfg.css")
+
+            # Config relative path resolves against --dir even when CWD differs
+            with mock.patch("os.getcwd", return_value=str(cwd)):
+                out = io.StringIO()
+                code = cli.main(["--dir", str(work), "report", "--offline", "--today", "2026-11-13"], out=out)
+                self.assertEqual(code, 0, out.getvalue())
+                mgr = (work / "reports" / "sprint-29" / "manager_2026-11-13.html").read_text(encoding="utf-8")
+                self.assertIn("--accent:#111111", mgr)
+
+                # CLI --theme relative path resolves against CWD and overrides config.json
+                out = io.StringIO()
+                code = cli.main(
+                    [
+                        "--dir",
+                        str(work),
+                        "report",
+                        "--offline",
+                        "--today",
+                        "2026-11-13",
+                        "--theme",
+                        "cli.css",
+                    ],
+                    out=out,
+                )
+                self.assertEqual(code, 0, out.getvalue())
+                mgr = (work / "reports" / "sprint-29" / "manager_2026-11-13.html").read_text(encoding="utf-8")
+                self.assertIn("--accent:#999999", mgr)
+                self.assertNotIn("--accent:#111111", mgr)
+
+            # Person skips filesystem access when excluded; passing --theme warns and skips access
+            cfg.theme = "missing-configured.css"
+            save_config(str(work), cfg)
+            out = io.StringIO()
+            code = cli.main(
+                ["--dir", str(work), "person", "ari@vendor.example", "--offline", "--today", "2026-11-13"],
+                out=out,
+            )
+            self.assertEqual(code, 0, out.getvalue())
+            self.assertNotIn("warning: theme_reports", out.getvalue())
+
+            out = io.StringIO()
+            code = cli.main(
+                [
+                    "--dir",
+                    str(work),
+                    "person",
+                    "ari@vendor.example",
+                    "--offline",
+                    "--today",
+                    "2026-11-13",
+                    "--theme",
+                    "also-missing.css",
+                ],
+                out=out,
+            )
+            self.assertEqual(code, 0, out.getvalue())
+            self.assertIn(
+                "warning: theme_reports excludes person; --theme has no effect on this command",
+                out.getvalue(),
+            )
+
+            # --theme none disables even if configured path is missing
+            out = io.StringIO()
+            code = cli.main(
+                ["--dir", str(work), "report", "--offline", "--today", "2026-11-13", "--theme", "NONE"],
+                out=out,
+            )
+            self.assertEqual(code, 0, out.getvalue())
+            mgr = (work / "reports" / "sprint-29" / "manager_2026-11-13.html").read_text(encoding="utf-8")
+            self.assertNotIn("Content-Security-Policy", mgr)
+
+            # report with theme_reports=[] skips filesystem access and warns on explicit --theme
+            cfg.theme_reports = []
+            save_config(str(work), cfg)
+            out = io.StringIO()
+            code = cli.main(
+                [
+                    "--dir",
+                    str(work),
+                    "report",
+                    "--offline",
+                    "--today",
+                    "2026-11-13",
+                    "--theme",
+                    "missing.css",
+                ],
+                out=out,
+            )
+            self.assertEqual(code, 0, out.getvalue())
+            self.assertIn(
+                "warning: theme_reports excludes manager and dm; --theme has no effect on this command",
+                out.getvalue(),
+            )
+
+    def test_theme_failure_boundary_writes_nothing_for_report_and_person(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work = root / "work"
+            bad_css = work / "bad.css"
+            self._theme_workspace(work, theme="missing.css", theme_reports=["manager", "person"])
+
+            # Missing theme on report: exits 1, writes neither notes.md nor HTML
+            out = io.StringIO()
+            code = cli.main(["--dir", str(work), "report", "--offline", "--today", "2026-11-13"], out=out)
+            self.assertEqual(code, 1)
+            self.assertIn("error: theme path not found", out.getvalue())
+            self.assertFalse((work / "reports").exists())
+
+            # Missing theme on person: exits 1, writes no HTML
+            out = io.StringIO()
+            code = cli.main(
+                ["--dir", str(work), "person", "ari@vendor.example", "--offline", "--today", "2026-11-13"],
+                out=out,
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("error: theme path not found", out.getvalue())
+            self.assertFalse((work / "people").exists())
+
+            # Malformed CSS (</style> breakout) on report and person: exits 1, writes nothing
+            bad_css.write_text("body{color:red}</style><script>alert(1)</script>", encoding="utf-8")
+            for cmd in (
+                ["--dir", str(work), "report", "--offline", "--today", "2026-11-13", "--theme", str(bad_css)],
+                [
+                    "--dir",
+                    str(work),
+                    "person",
+                    "ari@vendor.example",
+                    "--offline",
+                    "--today",
+                    "2026-11-13",
+                    "--theme",
+                    str(bad_css),
+                ],
+            ):
+                with self.subTest(cmd=cmd[2]):
+                    out = io.StringIO()
+                    code = cli.main(cmd, out=out)
+                    self.assertEqual(code, 1)
+                    self.assertIn("error: theme CSS must not contain '</style'", out.getvalue())
+            self.assertFalse((work / "reports").exists())
+            self.assertFalse((work / "people").exists())
+
+    def test_manager_name_scan_with_theme_catches_visible_leaks_and_ignores_css_and_logo_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work = root / "work"
+            pack = work / "brand"
+            # Base64 of these bytes literally contains "+Ari+" (word-bounded "Ari" in raw HTML src)
+            logo_bytes = base64.b64decode("AA+Ari+A")
+            self.assertIn("+Ari+", base64.b64encode(logo_bytes).decode("ascii"))
+            people = [
+                Person("Ari Pine", ["ari@vendor.example"], "ALFA", None, None),
+                Person("Ari", ["ari.short@vendor.example"], "ALFA", None, None),
+            ]
+            self._theme_workspace(work, people=people, theme="brand")
+
+            # Clean manifest + CSS comment mentioning Ari Pine + base64 logo containing +Ari+: zero name warnings
+            self._make_theme_pack(
+                pack,
+                css="/* Ari Pine and Ari */\n:root{--accent:#224466}",
+                logo_bytes=logo_bytes,
+                manifest={
+                    "logo": "logo.png",
+                    "logo_alt": "Acme",
+                    "header_note": "Review",
+                    "footer_note": "Ops",
+                },
+            )
+            out = io.StringIO()
+            code = cli.main(["--dir", str(work), "report", "--offline", "--today", "2026-11-13"], out=out)
+            self.assertEqual(code, 0, out.getvalue())
+            self.assertNotIn("warning: manager file mentions", out.getvalue())
+
+            # Manifest fields containing roster name trigger warnings
+            for field in ("header_note", "footer_note", "logo_alt"):
+                with self.subTest(field=field):
+                    manifest = {"logo": "logo.png", "logo_alt": "Acme", "header_note": "", "footer_note": ""}
+                    manifest[field] = "Owner: Ari Pine"
+                    self._make_theme_pack(
+                        pack, css=":root{--accent:#224466}", logo_bytes=logo_bytes, manifest=manifest
+                    )
+                    out = io.StringIO()
+                    code = cli.main(
+                        ["--dir", str(work), "report", "--offline", "--today", "2026-11-13"], out=out
+                    )
+                    self.assertEqual(code, 0, out.getvalue())
+                    self.assertIn("warning: manager file mentions Ari Pine", out.getvalue())
+
+            # Literal "data: Ari Pine" and escaped "<style>Ari Pine</style>" in notes still trigger warnings
+            self._make_theme_pack(
+                pack,
+                css=":root{--accent:#224466}",
+                logo_bytes=logo_bytes,
+                manifest={"logo": "logo.png", "logo_alt": "Acme"},
+            )
+            notes_path = work / "reports" / "sprint-29" / "notes.md"
+            for payload in ("data: Ari Pine", "<style>Ari Pine</style>"):
+                with self.subTest(payload=payload):
+                    notes_path.write_text(
+                        f"<!-- ledger notes: ALFA=Proj\\Sprint 29 -->\n# ALFA\n## Summary\n{payload}\n",
+                        encoding="utf-8",
+                    )
+                    out = io.StringIO()
+                    code = cli.main(
+                        ["--dir", str(work), "report", "--offline", "--today", "2026-11-13"], out=out
+                    )
+                    self.assertEqual(code, 0, out.getvalue())
+                    self.assertIn("warning: manager file mentions Ari Pine", out.getvalue())
+
+            # Empty or whitespace CLI --theme fails cleanly instead of silently disabling
+            for blank in ("", "   "):
+                with self.subTest(blank=blank):
+                    out = io.StringIO()
+                    code = cli.main(
+                        [
+                            "--dir",
+                            str(work),
+                            "report",
+                            "--offline",
+                            "--today",
+                            "2026-11-13",
+                            "--theme",
+                            blank,
+                        ],
+                        out=out,
+                    )
+                    self.assertEqual(code, 1)
+                    self.assertIn("error: theme path must not be empty", out.getvalue())
 
 
 if __name__ == "__main__":

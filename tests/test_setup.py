@@ -290,6 +290,8 @@ class InitTest(unittest.TestCase):
         cfg = Config(
             timezone="Europe/Zurich",
             teams={"alfa": {"metrics": ["planned", "delivered", "po_satisfaction"], "show_flow": False}},
+            theme="/brand/acme",
+            theme_reports=["manager", "person"],
         )
         save_config(self.d, cfg)
         code, text = self.run_init()
@@ -305,6 +307,8 @@ class InitTest(unittest.TestCase):
                 "show_flow": False,
             },
         )
+        self.assertEqual(reloaded.theme, "/brand/acme")
+        self.assertEqual(reloaded.theme_reports, ["manager", "person"])
 
 
 if __name__ == "__main__":

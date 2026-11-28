@@ -12,6 +12,7 @@ from datetime import date
 from typing import Any
 
 from ledger.replay import local_tz
+from ledger.theme import DEFAULT_THEME_REPORTS, KNOWN_THEME_REPORTS
 
 DEFAULT_NOT_DELIVERED = [
     "Removed",
@@ -148,19 +149,21 @@ class Config:
     name_aliases: dict[str, str] = field(default_factory=dict)
     squad_teams: dict[str, str] = field(default_factory=dict)
     history_days: int = 200
+    theme: str = ""
+    theme_reports: list[str] = field(default_factory=lambda: list(DEFAULT_THEME_REPORTS))
 
 
-def _check_metrics(value, where: str) -> None:
+def _check_list(value: Any, known: tuple[str, ...], where: str, noun: str) -> None:
     if not isinstance(value, list):
-        raise ValueError(f"config.json: {where} must be a list of metric names")
+        raise ValueError(f"config.json: {where} must be a list of {noun} names")
     seen = set()
     for item in value:
         if not isinstance(item, str):
             raise ValueError(f"config.json: {where} entries must be strings, got {item!r}")
-        if item not in KNOWN_METRICS:
-            raise ValueError(f"config.json: {where} has unknown metric '{item}'")
+        if item not in known:
+            raise ValueError(f"config.json: {where} has unknown {noun} '{item}'")
         if item in seen:
-            raise ValueError(f"config.json: {where} has duplicate metric '{item}'")
+            raise ValueError(f"config.json: {where} has duplicate {noun} '{item}'")
         seen.add(item)
 
 
@@ -173,7 +176,10 @@ def load_config(directory: str, warn: Callable[[str], None] = lambda line: None)
     if unknown:
         warn(f"config.json keys not recognised and ignored: {', '.join(unknown)}")
     cfg = Config(**{k: v for k, v in data.items() if k in known})
-    _check_metrics(cfg.manager_metrics, "manager_metrics")
+    _check_list(cfg.manager_metrics, KNOWN_METRICS, "manager_metrics", "metric")
+    if not isinstance(cfg.theme, str):
+        raise ValueError("config.json: theme must be a string")
+    _check_list(cfg.theme_reports, KNOWN_THEME_REPORTS, "theme_reports", "report")
     if not isinstance(cfg.show_flow, bool):
         raise ValueError("config.json: show_flow must be a boolean")
     if not isinstance(cfg.teams, dict):
@@ -197,7 +203,7 @@ def load_config(directory: str, warn: Callable[[str], None] = lambda line: None)
                 "list of work item types"
             )
         if "metrics" in entry:
-            _check_metrics(entry["metrics"], f"team {team} metrics")
+            _check_list(entry["metrics"], KNOWN_METRICS, f"team {team} metrics", "metric")
         if "show_flow" in entry and not isinstance(entry["show_flow"], bool):
             raise ValueError(f"config.json: team {team} show_flow must be a boolean")
     local_tz(cfg.timezone)

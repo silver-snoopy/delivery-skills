@@ -13,6 +13,7 @@ from ledger.ado import CACHE_FILE
 from ledger.config import Config, Notes, Person, parse_notes, save_config, write_team
 from ledger.metrics import TREND, team_actions, team_sprint
 from ledger.render import folder_name, link_ids, render_dm, render_manager, render_person, report_folder
+from ledger.theme import Theme
 from tests.fixture import Board
 from tests.test_xlsx import build_workbook, calendar_rows
 
@@ -207,7 +208,8 @@ class ManagerWindowTest(unittest.TestCase):
             "(Ready for QA, PO Review) · 15% other",
             text(self.page(t)),
         )
-        for color in ("var(--accent)", "var(--warn)", "#B8C0CA"):
+        self.assertIn('<div class="flow-bar"', self.page(t))
+        for color in ("var(--accent)", "var(--warn)", "var(--other)"):
             self.assertIn("background:" + color, self.page(t))
         t["flow"]["states"] = []
         self.assertIn("50% waiting · 15% other", text(self.page(t)))
@@ -988,6 +990,93 @@ class RenderTest(unittest.TestCase):
 
     def test_folder_name(self):
         self.assertEqual(folder_name('A/B\\C:D*E?F"G<H>I|J'), "A-B-C-D-E-F-G-H-I-J")
+
+    def test_unthemed_reports_have_report_body_class_tokens_and_no_brand_or_csp(self):
+        pages = {
+            "manager": render_manager("Sprint 29", teams(NOTES), GEN),
+            "dm": render_dm("Sprint 29", teams(NOTES), GEN),
+            "person": render_person(PEOPLE[0], [], GEN),
+        }
+        for name, page in pages.items():
+            with self.subTest(report=name):
+                self.assertIn(f'<body class="report-{name}">', page)
+                self.assertNotIn("Content-Security-Policy", page)
+                self.assertNotIn("prefers-color-scheme", page)
+                for hook in (".brand-head", ".brand-logo", "brand-header", "brand-footer"):
+                    self.assertNotIn(hook, page)
+                for token in (
+                    "--other:#B8C0CA",
+                    "--font:",
+                    "--font-heading:var(--font)",
+                    "--mono:",
+                    "--radius-card:8px",
+                    "--radius:6px",
+                    "--max-width:980px",
+                ):
+                    self.assertIn(token, page)
+
+    def test_themed_reports_render_csp_css_brand_chrome_and_keep_private_first(self):
+        logo_uri = "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4="
+        theme = Theme(
+            css=":root{--accent:#123456}\n.brand-logo{max-height:48px}",
+            logo_uri=logo_uri,
+            logo_alt='Acme <Corp> & "Co"',
+            header_note="Confidential <Exec> & Review",
+            footer_note="Prepared by <DM> & Ops",
+        )
+        csp = (
+            '<meta http-equiv="Content-Security-Policy" '
+            "content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:;\">"
+        )
+        pages = {
+            "manager": render_manager("Sprint 29", teams(NOTES), GEN, theme=theme),
+            "dm": render_dm("Sprint 29", teams(NOTES), GEN, theme=theme),
+            "person": render_person(PEOPLE[0], [], GEN, theme=theme),
+        }
+        for name, page in pages.items():
+            with self.subTest(report=name):
+                self.assertIn(f'<body class="report-{name}">', page)
+                self.assertIn(csp, page)
+                self.assertLess(page.index(csp), page.index("<style>"))
+                self.assertLess(page.index(csp), page.index("<img "))
+                style = page.split("<style>\n", 1)[1].split("\n</style>", 1)[0]
+                self.assertIn(".brand-head{", style)
+                self.assertIn(".brand-logo{max-height:36px", style)
+                self.assertLess(style.index(".brand-logo{max-height:36px"), style.index(theme.css))
+                if name == "manager":
+                    self.assertLess(style.index(".d.down{color:var(--bad)}"), style.index(theme.css))
+                self.assertIn('<p class="brand-header">Confidential &lt;Exec&gt; &amp; Review</p>', page)
+                self.assertIn(
+                    f'<div class="brand-head"><img class="brand-logo" src="{logo_uri}" '
+                    'alt="Acme &lt;Corp&gt; &amp; &quot;Co&quot;"><h1>',
+                    page,
+                )
+                foot = page.split('<div class="foot">', 1)[1]
+                self.assertIn('<p class="brand-footer">Prepared by &lt;DM&gt; &amp; Ops</p>', foot)
+                self.assertLess(page.index('class="brand-header"'), page.index('class="brand-head"'))
+                if name in ("dm", "person"):
+                    self.assertLess(page.index('class="private"'), page.index('class="brand-header"'))
+                    self.assertLess(page.index('class="private"'), page.index('class="brand-head"'))
+
+        # Theme without logo omits .brand-head/.brand-logo CSS and markup but keeps CSP and CSS
+        no_logo = render_manager("Sprint 29", teams(), GEN, theme=Theme(css=":root{--accent:#112233}"))
+        self.assertIn(csp, no_logo)
+        self.assertIn(":root{--accent:#112233}", no_logo)
+        self.assertNotIn("brand-head", no_logo)
+        self.assertNotIn("brand-logo", no_logo)
+
+    def test_link_ids_ignores_hex_colors_in_theme_css(self):
+        theme = Theme(css=":root{--accent:#101;--line:#123456}.squad{border-color:#900}")
+        page = link_ids(
+            render_manager("Sprint 29", teams(NOTES), GEN, theme=theme),
+            "https://dev.azure.com/acme/",
+            "My Project",
+        )
+        style_block = page[: page.index("</style>")]
+        self.assertNotIn("<a ", style_block)
+        self.assertIn("--accent:#101", style_block)
+        self.assertIn("--line:#123456", style_block)
+        self.assertIn('<a href="https://dev.azure.com/acme/My%20Project/_workitems/edit/101">#101</a>', page)
 
 
 def load_vac(d):

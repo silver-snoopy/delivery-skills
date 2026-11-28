@@ -99,6 +99,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(cfg.name_aliases, {"Maya Rao": "Maya R."})
 
         self.assertEqual(cfg.history_days, 200)
+        self.assertEqual(cfg.theme, "")
+        self.assertEqual(cfg.theme_reports, ["manager"])
 
     def test_parse_staff_skips_entries_without_email(self):
         warnings = []
@@ -252,6 +254,35 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn("ALFA", warnings[0])
         self.assertIn("aaa, zzz", warnings[0])
+
+    def test_theme_and_theme_reports_validation(self):
+        cfg, warnings = self.load({})
+        self.assertEqual(warnings, [])
+        self.assertEqual(cfg.theme, "")
+        self.assertEqual(cfg.theme_reports, ["manager"])
+
+        for reports in ([], ["dm"], ["manager", "dm", "person"]):
+            cfg, warnings = self.load({"theme": "brand/style.css", "theme_reports": reports})
+            self.assertEqual(warnings, [])
+            self.assertEqual(cfg.theme, "brand/style.css")
+            self.assertEqual(cfg.theme_reports, reports)
+
+        for bad_theme in (None, True, 123, ["a.css"], {"path": "a.css"}):
+            with self.assertRaises(ValueError):
+                self.load({"theme": bad_theme})
+
+        for bad_reports in (
+            None,
+            "manager",
+            123,
+            {"manager": True},
+            [123],
+            [None],
+            ["manager", "bogus"],
+            ["manager", "dm", "manager"],
+        ):
+            with self.assertRaises(ValueError):
+                self.load({"theme_reports": bad_reports})
 
 
 if __name__ == "__main__":

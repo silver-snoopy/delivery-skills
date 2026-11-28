@@ -22,9 +22,9 @@ Ask your agent for "the sprint report", or run the three commands by hand. Worki
 
 ```sh
 bin/ledger init --query Q --staff staff.txt --vacations vacations.xlsx   # team and join date per person
-bin/ledger report [--sprint S]                                           # manager_ and dm_ files
+bin/ledger report [--sprint S] [--theme PATH|none]                       # manager_ and dm_ files
 bin/ledger report --offline                                              # same, from the cache: after editing notes.md
-bin/ledger person EMAIL                                                  # one engineer, last 6 sprints
+bin/ledger person EMAIL [--theme PATH|none]                              # one engineer, last 6 sprints
 ```
 
 `staff.txt` lists your people as `Name <email>;`. `vacations.xlsx` is your team calendar and is read again on every `report`. `init` asks, for each person, the team and the join date, and prints the counting levels, waiting states and closure reasons it chose so you can correct `config.json`. `team.csv` can be edited afterwards; a new team name there is picked up by `report`, which warns until the team has a `count` in `config.json`. A trailing tag such as `(external)` is dropped from staff names; `squad_teams` in `config.json` maps the calendar's squad codes to team names.
@@ -32,6 +32,8 @@ bin/ledger person EMAIL                                                  # one e
 Without `--sprint`, `report` takes each team's own last ended sprint. When the teams' sprints have different names, the report is called `Sprints ended by DATE`. Reports go to `.delivery-skills/reports/<name>/`, with the name in kebab case (`sprint-29`, `sprints-ended-by-2026-11-07`). After editing `notes.md`, run `report --offline`: it re-renders from the cache in seconds, so only your notes change. Each run prints `data: cached board from TIME` or `data: fetched board at TIME`. A team with no sprint gets a card that says why. The private dm_ file is for the DM and team leads, never the customer. It shows the closed-sprint status and ours-vs-rest comparison, then running-sprint actions.
 
 Report prints the notes path and action prompts. Ask about each action and put the DM's answer in its Answer cell. For a carry-over, ask why it was carried over. Ask for optional notes per team. Add an executive note only if the DM asks for it. Propose summary bullets from the printed worked-on titles and have the DM confirm them. Rerun report, show every warning, and give the DM the two HTML paths. The DM reads manager_ before sending it.
+
+Optional branding can be configured in `config.json` with `"theme"` (a `.css` file, ready-made theme folder, or raw style-assets path prepared into `<dir>/theme/` by the agent) and `"theme_reports"` (default `["manager"]`; opt in `"dm"` and/or `"person"`). Pass `--theme PATH` on `report` or `person` to override `"theme"` for one run, or `--theme none` to disable theming. Themed reports remain self-contained single-file HTML.
 
 ## Working with notes.md
 

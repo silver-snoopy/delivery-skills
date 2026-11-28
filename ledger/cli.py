@@ -28,6 +28,7 @@ def _parser() -> argparse.ArgumentParser:
     for s in (r, pp):
         s.add_argument("--offline", action="store_true", help="use the cached board history")
         s.add_argument("--today", help="YYYY-MM-DD (default: today)")
+        s.add_argument("--theme", help="theme path (overrides config.json) or 'none'")
     return p
 
 

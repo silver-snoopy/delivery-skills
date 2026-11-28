@@ -33,7 +33,7 @@ Anti-goals: this fails even if it works when
 - it ranks people or puts per-person figures in the executive report,
 - a number changes between two runs on the same data,
 - setup asks the operator more than each person's team and join date,
-- the tool grows past 4,600 physical lines of code (enforced by a test).
+- the tool grows past 4,750 physical lines of code (enforced by a test).
 
 ## 3. Setup
 
@@ -96,7 +96,9 @@ Tom H.,tom.h@vendor.example,ALFA,2024-11-04,,0.5
   "vacations": "/abs/path/vacations.xlsx",
   "name_aliases": {"Brandt Zoe (Ext)": "Zoë Brandt"},
   "squad_teams": {"CLM": "ALFA"},
-  "history_days": 200
+  "history_days": 200,
+  "theme": "",
+  "theme_reports": ["manager"]
 }
 ```
 
@@ -113,6 +115,7 @@ Tom H.,tom.h@vendor.example,ALFA,2024-11-04,,0.5
 - `squad_teams` maps a calendar `Squad` code to a team name, for calendars that use short codes.
 - A trailing tag in parentheses, such as `(external)`, is dropped from staff names. A `team.csv` row with a blank email keeps the person, with no email, so they never match unassigned items.
 - `history_days` sets the history window (section 4).
+- `theme` (optional string, default `""`) points to a `.css` file, a ready-made theme folder (`theme.css` / `theme.json`), or raw style assets resolved through a prepared snapshot in `<dir>/theme/` with a matching canonical `source`; relative paths resolve against `--dir`. `theme_reports` (optional list, default `["manager"]`) selects which of `manager`, `dm`, and `person` receive the active theme (`[]` disables theming). Invalid types, unknown names, or duplicates fail at load time.
 - `onboarding_sprints`: delivery is expected from the third sprint after a person's join date. In their first two sprints a person is shown as "onboarding" and never triggers a "nothing delivered" or "no item assigned" flag.
 - Unknown keys are ignored with a warning that names them.
 - Sprint dates and state categories (Proposed, InProgress, Resolved, Completed, Removed) are read from Azure DevOps on every run, never configured.
@@ -220,7 +223,7 @@ Times: t0 = 24:00 local on the sprint's first day; t1 = 24:00 local on its last 
 
 ## 6. Outputs
 
-`.delivery-skills/reports/<report folder>/manager_<YYYY-MM-DD>.html` and `dm_<YYYY-MM-DD>.html` (the run date), one pair per sprint with every squad in it. A rerun on the same day overwrites the pair. Each file is self-contained HTML (inline CSS, no scripts), so it can be emailed or printed. Both reports use the light theme. The header shows the sprint dates, the number of teams, "Board data as of <fetch time, in the configured zone>" and the generation time. `report --sprint S` rejects a sprint that has not ended before `--today`. A named past sprint has no running view.
+`.delivery-skills/reports/<report folder>/manager_<YYYY-MM-DD>.html` and `dm_<YYYY-MM-DD>.html` (the run date), one pair per sprint with every squad in it. A rerun on the same day overwrites the pair. Each file is self-contained HTML (inline CSS, no scripts), so it can be emailed or printed. By default both reports use the built-in light theme unchanged; when optional pluggable theming is enabled (see [pluggable themes design](superpowers/specs/2026-11-28-pluggable-themes-design.md)), themed pages remain self-contained HTML with inline CSS, optional base64 data-URI logo and header/footer notes, and a Content-Security-Policy meta tag blocking scripts and external loads. The header shows the sprint dates, the number of teams, "Board data as of <fetch time, in the configured zone>" and the generation time. `report --sprint S` rejects a sprint that has not ended before `--today`. A named past sprint has no running view.
 
 Sprint selection: with `--sprint S`, each team gets its last sprint named S (an error when no team has one). Without it, each team gets its own last sprint that ended before today, so teams with differently named sprints are reported together. The report and its folder are named after the single common sprint name, or "Sprints ended by <latest end date>" when the names differ. The folder name is the report name in kebab case (`sprint-29`, `sprints-ended-by-2026-11-07`) under `reports/`, which is created when missing. Notes in an older folder directly under `.delivery-skills/` still carry forward. Each run prints `data: cached board from TIME` (`--offline`) or `data: fetched board at TIME`. A team with no sprint gets a card that says why: "No sprint named S.", "No ended sprint: none of the team's counted work items is on a sprint." (when a member appears as an assignee in the cache) or "No work assigned: none of the team's N engineer(s) has a work item assigned in the board history (last <history_days> days)." Every `#ID` in both files links to `<org>/<project>/_workitems/edit/<ID>`. The card header shows the sprint name and dates, the engineers (and how many are onboarding) with their PD capacity (person-days available after leave), and, on the DM card only, "Counts: <level or types>".
 
@@ -257,8 +260,8 @@ Thresholds (P85, 2 sprints, 3 days, 10 days, 5 days, 3 items, 80%, 6 sprints, 42
 
 ```
 ledger init --query Q --staff staff.txt --vacations vacations.xlsx [--yes] [--org URL --project NAME --timezone ZONE]
-ledger report [--sprint S] [--offline] [--today YYYY-MM-DD]   # default: each team's last ended sprint
-ledger person EMAIL [--offline] [--today YYYY-MM-DD]          # one engineer over the team's last 6 sprints
+ledger report [--sprint S] [--offline] [--today YYYY-MM-DD] [--theme PATH|none]   # default: each team's last ended sprint
+ledger person EMAIL [--offline] [--today YYYY-MM-DD] [--theme PATH|none]          # one engineer over the team's last 6 sprints
 ```
 
 One agent skill, `delivery-report`, runs the flow:
@@ -276,7 +279,7 @@ The agent reads ticket titles to write the summary. The wording may differ betwe
 
 ## 8. Build
 
-- Python 3.12+ standard library only. Modules: `ado.py` (token, WIQL and work item REST APIs with retries, cache), `replay.py` (item state at a point in time), `metrics.py` (counting rules, flags, status), `render.py` (HTML pages and the `report` and `person` commands), `setup.py` (`init`), `xlsx.py` (team calendar), `config.py` (config.json, team.csv, staff.txt, notes.md and .notes-state.json), `cli.py`. At most 4,600 physical lines under `ledger/`, enforced by a test.
+- Python 3.12+ standard library only. Modules: `ado.py` (token, WIQL and work item REST APIs with retries, cache), `replay.py` (item state at a point in time), `metrics.py` (counting rules, flags, status), `theme.py` (pluggable theme resolution, manifest and base64 logo loading), `render.py` (HTML pages and the `report` and `person` commands), `setup.py` (`init`), `xlsx.py` (team calendar), `config.py` (config.json, team.csv, staff.txt, notes.md and .notes-state.json), `cli.py`. At most 4,750 physical lines under `ledger/`, enforced by a test.
 - Tests run against an invented fixture of revision rows covering both squad styles, carry-overs, moves to the next sprint, reopen, late close, mid-sprint add and remove, and leave. No test touches the network or `az`.
 - The v2 code is removed from `main` and stays in git history.
 

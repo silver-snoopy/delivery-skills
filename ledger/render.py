@@ -110,10 +110,6 @@ def _pct(x, cap=None) -> str:
     return f"{min(cap, n) if cap is not None else n}%"
 
 
-def _items(n: int) -> str:
-    return f"{n} work item{'' if n == 1 else 's'}"
-
-
 def _last(n: int) -> str:
     return "last sprint" if n == 1 else f"last {n} sprints"
 
@@ -328,7 +324,12 @@ def _scope(t: dict) -> str:
         if t["added"] or t["removed"]
         else "no changes mid-sprint"
     )
-    carry = _items(len(t["carry"])) + " carried over" if t["carry"] else "nothing carried over"
+    n = len(t["carry"])
+    carry = (
+        f"{n} planned work item{'' if n == 1 else 's'} carried over"
+        if n
+        else "no planned work items carried over"
+    )
     return _tag("p", f"Scope: {changes} · {carry}", "note")
 
 
@@ -379,12 +380,13 @@ def _carry(t: dict) -> str:
     if not rows:
         return _tag(
             "div",
-            _tag("h3", "Carried over items (0)") + _tag("p", "No work items carried over.", "note"),
+            _tag("h3", "Planned items carried over (0)")
+            + _tag("p", "No planned items carried over.", "note"),
             "carry-empty",
         )
     table = _table(["Work item", "Title", "Times carried", "At sprint end", "On Hold", "Reason"], rows)
     held_suffix = f" ({held} On Hold)" if held else ""
-    return _fold(f"Carried over items ({len(rows)}){held_suffix}", table)
+    return _fold(f"Planned items carried over ({len(rows)}){held_suffix}", table)
 
 
 def _delivered(t: dict) -> str:
@@ -502,7 +504,9 @@ def _footnote(dm: bool, teams: list[dict] | None = None) -> str:
             first + "Planned = in the sprint and assigned to one of the team's engineers at the end of "
             "its first day; work that becomes theirs later counts as added. Scope is set by the "
             "customer's product owner. A sprint gets credit for work items closed while on its "
-            "iteration, even after its end date. Late = a planned work item closed after its sprint end date."
+            "iteration, even after its end date. Late = a planned work item closed after its sprint end date. "
+            "Carried over = planned work items still open on this or a later sprint at sprint end; "
+            "items added mid-sprint are excluded."
         ]
         tb = []
         if "throughput" in enabled:

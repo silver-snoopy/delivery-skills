@@ -137,11 +137,16 @@ class ManagerWindowTest(unittest.TestCase):
     def test_scope_line(self):
         t = self.team()
         t.update(added=[1, 2], removed=[3])
-        self.assertIn("Scope: +2 added / −1 removed mid-sprint · 1 work item carried over", self.page(t))
+        self.assertIn(
+            "Scope: +2 added / −1 removed mid-sprint · 1 planned work item carried over", self.page(t)
+        )
         t["carry"] *= 2
-        self.assertIn("2 work items carried over", self.page(t))
+        self.assertIn("2 planned work items carried over", self.page(t))
         t.update(added=[], removed=[], carry=[])
-        self.assertIn('<p class="note">Scope: no changes mid-sprint · nothing carried over</p>', self.page(t))
+        self.assertIn(
+            '<p class="note">Scope: no changes mid-sprint · no planned work items carried over</p>',
+            self.page(t),
+        )
 
     def test_arrows(self):
         page = self.page()
@@ -664,9 +669,9 @@ class RenderTest(unittest.TestCase):
             "Upload is live.",
             "QA environment was down.",
             "<h3>Delivery stats</h3>",
-            "1 work item carried over",
+            "1 planned work item carried over",
             "<summary>Delivered items (2)</summary>",
-            "<summary>Carried over items (1)</summary>",
+            "<summary>Planned items carried over (1)</summary>",
             "<summary>Delivery stats per sprint (last 2 sprints)</summary>",
         ]
         self.assertEqual([card.index(o) for o in order], sorted(card.index(o) for o in order))
@@ -745,7 +750,12 @@ class RenderTest(unittest.TestCase):
         )
         t[0]["people"][0]["held"] = [[103, 3], [7, 1]]
         page_with_hold = render_manager("Sprint 29", t, GEN)
-        self.assertIn("<summary>Carried over items (2) (1 On Hold)</summary>", page_with_hold)
+        self.assertIn("<summary>Planned items carried over (2) (1 On Hold)</summary>", page_with_hold)
+        self.assertIn(
+            "Carried over = planned work items still open on this or a later sprint at sprint end; "
+            "items added mid-sprint are excluded.",
+            page_with_hold,
+        )
         alfa_card = self.card(page_with_hold, "ALFA")
         beta_card = self.card(page_with_hold, "BETA")
         self.assertIn("<th>At sprint end</th><th>On Hold</th><th>Reason</th>", alfa_card)
@@ -772,11 +782,11 @@ class RenderTest(unittest.TestCase):
         self.assertIn(".carry-empty{", page)
         card = self.card(page, "BETA")
         self.assertIn(
-            '<div class="carry-empty"><h3>Carried over items (0)</h3><p class="note">No '
-            "work items carried over.</p></div>",
+            '<div class="carry-empty"><h3>Planned items carried over (0)</h3><p class="note">No '
+            "planned items carried over.</p></div>",
             card,
         )
-        self.assertNotIn("<summary>Carried over", card)
+        self.assertNotIn("<summary>Planned items carried over", card)
 
     def test_work_items_link_to_azure_devops(self):
         page = link_ids(
